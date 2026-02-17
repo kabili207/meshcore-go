@@ -44,6 +44,9 @@ const (
 	// Size limits
 	MaxPathSize      = 64
 	MaxPacketPayload = 184
+
+	// HeaderDoNotRetransmit marks a packet that must not be forwarded by relays.
+	HeaderDoNotRetransmit = 0xFF
 )
 
 var (
@@ -96,9 +99,14 @@ func (p *Packet) HasTransportCodes() bool {
 	return rt == RouteTypeTransportFlood || rt == RouteTypeTransportDirect
 }
 
+// MarkDoNotRetransmit marks the packet to not be forwarded by relays.
+func (p *Packet) MarkDoNotRetransmit() {
+	p.Header = HeaderDoNotRetransmit
+}
+
 // IsMarkedDoNotRetransmit returns true if the packet is marked to not be retransmitted.
 func (p *Packet) IsMarkedDoNotRetransmit() bool {
-	return p.Header == 0xFF
+	return p.Header == HeaderDoNotRetransmit
 }
 
 // GetSNR returns the signal-to-noise ratio in dB.

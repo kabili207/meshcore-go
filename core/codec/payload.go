@@ -589,6 +589,31 @@ func (d *DiscoverRespPayload) GetSNR() float32 {
 	return float32(d.SNR) / 4.0
 }
 
+// -----------------------------------------------------------------------------
+// Multipart Payload
+// -----------------------------------------------------------------------------
+
+// MultipartPayload represents a MULTIPART packet.
+type MultipartPayload struct {
+	Remaining uint8  // Number of packets still to follow (upper 4 bits)
+	InnerType uint8  // Payload type of the inner content (lower 4 bits)
+	Data      []byte // Inner payload data (header byte stripped)
+}
+
+// ParseMultipartPayload parses a MULTIPART payload.
+// Format: [header_byte][inner_data...]
+// header_byte: upper 4 bits = remaining count, lower 4 bits = inner payload type.
+func ParseMultipartPayload(data []byte) (*MultipartPayload, error) {
+	if len(data) < 1 {
+		return nil, errors.New("multipart payload too short")
+	}
+	return &MultipartPayload{
+		Remaining: (data[0] >> 4) & 0x0F,
+		InnerType: data[0] & 0x0F,
+		Data:      data[1:],
+	}, nil
+}
+
 // ControlSubtypeName returns a human-readable name for the control subtype.
 func ControlSubtypeName(t uint8) string {
 	switch t {

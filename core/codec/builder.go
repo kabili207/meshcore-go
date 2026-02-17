@@ -254,3 +254,18 @@ func BuildPathContent(path []byte, extraType uint8, extra []byte) []byte {
 	copy(data[2+len(path):], extra)
 	return data
 }
+
+// -----------------------------------------------------------------------------
+// Multipart Builder
+// -----------------------------------------------------------------------------
+
+// BuildMultipartPayload builds a MULTIPART payload.
+// remaining is the number of packets still to follow (0-15).
+// innerType is the payload type of the inner content.
+// data is the inner payload content.
+func BuildMultipartPayload(remaining, innerType uint8, data []byte) []byte {
+	result := make([]byte, 1+len(data))
+	result[0] = (remaining << 4) | (innerType & 0x0F)
+	copy(result[1:], data)
+	return result
+}
