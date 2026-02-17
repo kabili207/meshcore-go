@@ -15,17 +15,17 @@ func TestDecodeRS232Frame(t *testing.T) {
 	}{
 		{
 			name:    "too short",
-			data:    []byte{0xC0, 0x3E},
+			data:    []byte{0xC0, 0x3E, 0x00},
 			wantErr: ErrFrameTooShort,
 		},
 		{
 			name:    "invalid magic",
-			data:    []byte{0x00, 0x00, 0x00, 0x00, 0x00},
+			data:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 			wantErr: ErrInvalidMagic,
 		},
 		{
 			name:    "incomplete frame",
-			data:    []byte{0xC0, 0x3E, 0x05, 0x01, 0x02}, // Says 5 bytes payload but only 2 provided
+			data:    []byte{0xC0, 0x3E, 0x00, 0x05, 0x01, 0x02}, // Says 5 bytes payload but only 2 provided
 			wantErr: ErrIncompleteFrame,
 		},
 	}

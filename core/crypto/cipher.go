@@ -33,11 +33,8 @@ var (
 //   - First 16 bytes → AES-128 cipher key
 //   - Full key (zero-padded to 32 bytes) → HMAC key
 func encryptThenMAC(secret, plaintext []byte) ([]byte, error) {
-	// Pad plaintext to block size
+	// Pad plaintext to block size (matching firmware: only pad if src_len > 0)
 	paddedLen := ((len(plaintext) + CipherBlockSize - 1) / CipherBlockSize) * CipherBlockSize
-	if paddedLen == 0 {
-		paddedLen = CipherBlockSize
-	}
 	padded := make([]byte, paddedLen)
 	copy(padded, plaintext)
 
