@@ -55,14 +55,38 @@ const (
 	TxtTypeCLI    = 0x01 // CLI command
 	TxtTypeSigned = 0x02 // Signed plain text message
 
-	// Request types
-	ReqTypeGetStats       = 0x01
-	ReqTypeKeepalive      = 0x02 // Deprecated
-	ReqTypeGetTelemetry   = 0x03
-	ReqTypeGetMinMaxAvg   = 0x04
-	ReqTypeGetAccessList  = 0x05
-	ReqTypeGetNeighbors   = 0x06
-	ReqTypeGetOwnerInfo   = 0x07
+	// Request types (inner type byte in decrypted REQ content)
+	ReqTypeLogin        = 0x00
+	ReqTypeGetStats     = 0x01
+	ReqTypeKeepalive    = 0x02
+	ReqTypeGetTelemetry = 0x03
+	ReqTypeGetMinMaxAvg = 0x04
+	ReqTypeGetAccessList = 0x05
+	ReqTypeGetNeighbors  = 0x06
+	ReqTypeGetOwnerInfo  = 0x07
+
+	// Anonymous request types (inner type byte in decrypted ANON_REQ content)
+	AnonReqTypeRegions = 0x01
+	AnonReqTypeOwner   = 0x02
+	AnonReqTypeBasic   = 0x03 // Just remote clock
+
+	// Response constants
+	RespServerLoginOK = 0x00
+
+	// Message send status (returned by sendMessage-style functions)
+	MsgSendFailed     = 0
+	MsgSendSentFlood  = 1
+	MsgSendSentDirect = 2
+
+	// Maximum text message length (10 * CIPHER_BLOCK_SIZE = 160 bytes)
+	MaxTextLen = 160
+
+	// ACL permission roles (lower 2 bits of permission byte)
+	PermACLRoleMask  = 0x03
+	PermACLGuest     = 0x00
+	PermACLReadOnly  = 0x01
+	PermACLReadWrite = 0x02
+	PermACLAdmin     = 0x03
 )
 
 var (
@@ -341,6 +365,8 @@ func ParseRequestContent(data []byte) (*RequestContent, error) {
 // RequestTypeName returns a human-readable name for the request type.
 func RequestTypeName(t uint8) string {
 	switch t {
+	case ReqTypeLogin:
+		return "login"
 	case ReqTypeGetStats:
 		return "get_stats"
 	case ReqTypeKeepalive:
@@ -355,6 +381,20 @@ func RequestTypeName(t uint8) string {
 		return "get_neighbors"
 	case ReqTypeGetOwnerInfo:
 		return "get_owner_info"
+	default:
+		return fmt.Sprintf("unknown(%d)", t)
+	}
+}
+
+// AnonReqTypeName returns a human-readable name for the anonymous request type.
+func AnonReqTypeName(t uint8) string {
+	switch t {
+	case AnonReqTypeRegions:
+		return "regions"
+	case AnonReqTypeOwner:
+		return "owner"
+	case AnonReqTypeBasic:
+		return "basic"
 	default:
 		return fmt.Sprintf("unknown(%d)", t)
 	}
