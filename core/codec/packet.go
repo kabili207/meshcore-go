@@ -114,6 +114,25 @@ func (p *Packet) GetSNR() float32 {
 	return float32(p.SNR) / 4.0
 }
 
+// Clone returns a deep copy of the packet.
+func (p *Packet) Clone() *Packet {
+	clone := &Packet{
+		Header:         p.Header,
+		TransportCodes: p.TransportCodes,
+		PathLen:        p.PathLen,
+		SNR:            p.SNR,
+	}
+	if len(p.Path) > 0 {
+		clone.Path = make([]byte, len(p.Path))
+		copy(clone.Path, p.Path)
+	}
+	if len(p.Payload) > 0 {
+		clone.Payload = make([]byte, len(p.Payload))
+		copy(clone.Payload, p.Payload)
+	}
+	return clone
+}
+
 // ReadFrom decodes a packet from raw bytes.
 // The SNR field is not included in the wire format and must be set separately.
 func (p *Packet) ReadFrom(data []byte) error {
