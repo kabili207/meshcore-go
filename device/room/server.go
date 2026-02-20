@@ -56,6 +56,10 @@ type ServerConfig struct {
 	Stats     StatsProvider
 	Telemetry TelemetryProvider
 
+	// PostCounter is an optional counter for room-level post statistics.
+	// DefaultStatsProvider implements this interface.
+	PostCounter PostCounter
+
 	// Name is the server's display name, returned by the "get name" CLI command.
 	Name string
 

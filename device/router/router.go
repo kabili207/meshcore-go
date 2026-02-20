@@ -92,6 +92,7 @@ type Router struct {
 	dedup     *dedupe.PacketDeduplicator
 	multipart *multipart.Reassembler
 	queue     *SendQueue
+	counters  RouterCounters
 
 	mu         sync.RWMutex
 	transports []transportEntry
@@ -212,6 +213,9 @@ func (r *Router) AddTransport(t transport.Transport, source transport.PacketSour
 	})
 }
 
+// Counters returns a pointer to the router's packet counters.
+func (r *Router) Counters() *RouterCounters { return &r.counters }
+
 // HandlePacket is the main routing entry point. It processes an incoming packet,
 // dispatches it to the application callback, and makes forwarding decisions.
 //
@@ -235,6 +239,8 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 		}
 	}
 
+	r.counters.PacketsRecv.Add(1)
+
 	// Gate 2: multipart reassembly
 	if pkt.PayloadType() == codec.PayloadTypeMultipart {
 		r.handleMultipart(pkt, src)
@@ -243,6 +249,11 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Gate 3: deduplication (also inserts the packet into the seen table)
 	if r.dedup.HasSeen(pkt) {
+		if pkt.IsFlood() {
+			r.counters.FloodDups.Add(1)
+		} else {
+			r.counters.DirectDups.Add(1)
+		}
 		return
 	}
 
@@ -255,18 +266,21 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Gate 4: direct routing with path
 	if pkt.IsDirect() && pkt.PathLen > 0 {
+		r.counters.RecvDirect.Add(1)
 		r.handleDirectForward(pkt, src)
 		return
 	}
 
 	// Gate 5: direct with no path (zero-hop or final destination)
 	if pkt.IsDirect() && pkt.PathLen == 0 {
+		r.counters.RecvDirect.Add(1)
 		r.dispatchToApp(pkt, src)
 		return
 	}
 
 	// Gate 6: flood routing
 	if pkt.IsFlood() {
+		r.counters.RecvFlood.Add(1)
 		r.handleFlood(pkt, src)
 		return
 	}
@@ -424,6 +438,8 @@ func (r *Router) broadcastToTransports(pkt *codec.Packet, excludeSource transpor
 		if err := entry.transport.SendPacket(pkt); err != nil {
 			r.log.Warn("failed to send packet",
 				"transport", entry.source, "error", err)
+		} else {
+			r.counters.PacketsSent.Add(1)
 		}
 	}
 }
@@ -440,6 +456,7 @@ func (r *Router) SendFlood(pkt *codec.Packet) {
 	// Mark as seen so we don't process it again if it loops back
 	r.dedup.HasSeen(pkt)
 
+	r.counters.SentFlood.Add(1)
 	r.enqueue(pkt, PriorityFloodData, 0, 0, true)
 }
 
@@ -453,6 +470,7 @@ func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
 
 	r.dedup.HasSeen(pkt)
 
+	r.counters.SentDirect.Add(1)
 	r.enqueue(pkt, PriorityDirect, 0, 0, true)
 }
 
@@ -467,6 +485,7 @@ func (r *Router) SendFloodPath(pkt *codec.Packet) {
 
 	r.dedup.HasSeen(pkt)
 
+	r.counters.SentFlood.Add(1)
 	r.enqueue(pkt, PriorityFloodPath, PathSendDelay, 0, true)
 }
 
@@ -479,6 +498,7 @@ func (r *Router) SendZeroHop(pkt *codec.Packet) {
 
 	r.dedup.HasSeen(pkt)
 
+	r.counters.SentDirect.Add(1)
 	r.enqueue(pkt, PriorityDirect, 0, 0, true)
 }
 
@@ -497,6 +517,8 @@ func (r *Router) broadcastToAllTransports(pkt *codec.Packet) {
 		if err := entry.transport.SendPacket(pkt); err != nil {
 			r.log.Warn("failed to send packet",
 				"transport", entry.source, "error", err)
+		} else {
+			r.counters.PacketsSent.Add(1)
 		}
 	}
 }

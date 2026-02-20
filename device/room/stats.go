@@ -1,6 +1,12 @@
 package room
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"sync"
+	"time"
+
+	"github.com/kabili207/meshcore-go/device/router"
+)
 
 // ServerStatsSize is the wire size of the ServerStats struct (52 bytes).
 // This must match the firmware's ServerStats struct layout exactly.
@@ -70,4 +76,87 @@ type TelemetryProvider interface {
 	// permMask is a bitmask of which sensor categories to query.
 	// At minimum, battery voltage (channel 1) should always be included.
 	GetTelemetry(permMask uint8) []byte
+}
+
+// PostCounter is an optional interface for tracking room-level post statistics.
+// DefaultStatsProvider implements this. Wire it into ServerConfig.PostCounter
+// so the server can increment counters when posts are stored or pushed.
+type PostCounter interface {
+	IncrementPosted()
+	IncrementPostPush()
+}
+
+// DefaultStatsProvider is a built-in StatsProvider that combines router packet
+// counters with room-level post statistics and uptime tracking.
+// It also implements StatsResetter (for "clear stats" CLI) and PostCounter.
+type DefaultStatsProvider struct {
+	router    *router.Router
+	startTime time.Time
+
+	mu        sync.Mutex
+	nPosted   uint16
+	nPostPush uint16
+
+	// nowFn allows overriding time.Now() for testing.
+	nowFn func() time.Time
+}
+
+// NewDefaultStatsProvider creates a DefaultStatsProvider that reads packet
+// counters from the given router and tracks uptime from now.
+func NewDefaultStatsProvider(r *router.Router) *DefaultStatsProvider {
+	return &DefaultStatsProvider{
+		router:    r,
+		startTime: time.Now(),
+		nowFn:     time.Now,
+	}
+}
+
+// GetStats returns the current server statistics by combining router counters,
+// computed uptime, and room-level post counters.
+func (p *DefaultStatsProvider) GetStats() ServerStats {
+	c := p.router.Counters().Snapshot()
+	p.mu.Lock()
+	posted := p.nPosted
+	postPush := p.nPostPush
+	uptime := uint32(p.nowFn().Sub(p.startTime).Seconds())
+	p.mu.Unlock()
+
+	return ServerStats{
+		NPacketsRecv:    c.PacketsRecv,
+		NPacketsSent:    c.PacketsSent,
+		TotalUpTimeSecs: uptime,
+		NSentFlood:      c.SentFlood,
+		NSentDirect:     c.SentDirect,
+		NRecvFlood:      c.RecvFlood,
+		NRecvDirect:     c.RecvDirect,
+		NFloodDups:      uint16(c.FloodDups),
+		NDirectDups:     uint16(c.DirectDups),
+		NPosted:         posted,
+		NPostPush:       postPush,
+	}
+}
+
+// IncrementPosted increments the posts-added counter.
+func (p *DefaultStatsProvider) IncrementPosted() {
+	p.mu.Lock()
+	p.nPosted++
+	p.mu.Unlock()
+}
+
+// IncrementPostPush increments the posts-pushed counter.
+func (p *DefaultStatsProvider) IncrementPostPush() {
+	p.mu.Lock()
+	p.nPostPush++
+	p.mu.Unlock()
+}
+
+// ResetStats zeroes all counters and resets the uptime origin.
+// Implements StatsResetter (used by "clear stats" CLI command).
+func (p *DefaultStatsProvider) ResetStats() {
+	p.router.Counters().Reset()
+	p.mu.Lock()
+	p.nPosted = 0
+	p.nPostPush = 0
+	p.startTime = p.nowFn()
+	p.mu.Unlock()
 }

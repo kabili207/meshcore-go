@@ -204,6 +204,9 @@ func (s *Server) handleTextMessage(pkt *codec.Packet, client *ClientInfo, sender
 			SenderID:  senderID,
 			Content:   ackData,
 		})
+		if s.cfg.PostCounter != nil {
+			s.cfg.PostCounter.IncrementPosted()
+		}
 
 		s.log.Debug("post stored",
 			"sender", senderID.String(),

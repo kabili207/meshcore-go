@@ -172,6 +172,9 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 	} else {
 		s.cfg.Router.SendFlood(pkt)
 	}
+	if s.cfg.PostCounter != nil {
+		s.cfg.PostCounter.IncrementPostPush()
+	}
 
 	s.log.Debug("pushed post to client",
 		"peer", client.ID.String(),
