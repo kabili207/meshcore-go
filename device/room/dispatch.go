@@ -209,16 +209,16 @@ func (s *Server) handleTextMessage(pkt *codec.Packet, client *ClientInfo, sender
 			"sender", senderID.String(),
 			"timestamp", nowTS)
 
+		// Send ACK back (plain text only — firmware doesn't ACK CLI commands)
+		s.sendACK(pkt, senderID, secret, ackHash)
+
 	case codec.TxtTypeCLI:
-		// CLI commands — admin only
+		// CLI commands — admin only, reply instead of ACK
 		if !client.IsAdmin() {
 			return
 		}
-		// TODO: handle CLI commands in a future tier
+		s.handleCLICommand(pkt, senderID, secret, content)
 	}
-
-	// Send ACK back
-	s.sendACK(pkt, senderID, secret, ackHash)
 }
 
 // handleRequest processes a decrypted REQ from a client.

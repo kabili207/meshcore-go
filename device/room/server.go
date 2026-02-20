@@ -56,6 +56,18 @@ type ServerConfig struct {
 	Stats     StatsProvider
 	Telemetry TelemetryProvider
 
+	// Name is the server's display name, returned by the "get name" CLI command.
+	Name string
+
+	// Version is the version string returned by the "ver" CLI command.
+	// If empty, defaults to "meshcore-go".
+	Version string
+
+	// CLIHandler is an optional callback for custom CLI commands.
+	// Called when no built-in command matches. Return "" for no reply,
+	// or "Unknown command" to indicate unrecognized input.
+	CLIHandler func(cmd string) string
+
 	// Logger for server events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
