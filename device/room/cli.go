@@ -107,9 +107,32 @@ func (s *Server) cliVer() string {
 }
 
 func (s *Server) cliGet(key string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	switch key {
 	case "name":
 		return s.cfg.Name
+	case "lat":
+		if s.cfg.Lat != nil {
+			return fmt.Sprintf("%f", *s.cfg.Lat)
+		}
+		return "0.000000"
+	case "lon":
+		if s.cfg.Lon != nil {
+			return fmt.Sprintf("%f", *s.cfg.Lon)
+		}
+		return "0.000000"
+	case "freq":
+		return s.cfg.RadioFreq
+	case "bw":
+		return s.cfg.RadioBW
+	case "sf":
+		return s.cfg.RadioSF
+	case "cr":
+		return s.cfg.RadioCR
+	case "radio":
+		return s.cfg.RadioModel
 	case "guest.password":
 		return s.cfg.GuestPassword
 	case "allow.read.only":
@@ -127,35 +150,62 @@ func (s *Server) cliGet(key string) string {
 }
 
 func (s *Server) cliSet(key, value string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	switch key {
 	case "name":
-		s.mu.Lock()
 		s.cfg.Name = value
-		s.mu.Unlock()
-		return "OK"
+		if s.cfg.AppData != nil {
+			s.cfg.AppData.Name = value
+		}
+	case "lat":
+		v, err := strconv.ParseFloat(normalizeNumber(value), 64)
+		if err != nil {
+			return "Error: bad latitude"
+		}
+		s.cfg.Lat = &v
+		if s.cfg.AppData != nil {
+			s.cfg.AppData.Lat = &v
+		}
+	case "lon":
+		v, err := strconv.ParseFloat(normalizeNumber(value), 64)
+		if err != nil {
+			return "Error: bad longitude"
+		}
+		s.cfg.Lon = &v
+		if s.cfg.AppData != nil {
+			s.cfg.AppData.Lon = &v
+		}
+	case "freq":
+		s.cfg.RadioFreq = value
+	case "bw":
+		s.cfg.RadioBW = value
+	case "sf":
+		s.cfg.RadioSF = value
+	case "cr":
+		s.cfg.RadioCR = value
+	case "radio":
+		s.cfg.RadioModel = value
 	case "guest.password":
-		s.mu.Lock()
 		s.cfg.GuestPassword = value
-		s.mu.Unlock()
-		return "OK"
 	case "allow.read.only":
 		switch value {
 		case "on":
-			s.mu.Lock()
 			s.cfg.AllowReadOnly = true
-			s.mu.Unlock()
-			return "OK"
 		case "off":
-			s.mu.Lock()
 			s.cfg.AllowReadOnly = false
-			s.mu.Unlock()
-			return "OK"
 		default:
 			return "Error: expected on/off"
 		}
 	default:
 		return "??: " + key
 	}
+
+	if s.cfg.OnSettingChanged != nil {
+		s.cfg.OnSettingChanged(key, value)
+	}
+	return "OK"
 }
 
 func (s *Server) cliSetPerm(args []string) string {
@@ -215,6 +265,12 @@ func (s *Server) cliClearStats() string {
 		resetter.ResetStats()
 	}
 	return "OK"
+}
+
+// normalizeNumber replaces Unicode minus sign (U+2212) with ASCII hyphen-minus.
+// Mobile apps sometimes send typographic characters in numeric input.
+func normalizeNumber(s string) string {
+	return strings.ReplaceAll(s, "\u2212", "-")
 }
 
 // matchesPubKeyPrefix returns true if fullKey starts with the given prefix.

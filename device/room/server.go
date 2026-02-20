@@ -14,8 +14,9 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/core/clock"
+	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/router"
 )
@@ -67,6 +68,27 @@ type ServerConfig struct {
 	// If empty, defaults to "meshcore-go".
 	Version string
 
+	// Location (decimal degrees). Nil means not set.
+	Lat *float64
+	Lon *float64
+
+	// Radio settings (opaque strings for software nodes without hardware).
+	RadioFreq  string // frequency in MHz (e.g., "915.0")
+	RadioBW    string // bandwidth in kHz (e.g., "250.0")
+	RadioSF    string // spreading factor (e.g., "12")
+	RadioCR    string // coding rate (e.g., "8")
+	RadioModel string // radio identifier (e.g., "MQTT")
+
+	// AppData is a pointer to the AdvertAppData used by the advert builder.
+	// CLI set commands for name/lat/lon update this directly so subsequent
+	// advertisements reflect the changes. May be nil.
+	AppData *codec.AdvertAppData
+
+	// OnSettingChanged is called after a CLI set command successfully updates
+	// an in-memory value. The room server application uses this to persist
+	// the change to the database. May be nil.
+	OnSettingChanged func(key, value string)
+
 	// CLIHandler is an optional callback for custom CLI commands.
 	// Called when no built-in command matches. Return "" for no reply,
 	// or "Unknown command" to indicate unrecognized input.
@@ -86,6 +108,15 @@ type Server struct {
 
 	// Sync loop state
 	nextClientIdx int
+}
+
+// SetOnSettingChanged sets the callback invoked when a CLI set command
+// changes a setting. This is typically called after construction to wire
+// in persistence and re-advertisement logic that depends on other components.
+func (s *Server) SetOnSettingChanged(fn func(key, value string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.OnSettingChanged = fn
 }
 
 // NewServer creates a room server with the given configuration.

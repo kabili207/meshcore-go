@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -201,7 +202,11 @@ func ParseAdvertAppData(data []byte) (*AdvertAppData, error) {
 	// Parse optional name (remaining bytes if FlagHasName set)
 	if appData.Flags&FlagHasName != 0 {
 		if offset < len(data) {
-			appData.Name = string(data[offset:])
+			nameBytes := data[offset:]
+			if idx := bytes.IndexByte(nameBytes, 0); idx >= 0 {
+				nameBytes = nameBytes[:idx]
+			}
+			appData.Name = string(nameBytes)
 		}
 	}
 
@@ -319,7 +324,13 @@ func ParseTxtMsgContent(data []byte) (*TxtMsgContent, error) {
 	}
 
 	if messageStart < len(data) {
-		content.Message = string(data[messageStart:])
+		msgBytes := data[messageStart:]
+		// Trim at the first null byte to match the firmware's strlen()
+		// behavior — AES-ECB padding fills remaining block space with 0x00.
+		if idx := bytes.IndexByte(msgBytes, 0); idx >= 0 {
+			msgBytes = msgBytes[:idx]
+		}
+		content.Message = string(msgBytes)
 	}
 
 	return content, nil
