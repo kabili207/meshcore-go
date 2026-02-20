@@ -18,9 +18,7 @@ func (s *Server) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 		s.handleAnonReq(pkt)
 	case codec.PayloadTypeAck:
 		s.handleACK(pkt)
-	case codec.PayloadTypePath:
-		s.handlePath(pkt)
-	case codec.PayloadTypeTxtMsg, codec.PayloadTypeReq:
+	case codec.PayloadTypeTxtMsg, codec.PayloadTypeReq, codec.PayloadTypePath:
 		s.handleAddressed(pkt)
 	default:
 		s.log.Debug("unhandled payload type",
@@ -57,54 +55,41 @@ func (s *Server) handleACK(pkt *codec.Packet) {
 	}
 }
 
-// handlePath processes a PATH packet — updates the contact's routing path
-// and handles any piggybacked extra (ACK or RESPONSE).
-func (s *Server) handlePath(pkt *codec.Packet) {
-	pathContent, err := codec.ParsePathContent(pkt.Payload)
+// handleDecryptedPath processes an already-decrypted PATH payload.
+// The sender identity has been resolved and the plaintext contains the
+// PathContent: [path_len || path || extra_type || extra_data].
+func (s *Server) handleDecryptedPath(_ *codec.Packet, senderID core.MeshCoreID, _ []byte, plaintext []byte) {
+	pathContent, err := codec.ParsePathContent(plaintext)
 	if err != nil {
 		s.log.Debug("failed to parse path", "error", err)
 		return
 	}
 
-	// Determine sender from the path itself (first byte = sender hash)
-	// The full sender ID is resolved via the contact store.
-	if pathContent.PathLen == 0 {
-		return
-	}
-	senderHash := pathContent.Path[0]
-	contacts := s.cfg.Contacts.SearchByHash(senderHash)
-	if len(contacts) == 0 {
-		return
-	}
-
-	// Try each matching contact (hash collisions are possible)
 	nowTS := s.cfg.Clock.GetCurrentTime()
-	for _, c := range contacts {
-		ct, extraType, extraData, err := contact.ProcessPath(s.cfg.Contacts, c.ID, pathContent, nowTS)
-		if err != nil {
-			continue
-		}
+	ct, extraType, extraData, err := contact.ProcessPath(s.cfg.Contacts, senderID, pathContent, nowTS)
+	if err != nil {
+		s.log.Debug("failed to process path", "error", err)
+		return
+	}
 
-		// Also update client's path if they're in the client store
-		client := s.cfg.Clients.GetClient(ct.ID)
-		if client != nil {
-			client.OutPathLen = ct.OutPathLen
-			if ct.OutPathLen >= 0 && len(ct.OutPath) > 0 {
-				client.OutPath = make([]byte, len(ct.OutPath))
-				copy(client.OutPath, ct.OutPath)
-			} else {
-				client.OutPath = nil
-			}
+	// Also update client's path if they're in the client store
+	client := s.cfg.Clients.GetClient(ct.ID)
+	if client != nil {
+		client.OutPathLen = ct.OutPathLen
+		if ct.OutPathLen >= 0 && len(ct.OutPath) > 0 {
+			client.OutPath = make([]byte, len(ct.OutPath))
+			copy(client.OutPath, ct.OutPath)
+		} else {
+			client.OutPath = nil
 		}
+	}
 
-		// Handle piggybacked extra
-		if extraType == codec.PayloadTypeAck && len(extraData) >= 4 {
-			ackPayload, err := codec.ParseAckPayload(extraData)
-			if err == nil {
-				s.cfg.ACKTracker.Resolve(ackPayload.Checksum)
-			}
+	// Handle piggybacked extra
+	if extraType == codec.PayloadTypeAck && len(extraData) >= 4 {
+		ackPayload, err := codec.ParseAckPayload(extraData)
+		if err == nil {
+			s.cfg.ACKTracker.Resolve(ackPayload.Checksum)
 		}
-		break
 	}
 }
 
@@ -140,6 +125,12 @@ func (s *Server) handleAddressed(pkt *codec.Packet) {
 		}
 
 		// Decryption succeeded — this is the sender
+		// PATH packets don't require the sender to be a client
+		if pkt.PayloadType() == codec.PayloadTypePath {
+			s.handleDecryptedPath(pkt, ct.ID, secret, plaintext)
+			return
+		}
+
 		client := s.cfg.Clients.GetClient(ct.ID)
 		if client == nil {
 			s.log.Debug("addressed from non-client", "peer", ct.ID.String())

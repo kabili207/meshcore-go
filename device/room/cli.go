@@ -17,20 +17,32 @@ const defaultVersion = "meshcore-go"
 // reply as an encrypted TXT_MSG with TxtTypeCLI. The firmware does NOT send
 // an ACK for CLI commands — only the text reply.
 func (s *Server) handleCLICommand(pkt *codec.Packet, senderID core.MeshCoreID, secret []byte, content *codec.TxtMsgContent) {
+	cmd := content.Message
+
+	// Strip optional companion radio prefix (e.g. "04|get name" → "get name").
+	// The firmware reflects the prefix back in the reply so the app can correlate
+	// command/response pairs.
+	prefix := ""
+	if len(cmd) > 4 && cmd[2] == '|' {
+		prefix = cmd[:3]
+		cmd = cmd[3:]
+	}
+
 	s.log.Debug("cli command",
 		"peer", senderID.String(),
-		"cmd", content.Message)
+		"cmd", cmd)
 
-	reply := s.executeCLI(content.Message)
+	reply := s.executeCLI(cmd)
 	if reply == "" {
 		return
 	}
-	s.sendCLIReply(pkt, senderID, secret, reply)
+	s.sendCLIReply(pkt, senderID, secret, prefix+reply)
 }
 
 // executeCLI dispatches a CLI command string and returns the reply text.
 // Returns "" for no reply.
 func (s *Server) executeCLI(cmd string) string {
+	cmd = strings.TrimLeft(cmd, " ")
 	parts := strings.Fields(cmd)
 	if len(parts) == 0 {
 		return ""
