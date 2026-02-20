@@ -186,6 +186,106 @@ func TestManager_AddContact_InvalidatesSecret(t *testing.T) {
 	}
 }
 
+func TestManager_UpdateContact(t *testing.T) {
+	m := newTestManager(t, 10, false)
+	id := makeIDWithHash(0xAA)
+
+	m.AddContact(makeContactWithID(id, "Alice", 100))
+
+	updated := &ContactInfo{
+		ID:                 id,
+		Name:               "Alice Updated",
+		Type:               0x02,
+		Flags:              FlagFavorite,
+		OutPathLen:         3,
+		OutPath:            []byte{0x01, 0x02, 0x03},
+		LastAdvertTimestamp: 2000,
+		LastMod:            200,
+		GPSLat:             37774900,
+		GPSLon:             -122419400,
+		SyncSince:          500,
+	}
+
+	if err := m.UpdateContact(updated); err != nil {
+		t.Fatalf("UpdateContact failed: %v", err)
+	}
+
+	found := m.GetByPubKey(id)
+	if found == nil {
+		t.Fatal("contact not found after update")
+	}
+	if found.Name != "Alice Updated" {
+		t.Errorf("Name = %q, want %q", found.Name, "Alice Updated")
+	}
+	if found.Type != 0x02 {
+		t.Errorf("Type = %d, want 2", found.Type)
+	}
+	if !found.IsFavorite() {
+		t.Error("expected favorite flag set")
+	}
+	if found.OutPathLen != 3 {
+		t.Errorf("OutPathLen = %d, want 3", found.OutPathLen)
+	}
+	if len(found.OutPath) != 3 || found.OutPath[0] != 0x01 {
+		t.Error("OutPath not updated correctly")
+	}
+	if found.LastAdvertTimestamp != 2000 {
+		t.Errorf("LastAdvertTimestamp = %d, want 2000", found.LastAdvertTimestamp)
+	}
+	if found.LastMod != 200 {
+		t.Errorf("LastMod = %d, want 200", found.LastMod)
+	}
+	if found.GPSLat != 37774900 {
+		t.Errorf("GPSLat = %d, want 37774900", found.GPSLat)
+	}
+	if found.SyncSince != 500 {
+		t.Errorf("SyncSince = %d, want 500", found.SyncSince)
+	}
+
+	// Count should not change
+	if m.Count() != 1 {
+		t.Errorf("Count() = %d, want 1", m.Count())
+	}
+}
+
+func TestManager_UpdateContact_NotFound(t *testing.T) {
+	m := newTestManager(t, 10, false)
+	id := makeIDWithHash(0xCC)
+
+	err := m.UpdateContact(&ContactInfo{ID: id, Name: "Ghost"})
+	if err != ErrContactNotFound {
+		t.Errorf("expected ErrContactNotFound, got %v", err)
+	}
+}
+
+func TestManager_UpdateContact_ClearsPath(t *testing.T) {
+	m := newTestManager(t, 10, false)
+	id := makeIDWithHash(0xAA)
+
+	c := makeContactWithID(id, "Alice", 100)
+	c.OutPathLen = 2
+	c.OutPath = []byte{0x01, 0x02}
+	m.AddContact(c)
+
+	// Update with no path
+	updated := &ContactInfo{
+		ID:         id,
+		Name:       "Alice",
+		OutPathLen: PathUnknown,
+	}
+	if err := m.UpdateContact(updated); err != nil {
+		t.Fatalf("UpdateContact failed: %v", err)
+	}
+
+	found := m.GetByPubKey(id)
+	if found.OutPath != nil {
+		t.Error("expected OutPath to be nil after clearing")
+	}
+	if found.OutPathLen != PathUnknown {
+		t.Errorf("OutPathLen = %d, want %d", found.OutPathLen, PathUnknown)
+	}
+}
+
 func TestManager_RemoveContact(t *testing.T) {
 	m := newTestManager(t, 10, false)
 	id := makeIDWithHash(0xBB)

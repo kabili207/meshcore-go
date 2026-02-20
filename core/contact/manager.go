@@ -27,6 +27,9 @@ var (
 	ErrContactNotFound = errors.New("contact not found")
 )
 
+// Compile-time assertion that ContactManager implements ContactStore.
+var _ ContactStore = (*ContactManager)(nil)
+
 // ManagerConfig configures a ContactManager.
 type ManagerConfig struct {
 	// MaxContacts is the maximum number of contacts to store.
@@ -143,6 +146,40 @@ func (m *ContactManager) AddContact(c *ContactInfo) (*ContactInfo, error) {
 	}
 
 	return stored, nil
+}
+
+// UpdateContact updates mutable fields of an existing contact identified by c.ID.
+// Returns ErrContactNotFound if the contact does not exist.
+// This does not allocate or evict — it only updates an existing entry.
+func (m *ContactManager) UpdateContact(c *ContactInfo) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, existing := range m.contacts {
+		if existing.ID == c.ID {
+			existing.Name = c.Name
+			existing.Type = c.Type
+			existing.Flags = c.Flags
+			existing.OutPathLen = c.OutPathLen
+			if len(c.OutPath) > 0 {
+				existing.OutPath = make([]byte, len(c.OutPath))
+				copy(existing.OutPath, c.OutPath)
+			} else {
+				existing.OutPath = nil
+			}
+			existing.LastAdvertTimestamp = c.LastAdvertTimestamp
+			existing.LastMod = c.LastMod
+			existing.GPSLat = c.GPSLat
+			existing.GPSLon = c.GPSLon
+			existing.SyncSince = c.SyncSince
+
+			if m.onContactAdded != nil {
+				m.onContactAdded(existing, false)
+			}
+			return nil
+		}
+	}
+	return ErrContactNotFound
 }
 
 // RemoveContact removes the contact matching the given public key.

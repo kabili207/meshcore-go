@@ -12,10 +12,10 @@ import (
 type AdvertResult struct {
 	// Contact is the contact that was created or updated. For rejected ADVERTs
 	// with autoAdd disabled, this contains a temporary ContactInfo populated
-	// from the ADVERT (not stored in the manager).
+	// from the ADVERT (not stored in the store).
 	Contact *ContactInfo
 
-	// IsNew is true if a new contact was added to the manager.
+	// IsNew is true if a new contact was added to the store.
 	IsNew bool
 
 	// Rejected is true if the ADVERT was not processed (replay, invalid, full, etc.).
@@ -26,15 +26,17 @@ type AdvertResult struct {
 }
 
 // ProcessAdvert handles a received ADVERT packet by verifying the signature,
-// checking for replay attacks, and adding or updating the contact in the manager.
+// checking for replay attacks, and adding or updating the contact in the store.
 //
 // Parameters:
+//   - store: the contact store to query and update
 //   - advert: the parsed AdvertPayload (from codec.ParseAdvertPayload)
 //   - nowTimestamp: the current local clock time (for LastMod)
-//   - autoAdd: whether to automatically add new contacts to the manager
+//   - autoAdd: whether to automatically add new contacts to the store
 //
 // This corresponds to the firmware's onAdvertRecv() in BaseChatMesh.
-func (m *ContactManager) ProcessAdvert(
+func ProcessAdvert(
+	store ContactStore,
 	advert *codec.AdvertPayload,
 	nowTimestamp uint32,
 	autoAdd bool,
@@ -55,27 +57,14 @@ func (m *ContactManager) ProcessAdvert(
 		}
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	// Step 3: look up existing contact by full pubkey
 	var advertID core.MeshCoreID
 	copy(advertID[:], advert.PubKey[:])
 
-	var existing *ContactInfo
-	for _, c := range m.contacts {
-		if c.ID == advertID {
-			existing = c
-			break
-		}
-	}
+	existing := store.GetByPubKey(advertID)
 
 	// Step 4: replay prevention
 	if existing != nil && advert.Timestamp <= existing.LastAdvertTimestamp {
-		m.log.Debug("possible replay attack",
-			"peer", advertID.String(),
-			"advert_ts", advert.Timestamp,
-			"last_ts", existing.LastAdvertTimestamp)
 		return AdvertResult{
 			Contact:      existing,
 			Rejected:     true,
@@ -85,7 +74,6 @@ func (m *ContactManager) ProcessAdvert(
 
 	// Step 5: new contact without auto-add
 	if existing == nil && !autoAdd {
-		// Build a temporary ContactInfo for the caller to inspect
 		temp := populateContactFromAdvert(advert, nowTimestamp)
 		return AdvertResult{
 			Contact:      temp,
@@ -94,55 +82,44 @@ func (m *ContactManager) ProcessAdvert(
 		}
 	}
 
-	// Step 6: new contact — allocate slot
+	// Step 6: new contact — add to store
 	if existing == nil {
-		slot := m.allocateSlot()
-		if slot == nil {
+		newContact := populateContactFromAdvert(advert, nowTimestamp)
+		stored, err := store.AddContact(newContact)
+		if err != nil {
 			return AdvertResult{
 				Rejected:     true,
 				RejectReason: "contacts full",
 			}
 		}
-
-		temp := populateContactFromAdvert(advert, nowTimestamp)
-		slot.ID = temp.ID
-		slot.Name = temp.Name
-		slot.Type = temp.Type
-		slot.OutPathLen = PathUnknown
-		slot.OutPath = nil
-		slot.LastAdvertTimestamp = temp.LastAdvertTimestamp
-		slot.LastMod = temp.LastMod
-		slot.GPSLat = temp.GPSLat
-		slot.GPSLon = temp.GPSLon
-		slot.SyncSince = 0
-		slot.InvalidateSharedSecret()
-
-		if m.onContactAdded != nil {
-			m.onContactAdded(slot, true)
-		}
-
 		return AdvertResult{
-			Contact: slot,
+			Contact: stored,
 			IsNew:   true,
 		}
 	}
 
 	// Step 7: existing contact — update fields
-	existing.Name = advert.AppData.Name
-	existing.Type = advert.AppData.NodeType
+	updated := &ContactInfo{
+		ID:                 existing.ID,
+		Name:               advert.AppData.Name,
+		Type:               advert.AppData.NodeType,
+		Flags:              existing.Flags,
+		OutPathLen:         existing.OutPathLen,
+		OutPath:            existing.OutPath,
+		LastAdvertTimestamp: advert.Timestamp,
+		LastMod:            nowTimestamp,
+		GPSLat:             existing.GPSLat,
+		GPSLon:             existing.GPSLon,
+		SyncSince:          existing.SyncSince,
+	}
 	if advert.AppData.HasLocation() {
-		existing.GPSLat = int32(math.Round(*advert.AppData.Lat * codec.CoordScale))
-		existing.GPSLon = int32(math.Round(*advert.AppData.Lon * codec.CoordScale))
+		updated.GPSLat = int32(math.Round(*advert.AppData.Lat * codec.CoordScale))
+		updated.GPSLon = int32(math.Round(*advert.AppData.Lon * codec.CoordScale))
 	}
-	existing.LastAdvertTimestamp = advert.Timestamp
-	existing.LastMod = nowTimestamp
-
-	if m.onContactAdded != nil {
-		m.onContactAdded(existing, false)
-	}
+	_ = store.UpdateContact(updated)
 
 	return AdvertResult{
-		Contact: existing,
+		Contact: store.GetByPubKey(advertID),
 	}
 }
 
@@ -150,6 +127,7 @@ func (m *ContactManager) ProcessAdvert(
 // routing path and returning any piggybacked extra payload.
 //
 // Parameters:
+//   - store: the contact store to query and update
 //   - senderID: the public key of the PATH sender
 //   - pathContent: the parsed PathContent (from codec.ParsePathContent)
 //   - nowTimestamp: the current local clock time (for LastMod)
@@ -158,27 +136,18 @@ func (m *ContactManager) ProcessAdvert(
 // processing by higher-level code), and any error.
 //
 // This corresponds to the firmware's onContactPathRecv().
-func (m *ContactManager) ProcessPath(
+func ProcessPath(
+	store ContactStore,
 	senderID core.MeshCoreID,
 	pathContent *codec.PathContent,
 	nowTimestamp uint32,
 ) (contact *ContactInfo, extraType uint8, extraData []byte, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Find the contact
-	var found *ContactInfo
-	for _, c := range m.contacts {
-		if c.ID == senderID {
-			found = c
-			break
-		}
-	}
+	found := store.GetByPubKey(senderID)
 	if found == nil {
 		return nil, 0, nil, ErrContactNotFound
 	}
 
-	// Update the direct routing path
+	// Update the direct routing path directly on the stored reference
 	found.OutPathLen = int8(pathContent.PathLen)
 	if pathContent.PathLen > 0 {
 		found.OutPath = make([]byte, pathContent.PathLen)

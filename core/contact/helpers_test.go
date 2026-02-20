@@ -67,7 +67,7 @@ func TestProcessAdvert_NewContact(t *testing.T) {
 
 	advert := makeSignedAdvert(t, peerKP, "PeerNode", codec.NodeTypeChat, 1000)
 
-	result := m.ProcessAdvert(advert, 5000, true)
+	result := ProcessAdvert(m, advert, 5000, true)
 
 	if result.Rejected {
 		t.Fatalf("advert rejected: %s", result.RejectReason)
@@ -106,11 +106,11 @@ func TestProcessAdvert_UpdateExisting(t *testing.T) {
 
 	// First advert
 	advert1 := makeSignedAdvert(t, peerKP, "OldName", codec.NodeTypeChat, 1000)
-	m.ProcessAdvert(advert1, 5000, true)
+	ProcessAdvert(m,advert1, 5000, true)
 
 	// Second advert with newer timestamp
 	advert2 := makeSignedAdvertWithLocation(t, peerKP, "NewName", codec.NodeTypeRepeater, 2000, 37.7749, -122.4194)
-	result := m.ProcessAdvert(advert2, 6000, true)
+	result := ProcessAdvert(m,advert2, 6000, true)
 
 	if result.Rejected {
 		t.Fatalf("update rejected: %s", result.RejectReason)
@@ -146,11 +146,11 @@ func TestProcessAdvert_ReplayRejected(t *testing.T) {
 
 	// Initial advert at timestamp 2000
 	advert1 := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 2000)
-	m.ProcessAdvert(advert1, 5000, true)
+	ProcessAdvert(m,advert1, 5000, true)
 
 	// Replay with same timestamp
 	advert2 := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 2000)
-	result := m.ProcessAdvert(advert2, 5001, true)
+	result := ProcessAdvert(m,advert2, 5001, true)
 
 	if !result.Rejected {
 		t.Error("same timestamp should be rejected as replay")
@@ -161,7 +161,7 @@ func TestProcessAdvert_ReplayRejected(t *testing.T) {
 
 	// Replay with older timestamp
 	advert3 := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 1999)
-	result = m.ProcessAdvert(advert3, 5002, true)
+	result = ProcessAdvert(m,advert3, 5002, true)
 
 	if !result.Rejected {
 		t.Error("older timestamp should be rejected as replay")
@@ -176,7 +176,7 @@ func TestProcessAdvert_InvalidSignature(t *testing.T) {
 	// Corrupt the signature
 	advert.Signature[0] ^= 0xFF
 
-	result := m.ProcessAdvert(advert, 5000, true)
+	result := ProcessAdvert(m,advert, 5000, true)
 
 	if !result.Rejected {
 		t.Error("invalid signature should be rejected")
@@ -195,7 +195,7 @@ func TestProcessAdvert_NoName(t *testing.T) {
 	// The signature is for empty name appdata, but we set name to empty
 	advert.AppData.Name = ""
 
-	result := m.ProcessAdvert(advert, 5000, true)
+	result := ProcessAdvert(m,advert, 5000, true)
 
 	if !result.Rejected {
 		t.Error("advert without name should be rejected")
@@ -213,7 +213,7 @@ func TestProcessAdvert_NoAppData(t *testing.T) {
 		AppData:   nil,
 	}
 
-	result := m.ProcessAdvert(advert, 5000, true)
+	result := ProcessAdvert(m,advert, 5000, true)
 
 	if !result.Rejected {
 		t.Error("advert without appdata should be rejected")
@@ -229,7 +229,7 @@ func TestProcessAdvert_AutoAddDisabled(t *testing.T) {
 
 	advert := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 1000)
 
-	result := m.ProcessAdvert(advert, 5000, false) // autoAdd = false
+	result := ProcessAdvert(m,advert, 5000, false) // autoAdd = false
 
 	if !result.Rejected {
 		t.Error("expected rejected with autoAdd disabled")
@@ -258,11 +258,11 @@ func TestProcessAdvert_ContactsFull(t *testing.T) {
 
 	// Fill the single slot
 	advert1 := makeSignedAdvert(t, existingKP, "Existing", codec.NodeTypeChat, 1000)
-	m.ProcessAdvert(advert1, 5000, true)
+	ProcessAdvert(m,advert1, 5000, true)
 
 	// Try to add another
 	advert2 := makeSignedAdvert(t, newKP, "New", codec.NodeTypeChat, 1000)
-	result := m.ProcessAdvert(advert2, 5001, true)
+	result := ProcessAdvert(m,advert2, 5001, true)
 
 	if !result.Rejected {
 		t.Error("expected rejected when contacts full")
@@ -284,11 +284,11 @@ func TestProcessAdvert_OverwriteWhenFull(t *testing.T) {
 
 	// Fill the single slot
 	advert1 := makeSignedAdvert(t, existingKP, "Old", codec.NodeTypeChat, 1000)
-	m.ProcessAdvert(advert1, 5000, true)
+	ProcessAdvert(m,advert1, 5000, true)
 
 	// Should evict the old one
 	advert2 := makeSignedAdvert(t, newKP, "New", codec.NodeTypeChat, 1000)
-	result := m.ProcessAdvert(advert2, 5001, true)
+	result := ProcessAdvert(m,advert2, 5001, true)
 
 	if result.Rejected {
 		t.Fatalf("should not be rejected with overwrite: %s", result.RejectReason)
@@ -312,7 +312,7 @@ func TestProcessAdvert_WithLocation(t *testing.T) {
 	lon := -122.4194
 	advert := makeSignedAdvertWithLocation(t, peerKP, "Node", codec.NodeTypeChat, 1000, lat, lon)
 
-	result := m.ProcessAdvert(advert, 5000, true)
+	result := ProcessAdvert(m,advert, 5000, true)
 
 	if result.Rejected {
 		t.Fatalf("rejected: %s", result.RejectReason)
@@ -342,7 +342,7 @@ func TestProcessAdvert_CallbackFires(t *testing.T) {
 
 	// New contact
 	advert := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 1000)
-	m.ProcessAdvert(advert, 5000, true)
+	ProcessAdvert(m,advert, 5000, true)
 
 	if callbackContact == nil {
 		t.Fatal("callback should fire for new contact")
@@ -354,7 +354,7 @@ func TestProcessAdvert_CallbackFires(t *testing.T) {
 	// Update existing contact
 	callbackContact = nil
 	advert2 := makeSignedAdvert(t, peerKP, "Updated", codec.NodeTypeChat, 2000)
-	m.ProcessAdvert(advert2, 6000, true)
+	ProcessAdvert(m,advert2, 6000, true)
 
 	if callbackContact == nil {
 		t.Fatal("callback should fire for update")
@@ -372,7 +372,7 @@ func TestProcessPath_UpdatesRoute(t *testing.T) {
 
 	// First add the contact via ADVERT
 	advert := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 1000)
-	m.ProcessAdvert(advert, 5000, true)
+	ProcessAdvert(m,advert, 5000, true)
 
 	var senderID core.MeshCoreID
 	copy(senderID[:], peerKP.PublicKey)
@@ -384,7 +384,7 @@ func TestProcessPath_UpdatesRoute(t *testing.T) {
 		Extra:     nil,
 	}
 
-	contact, _, _, err := m.ProcessPath(senderID, pathContent, 6000)
+	contact, _, _, err := ProcessPath(m,senderID, pathContent, 6000)
 	if err != nil {
 		t.Fatalf("ProcessPath failed: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestProcessPath_ZeroLengthPath(t *testing.T) {
 	peerKP := generateTestKeyPair(t)
 
 	advert := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 1000)
-	m.ProcessAdvert(advert, 5000, true)
+	ProcessAdvert(m,advert, 5000, true)
 
 	var senderID core.MeshCoreID
 	copy(senderID[:], peerKP.PublicKey)
@@ -422,7 +422,7 @@ func TestProcessPath_ZeroLengthPath(t *testing.T) {
 		ExtraType: 0,
 	}
 
-	contact, _, _, err := m.ProcessPath(senderID, pathContent, 6000)
+	contact, _, _, err := ProcessPath(m,senderID, pathContent, 6000)
 	if err != nil {
 		t.Fatalf("ProcessPath failed: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestProcessPath_ExtraACK(t *testing.T) {
 	peerKP := generateTestKeyPair(t)
 
 	advert := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 1000)
-	m.ProcessAdvert(advert, 5000, true)
+	ProcessAdvert(m,advert, 5000, true)
 
 	var senderID core.MeshCoreID
 	copy(senderID[:], peerKP.PublicKey)
@@ -453,7 +453,7 @@ func TestProcessPath_ExtraACK(t *testing.T) {
 		Extra:     ackData,
 	}
 
-	_, extraType, extraData, err := m.ProcessPath(senderID, pathContent, 6000)
+	_, extraType, extraData, err := ProcessPath(m,senderID, pathContent, 6000)
 	if err != nil {
 		t.Fatalf("ProcessPath failed: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestProcessPath_ExtraResponse(t *testing.T) {
 	peerKP := generateTestKeyPair(t)
 
 	advert := makeSignedAdvert(t, peerKP, "Node", codec.NodeTypeChat, 1000)
-	m.ProcessAdvert(advert, 5000, true)
+	ProcessAdvert(m,advert, 5000, true)
 
 	var senderID core.MeshCoreID
 	copy(senderID[:], peerKP.PublicKey)
@@ -487,7 +487,7 @@ func TestProcessPath_ExtraResponse(t *testing.T) {
 		Extra:     respData,
 	}
 
-	_, extraType, extraData, err := m.ProcessPath(senderID, pathContent, 6000)
+	_, extraType, extraData, err := ProcessPath(m,senderID, pathContent, 6000)
 	if err != nil {
 		t.Fatalf("ProcessPath failed: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestProcessPath_UnknownSender(t *testing.T) {
 		Path:    []byte{0xAA},
 	}
 
-	_, _, _, err := m.ProcessPath(unknownID, pathContent, 6000)
+	_, _, _, err := ProcessPath(m,unknownID, pathContent, 6000)
 	if err != ErrContactNotFound {
 		t.Errorf("expected ErrContactNotFound, got %v", err)
 	}
