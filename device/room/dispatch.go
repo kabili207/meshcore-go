@@ -181,12 +181,14 @@ func (s *Server) handleTextMessage(pkt *codec.Packet, client *ClientInfo, sender
 	client.LastTimestamp = content.Timestamp
 	client.PushFailures = 0
 
-	// Compute ACK hash for this message
-	ackHash := crypto.ComputeAckHash(plaintext, senderID[:])
+	// Compute ACK hash using the unpadded content length. The decrypted
+	// plaintext may have trailing zero bytes from AES-128 ECB block padding,
+	// but the firmware computes the ACK hash using header + strlen(text),
+	// which excludes padding. We must match that to produce a valid ACK.
+	ackData := trimTxtMsgContent(plaintext, content)
+	ackHash := crypto.ComputeAckHash(ackData, senderID[:])
 
-	txtType := content.TxtType >> 2 // upper 6 bits
-
-	switch txtType {
+	switch content.TxtType {
 	case codec.TxtTypePlain:
 		if !client.CanWrite() {
 			// Guests can't post — but still send ACK? Firmware doesn't for guests
@@ -195,12 +197,12 @@ func (s *Server) handleTextMessage(pkt *codec.Packet, client *ClientInfo, sender
 			}
 		}
 
-		// Store the post
+		// Store the post (use unpadded content so sync ACK hashes match)
 		nowTS := s.cfg.Clock.GetCurrentTimeUnique()
 		_ = s.cfg.Posts.AddPost(&PostInfo{
 			Timestamp: nowTS,
 			SenderID:  senderID,
-			Content:   plaintext,
+			Content:   ackData,
 		})
 
 		s.log.Debug("post stored",
@@ -239,7 +241,8 @@ func (s *Server) handleRequest(pkt *codec.Packet, client *ClientInfo, senderID c
 	switch content.RequestType {
 	case codec.ReqTypeKeepalive:
 		s.log.Debug("keepalive", "peer", senderID.String())
-		ackHash := crypto.ComputeAckHash(plaintext, senderID[:])
+		ackData := trimRequestContent(plaintext, content)
+		ackHash := crypto.ComputeAckHash(ackData, senderID[:])
 		s.sendACK(pkt, senderID, secret, ackHash)
 
 	case codec.ReqTypeGetStats:

@@ -6,6 +6,7 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/contact"
 )
 
 const (
@@ -99,6 +100,16 @@ func (s *Server) handleAnonReq(pkt *codec.Packet) {
 	client.PushFailures = 0
 	client.LastActivity = nowTS
 	client.Permissions = uint8(perm)
+
+	// Ensure the client exists in the contact store so that addressed
+	// packets (TXT_MSG, REQ) can be decrypted via SearchByHash/GetSharedSecret.
+	if s.cfg.Contacts.GetByPubKey(senderID) == nil {
+		s.cfg.Contacts.AddContact(&contact.ContactInfo{
+			ID:         senderID,
+			OutPathLen: contact.PathUnknown,
+			LastMod:    nowTS,
+		})
+	}
 
 	s.log.Info("client logged in",
 		"peer", senderID.String(),
