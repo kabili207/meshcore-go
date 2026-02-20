@@ -29,9 +29,10 @@ func (s *Server) handleAnonReq(pkt *codec.Packet) {
 		return
 	}
 
-	// Decrypt using our private key and the sender's ephemeral public key
+	// Decrypt using our private key and the sender's ephemeral public key.
+	// The MAC lives in the parsed header; re-prepend it for decryption.
 	plaintext, err := crypto.DecryptAnonymous(
-		anonPayload.Ciphertext,
+		codec.PrependMAC(anonPayload.MAC, anonPayload.Ciphertext),
 		s.cfg.PrivateKey,
 		anonPayload.PubKey[:],
 	)
@@ -163,10 +164,13 @@ func (s *Server) sendLoginResponse(origPkt *codec.Packet, recipientID core.MeshC
 		return
 	}
 
+	// Split [MAC(2) || ciphertext] for the wire format
+	mac, ciphertext := codec.SplitMAC(encrypted)
+
 	// Build addressed response packet
 	destHash := recipientID.Hash()
 	srcHash := core.MeshCoreID(s.cfg.PublicKey).Hash()
-	payload := codec.BuildAddressedPayload(destHash, srcHash, 0, encrypted)
+	payload := codec.BuildAddressedPayload(destHash, srcHash, mac, ciphertext)
 
 	respPkt := &codec.Packet{
 		Header:  codec.PayloadTypeResponse << codec.PHTypeShift,

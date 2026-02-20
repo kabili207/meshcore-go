@@ -193,11 +193,14 @@ func (h *testHarness) buildAnonReqPacketWithKey(t *testing.T, clientKey *crypto.
 		t.Fatal("failed to encrypt login data:", err)
 	}
 
+	// Split [MAC(2) || ciphertext] for wire format
+	mac, ciphertext := codec.SplitMAC(encrypted)
+
 	// Build the wire-format ANON_REQ payload with the client's actual public key
 	var clientPub [32]byte
 	copy(clientPub[:], clientKey.PublicKey)
 	destHash := core.MeshCoreID(h.server.cfg.PublicKey).Hash()
-	payload := codec.BuildAnonReqPayload(destHash, clientPub, 0, encrypted)
+	payload := codec.BuildAnonReqPayload(destHash, clientPub, mac, ciphertext)
 
 	return &codec.Packet{
 		Header:  codec.PayloadTypeAnonReq << codec.PHTypeShift,
@@ -219,9 +222,10 @@ func (h *testHarness) buildAddressedPacket(t *testing.T, clientKey *crypto.KeyPa
 		t.Fatal("failed to encrypt content:", err)
 	}
 
+	mac, ciphertext := codec.SplitMAC(encrypted)
 	destHash := core.MeshCoreID(h.server.cfg.PublicKey).Hash()
 	srcHash := clientID.Hash()
-	payload := codec.BuildAddressedPayload(destHash, srcHash, 0, encrypted)
+	payload := codec.BuildAddressedPayload(destHash, srcHash, mac, ciphertext)
 
 	return &codec.Packet{
 		Header:  payloadType << codec.PHTypeShift,

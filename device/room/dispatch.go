@@ -134,7 +134,7 @@ func (s *Server) handleAddressed(pkt *codec.Packet) {
 			continue
 		}
 
-		plaintext, err := crypto.DecryptAddressedWithSecret(addrPayload.Ciphertext, secret)
+		plaintext, err := crypto.DecryptAddressedWithSecret(codec.PrependMAC(addrPayload.MAC, addrPayload.Ciphertext), secret)
 		if err != nil {
 			continue
 		}

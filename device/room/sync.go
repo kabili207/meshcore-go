@@ -126,10 +126,13 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 		return
 	}
 
+	// Split [MAC(2) || ciphertext] for the wire format
+	mac, ciphertext := codec.SplitMAC(encrypted)
+
 	// Build addressed packet
 	destHash := client.ID.Hash()
 	srcHash := core.MeshCoreID(s.cfg.PublicKey).Hash()
-	payload := codec.BuildAddressedPayload(destHash, srcHash, 0, encrypted)
+	payload := codec.BuildAddressedPayload(destHash, srcHash, mac, ciphertext)
 
 	pkt := &codec.Packet{
 		Header:  codec.PayloadTypeTxtMsg << codec.PHTypeShift,

@@ -5,6 +5,30 @@ import (
 	"math"
 )
 
+// MACSize is the size of the truncated HMAC-SHA256 MAC in wire payloads.
+const MACSize = 2
+
+// SplitMAC splits the encrypted output [MAC(2) || ciphertext] into its
+// components. Use this when building wire payloads that store the MAC
+// separately from the ciphertext (e.g., BuildAddressedPayload, BuildAnonReqPayload).
+func SplitMAC(encrypted []byte) (mac uint16, ciphertext []byte) {
+	if len(encrypted) < MACSize {
+		return 0, encrypted
+	}
+	mac = binary.LittleEndian.Uint16(encrypted[:MACSize])
+	ciphertext = encrypted[MACSize:]
+	return mac, ciphertext
+}
+
+// PrependMAC reconstructs the [MAC(2) || ciphertext] format expected by the
+// decrypt functions from the separately-stored MAC and ciphertext fields.
+func PrependMAC(mac uint16, ciphertext []byte) []byte {
+	data := make([]byte, MACSize+len(ciphertext))
+	binary.LittleEndian.PutUint16(data[:MACSize], mac)
+	copy(data[MACSize:], ciphertext)
+	return data
+}
+
 // -----------------------------------------------------------------------------
 // ADVERT Builders
 // -----------------------------------------------------------------------------
