@@ -233,14 +233,26 @@ func (s *Server) handleRequest(pkt *codec.Packet, client *ClientInfo, senderID c
 	nowTS := s.cfg.Clock.GetCurrentTime()
 	client.LastActivity = nowTS
 
+	// The request's timestamp is reflected back as the response tag.
+	tag := content.Timestamp
+
 	switch content.RequestType {
 	case codec.ReqTypeKeepalive:
-		// Keep-alive: update activity timestamp
 		s.log.Debug("keepalive", "peer", senderID.String())
-
-		// Send ACK for the keepalive
 		ackHash := crypto.ComputeAckHash(plaintext, senderID[:])
 		s.sendACK(pkt, senderID, secret, ackHash)
+
+	case codec.ReqTypeGetStats:
+		s.log.Debug("get_status", "peer", senderID.String())
+		s.handleGetStatus(tag, senderID, secret)
+
+	case codec.ReqTypeGetTelemetry:
+		s.log.Debug("get_telemetry", "peer", senderID.String())
+		s.handleGetTelemetry(tag, client, senderID, secret, content.RequestData)
+
+	case codec.ReqTypeGetAccessList:
+		s.log.Debug("get_access_list", "peer", senderID.String())
+		s.handleGetAccessList(tag, client, senderID, secret, content.RequestData)
 
 	default:
 		s.log.Debug("unhandled request type",

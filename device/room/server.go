@@ -50,6 +50,12 @@ type ServerConfig struct {
 	Router     *router.Router
 	ACKTracker *ack.Tracker
 
+	// Optional providers for REQ responses. If nil, the corresponding
+	// request type returns no response (same as firmware when hardware
+	// is unavailable).
+	Stats     StatsProvider
+	Telemetry TelemetryProvider
+
 	// Logger for server events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }

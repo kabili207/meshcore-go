@@ -644,6 +644,47 @@ func TestTextMessage_ContactButNotClient(t *testing.T) {
 	}
 }
 
+// --- Mock providers ---
+
+type mockStatsProvider struct {
+	stats ServerStats
+}
+
+func (m *mockStatsProvider) GetStats() ServerStats { return m.stats }
+
+type mockTelemetryProvider struct {
+	lastPermMask uint8
+	data         []byte
+}
+
+func (m *mockTelemetryProvider) GetTelemetry(permMask uint8) []byte {
+	m.lastPermMask = permMask
+	return m.data
+}
+
+// decryptResponse decrypts a RESPONSE packet sent by the server back to the client.
+// Returns the plaintext (tag + response data).
+func (h *testHarness) decryptResponse(t *testing.T, clientKey *crypto.KeyPair, pkt *codec.Packet) []byte {
+	t.Helper()
+
+	addrPayload, err := codec.ParseAddressedPayload(pkt.Payload)
+	if err != nil {
+		t.Fatal("failed to parse addressed payload:", err)
+	}
+
+	secret, err := crypto.ComputeSharedSecret(clientKey.PrivateKey, h.serverKey.PublicKey)
+	if err != nil {
+		t.Fatal("failed to compute shared secret:", err)
+	}
+
+	plaintext, err := crypto.DecryptAddressedWithSecret(codec.PrependMAC(addrPayload.MAC, addrPayload.Ciphertext), secret)
+	if err != nil {
+		t.Fatal("failed to decrypt response:", err)
+	}
+
+	return plaintext
+}
+
 // --- Request tests ---
 
 func TestRequest_Keepalive(t *testing.T) {
@@ -671,6 +712,353 @@ func TestRequest_Keepalive(t *testing.T) {
 	// ACK should have been sent
 	if h.transport.sentCount() == 0 {
 		t.Error("expected ACK for keepalive")
+	}
+}
+
+func TestRequest_GetStatus(t *testing.T) {
+	h := newTestHarness(t)
+
+	sp := &mockStatsProvider{stats: ServerStats{
+		BattMilliVolts: 3700,
+		NPacketsRecv:   42,
+		NPosted:        10,
+	}}
+	h.server.cfg.Stats = sp
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLReadWrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqContent := codec.BuildRequestContent(300, codec.ReqTypeGetStats, nil)
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	if h.transport.sentCount() == 0 {
+		t.Fatal("expected a response packet")
+	}
+
+	resp := h.transport.lastPacket()
+	if resp.PayloadType() != codec.PayloadTypeResponse {
+		t.Fatalf("expected RESPONSE type, got %s", codec.PayloadTypeName(resp.PayloadType()))
+	}
+
+	plaintext := h.decryptResponse(t, clientKey, resp)
+
+	// Response: tag(4) + stats(52) = 56 bytes (may be zero-padded to AES block boundary)
+	if len(plaintext) < 4+ServerStatsSize {
+		t.Fatalf("expected at least %d bytes, got %d", 4+ServerStatsSize, len(plaintext))
+	}
+
+	// Tag should be the reflected request timestamp
+	tag := binary.LittleEndian.Uint32(plaintext[0:4])
+	if tag != 300 {
+		t.Errorf("expected tag=300, got %d", tag)
+	}
+
+	// Verify some stats fields
+	battMV := binary.LittleEndian.Uint16(plaintext[4:6])
+	if battMV != 3700 {
+		t.Errorf("expected batt_milli_volts=3700, got %d", battMV)
+	}
+
+	nRecv := binary.LittleEndian.Uint32(plaintext[12:16])
+	if nRecv != 42 {
+		t.Errorf("expected n_packets_recv=42, got %d", nRecv)
+	}
+
+	nPosted := binary.LittleEndian.Uint16(plaintext[52:54])
+	if nPosted != 10 {
+		t.Errorf("expected n_posted=10, got %d", nPosted)
+	}
+}
+
+func TestRequest_GetStatus_NoProvider(t *testing.T) {
+	h := newTestHarness(t)
+	// No Stats provider set
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLReadWrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqContent := codec.BuildRequestContent(300, codec.ReqTypeGetStats, nil)
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	// No response should be sent when provider is nil
+	if h.transport.sentCount() != 0 {
+		t.Errorf("expected no response without stats provider, got %d packets", h.transport.sentCount())
+	}
+}
+
+func TestRequest_GetTelemetry(t *testing.T) {
+	h := newTestHarness(t)
+
+	tp := &mockTelemetryProvider{
+		data: []byte{0x01, 0x74, 0x01, 0x70}, // fake CayenneLPP
+	}
+	h.server.cfg.Telemetry = tp
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLReadWrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Request data: byte[0] = inverted perm mask. ~0xFE = 0x01
+	reqContent := codec.BuildRequestContent(400, codec.ReqTypeGetTelemetry, []byte{0xFE})
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	if h.transport.sentCount() == 0 {
+		t.Fatal("expected a response packet")
+	}
+
+	// Verify the permission mask was computed correctly: ^0xFE = 0x01
+	if tp.lastPermMask != 0x01 {
+		t.Errorf("expected permMask=0x01, got 0x%02x", tp.lastPermMask)
+	}
+
+	resp := h.transport.lastPacket()
+	plaintext := h.decryptResponse(t, clientKey, resp)
+
+	// Response: tag(4) + telemetry data(4) (may be zero-padded to AES block boundary)
+	if len(plaintext) < 8 {
+		t.Fatalf("expected at least 8 bytes, got %d", len(plaintext))
+	}
+
+	tag := binary.LittleEndian.Uint32(plaintext[0:4])
+	if tag != 400 {
+		t.Errorf("expected tag=400, got %d", tag)
+	}
+
+	// Verify telemetry data was included
+	if plaintext[4] != 0x01 || plaintext[5] != 0x74 {
+		t.Errorf("expected telemetry data, got %v", plaintext[4:])
+	}
+}
+
+func TestRequest_GetTelemetry_GuestRestricted(t *testing.T) {
+	h := newTestHarness(t)
+
+	tp := &mockTelemetryProvider{
+		data: []byte{0x01, 0x74, 0x01, 0x70},
+	}
+	h.server.cfg.Telemetry = tp
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLGuest, // guest
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Even though request asks for all sensors (~0x00 = 0xFF), guest gets 0x00
+	reqContent := codec.BuildRequestContent(400, codec.ReqTypeGetTelemetry, []byte{0x00})
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	if h.transport.sentCount() == 0 {
+		t.Fatal("expected a response packet")
+	}
+
+	// Guest should always get permMask = 0x00
+	if tp.lastPermMask != 0x00 {
+		t.Errorf("expected guest permMask=0x00, got 0x%02x", tp.lastPermMask)
+	}
+}
+
+func TestRequest_GetTelemetry_NoProvider(t *testing.T) {
+	h := newTestHarness(t)
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLReadWrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqContent := codec.BuildRequestContent(400, codec.ReqTypeGetTelemetry, []byte{0x00})
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	if h.transport.sentCount() != 0 {
+		t.Errorf("expected no response without telemetry provider, got %d packets", h.transport.sentCount())
+	}
+}
+
+func TestRequest_GetAccessList_Admin(t *testing.T) {
+	h := newTestHarness(t)
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLAdmin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add another admin client
+	otherKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var otherID core.MeshCoreID
+	copy(otherID[:], otherKey.PublicKey)
+	_, err = h.clients.AddClient(&ClientInfo{
+		ID:          otherID,
+		Permissions: codec.PermACLAdmin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a non-admin client (should be excluded)
+	thirdKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var thirdID core.MeshCoreID
+	copy(thirdID[:], thirdKey.PublicKey)
+	_, err = h.clients.AddClient(&ClientInfo{
+		ID:          thirdID,
+		Permissions: codec.PermACLReadWrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Reserved bytes must be 0
+	reqContent := codec.BuildRequestContent(500, codec.ReqTypeGetAccessList, []byte{0x00, 0x00})
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	if h.transport.sentCount() == 0 {
+		t.Fatal("expected a response packet")
+	}
+
+	resp := h.transport.lastPacket()
+	plaintext := h.decryptResponse(t, clientKey, resp)
+
+	tag := binary.LittleEndian.Uint32(plaintext[0:4])
+	if tag != 500 {
+		t.Errorf("expected tag=500, got %d", tag)
+	}
+
+	// Should have 2 admin entries * 7 bytes each = 14 bytes of content after tag.
+	// Decrypted data may be zero-padded to AES block boundary.
+	expectedContentSize := 4 + 2*7 // tag + 2 entries
+	if len(plaintext) < expectedContentSize {
+		t.Fatalf("expected at least %d bytes, got %d", expectedContentSize, len(plaintext))
+	}
+
+	// Each entry: 6-byte pubkey prefix + 1-byte permissions
+	for i := 0; i < 2; i++ {
+		entryStart := 4 + i*7
+		perms := plaintext[entryStart+6]
+		if perms&codec.PermACLRoleMask != codec.PermACLAdmin {
+			t.Errorf("entry %d: expected admin permissions, got 0x%02x", i, perms)
+		}
+	}
+}
+
+func TestRequest_GetAccessList_NonAdminRejected(t *testing.T) {
+	h := newTestHarness(t)
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLReadWrite, // not admin
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqContent := codec.BuildRequestContent(500, codec.ReqTypeGetAccessList, []byte{0x00, 0x00})
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	// Non-admin should get no response
+	if h.transport.sentCount() != 0 {
+		t.Errorf("expected no response for non-admin, got %d packets", h.transport.sentCount())
+	}
+}
+
+func TestRequest_GetAccessList_ReservedNonZero(t *testing.T) {
+	h := newTestHarness(t)
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLAdmin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Reserved bytes are non-zero — should be rejected
+	reqContent := codec.BuildRequestContent(500, codec.ReqTypeGetAccessList, []byte{0x01, 0x00})
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	if h.transport.sentCount() != 0 {
+		t.Errorf("expected no response with non-zero reserved bytes, got %d packets", h.transport.sentCount())
+	}
+}
+
+func TestRequest_GetAccessList_EmptyACL(t *testing.T) {
+	h := newTestHarness(t)
+
+	clientKey, clientID := h.makeClientKeyAndContact(t)
+	// The requesting client is admin but is also the only admin
+	_, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLAdmin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqContent := codec.BuildRequestContent(500, codec.ReqTypeGetAccessList, []byte{0x00, 0x00})
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
+	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+
+	if h.transport.sentCount() == 0 {
+		t.Fatal("expected a response packet")
+	}
+
+	resp := h.transport.lastPacket()
+	plaintext := h.decryptResponse(t, clientKey, resp)
+
+	// Should have 1 admin entry (the requesting client itself).
+	// Decrypted data may be zero-padded to AES block boundary.
+	expectedContentSize := 4 + 7 // tag + 1 entry
+	if len(plaintext) < expectedContentSize {
+		t.Fatalf("expected at least %d bytes, got %d", expectedContentSize, len(plaintext))
+	}
+
+	// Verify the entry is our client's pubkey prefix
+	for i := 0; i < 6; i++ {
+		if plaintext[4+i] != clientID[i] {
+			t.Errorf("pubkey prefix byte %d: expected 0x%02x, got 0x%02x", i, clientID[i], plaintext[4+i])
+		}
 	}
 }
 
@@ -824,6 +1212,56 @@ func TestServer_StopBeforeStart(t *testing.T) {
 	h := newTestHarness(t)
 	// Should not panic
 	h.server.Stop()
+}
+
+// --- ServerStats serialization tests ---
+
+func TestServerStats_MarshalBinary(t *testing.T) {
+	stats := ServerStats{
+		BattMilliVolts:   3700,
+		CurrTxQueueLen:   5,
+		NoiseFloor:       -110,
+		LastRSSI:         -80,
+		NPacketsRecv:     1000,
+		NPacketsSent:     500,
+		TotalAirTimeSecs: 3600,
+		TotalUpTimeSecs:  7200,
+		NSentFlood:       200,
+		NSentDirect:      300,
+		NRecvFlood:       400,
+		NRecvDirect:      600,
+		ErrEvents:        3,
+		LastSNR:          -32, // -8.0 dB * 4
+		NDirectDups:      10,
+		NFloodDups:       20,
+		NPosted:          50,
+		NPostPush:        45,
+	}
+
+	data := stats.MarshalBinary()
+	if len(data) != ServerStatsSize {
+		t.Fatalf("expected %d bytes, got %d", ServerStatsSize, len(data))
+	}
+
+	// Spot-check fields at known offsets
+	if v := binary.LittleEndian.Uint16(data[0:2]); v != 3700 {
+		t.Errorf("offset 0 batt: expected 3700, got %d", v)
+	}
+	if v := int16(binary.LittleEndian.Uint16(data[4:6])); v != -110 {
+		t.Errorf("offset 4 noise_floor: expected -110, got %d", v)
+	}
+	if v := binary.LittleEndian.Uint32(data[8:12]); v != 1000 {
+		t.Errorf("offset 8 n_packets_recv: expected 1000, got %d", v)
+	}
+	if v := int16(binary.LittleEndian.Uint16(data[42:44])); v != -32 {
+		t.Errorf("offset 42 last_snr: expected -32, got %d", v)
+	}
+	if v := binary.LittleEndian.Uint16(data[48:50]); v != 50 {
+		t.Errorf("offset 48 n_posted: expected 50, got %d", v)
+	}
+	if v := binary.LittleEndian.Uint16(data[50:52]); v != 45 {
+		t.Errorf("offset 50 n_post_push: expected 45, got %d", v)
+	}
 }
 
 // --- extractNullTerminated tests ---

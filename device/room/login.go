@@ -157,38 +157,7 @@ func (s *Server) sendLoginResponse(origPkt *codec.Packet, recipientID core.MeshC
 	// resp[8:12] = random blob (leave as zero — acceptable for our purposes)
 	resp[12] = FirmwareVersion
 
-	// Encrypt response with the shared secret
-	encrypted, err := crypto.EncryptAddressedWithSecret(resp, secret)
-	if err != nil {
-		s.log.Warn("failed to encrypt login response", "error", err)
-		return
-	}
-
-	// Split [MAC(2) || ciphertext] for the wire format
-	mac, ciphertext := codec.SplitMAC(encrypted)
-
-	// Build addressed response packet
-	destHash := recipientID.Hash()
-	srcHash := core.MeshCoreID(s.cfg.PublicKey).Hash()
-	payload := codec.BuildAddressedPayload(destHash, srcHash, mac, ciphertext)
-
-	respPkt := &codec.Packet{
-		Header:  codec.PayloadTypeResponse << codec.PHTypeShift,
-		Payload: payload,
-	}
-
-	// Send via the same route type as the original
-	if origPkt.IsFlood() {
-		s.cfg.Router.SendFlood(respPkt)
-	} else {
-		ct := s.cfg.Contacts.GetByPubKey(recipientID)
-		if ct != nil && ct.HasDirectPath() {
-			s.cfg.Router.SendDirect(respPkt, ct.OutPath[:ct.OutPathLen])
-		} else {
-			s.cfg.Router.SendFlood(respPkt)
-		}
-	}
-
+	s.sendEncryptedResponse(recipientID, secret, codec.PayloadTypeResponse, resp)
 	s.log.Debug("sent login response", "peer", recipientID.String())
 }
 
