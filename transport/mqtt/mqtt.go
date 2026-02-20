@@ -1,8 +1,8 @@
 // Package mqtt provides an MQTT transport for connecting to MeshCore mesh networks.
 //
 // MeshCore packets are transmitted as base64-encoded strings over MQTT topics
-// in the format "{prefix}/{meshID}". This transport connects to any standard
-// MQTT broker and subscribes to receive packets for a given mesh ID.
+// in the format "{prefix}/{nodeID}". Each node publishes to its own topic and
+// subscribes to "{prefix}/+" to receive packets from all other nodes.
 package mqtt
 
 import (
@@ -12,7 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,13 +39,15 @@ type Config struct {
 	Password string
 	// UseTLS enables TLS for the MQTT connection.
 	UseTLS bool
-	// ClientID is the MQTT client identifier. If empty, a random one is generated.
+	// ClientID is the MQTT client identifier. If empty, defaults to "meshcore-{NodeID}".
 	ClientID string
 	// TopicPrefix is the MQTT topic prefix (default: "meshcore").
 	TopicPrefix string
-	// MeshID identifies this mesh network (e.g., "my-mesh"). The transport
-	// subscribes to "{TopicPrefix}/{MeshID}" and publishes to the same topic.
-	MeshID string
+	// NodeID uniquely identifies this node on the MQTT broker. Each node publishes
+	// to "{TopicPrefix}/{NodeID}" and subscribes to "{TopicPrefix}/+" to receive
+	// packets from all other nodes. Messages from this node's own topic are
+	// filtered out to prevent loopback.
+	NodeID string
 	// Logger is the logger to use. If nil, slog.Default() is used.
 	Logger *slog.Logger
 }
@@ -81,13 +83,13 @@ func (t *Transport) Start(ctx context.Context) error {
 	if t.cfg.Broker == "" {
 		return errors.New("broker URL is required")
 	}
-	if t.cfg.MeshID == "" {
-		return errors.New("mesh ID is required")
+	if t.cfg.NodeID == "" {
+		return errors.New("node ID is required")
 	}
 
 	clientID := t.cfg.ClientID
 	if clientID == "" {
-		clientID = "meshcore-" + randomString(16)
+		clientID = "meshcore-" + t.cfg.NodeID
 	}
 
 	opts := paho.NewClientOptions().
@@ -163,7 +165,7 @@ func (t *Transport) SetStateHandler(fn transport.StateHandler) {
 	t.stateHandler = fn
 }
 
-// SendPacket encodes a MeshCore packet and publishes it to the mesh topic.
+// SendPacket encodes a MeshCore packet and publishes it to this node's topic.
 func (t *Transport) SendPacket(packet *codec.Packet) error {
 	if !t.IsConnected() {
 		return errors.New("not connected")
@@ -171,7 +173,7 @@ func (t *Transport) SendPacket(packet *codec.Packet) error {
 
 	data := packet.WriteTo()
 	payload := base64.StdEncoding.EncodeToString(data)
-	topic := t.cfg.TopicPrefix + "/" + t.cfg.MeshID
+	topic := t.cfg.TopicPrefix + "/" + t.cfg.NodeID
 
 	token := t.client.Publish(topic, 0, false, payload)
 	if !token.WaitTimeout(10 * time.Second) {
@@ -180,17 +182,22 @@ func (t *Transport) SendPacket(packet *codec.Packet) error {
 	return token.Error()
 }
 
-func (t *Transport) topic() string {
-	return t.cfg.TopicPrefix + "/" + t.cfg.MeshID
-}
-
 func (t *Transport) subscribe() {
-	topic := t.topic()
-	t.client.Subscribe(topic, 0, t.handleMessage)
-	t.log.Debug("subscribed to mesh topic", "topic", topic)
+	pattern := t.cfg.TopicPrefix + "/+"
+	t.client.Subscribe(pattern, 0, t.handleMessage)
+	t.log.Debug("subscribed to mesh topic", "pattern", pattern)
 }
 
 func (t *Transport) handleMessage(_ paho.Client, message paho.Message) {
+	// Drop our own messages to prevent loopback. The source node ID is
+	// the last segment of the topic (e.g., "meshcore/mynode" → "mynode").
+	topic := message.Topic()
+	if lastSlash := strings.LastIndex(topic, "/"); lastSlash >= 0 {
+		if topic[lastSlash+1:] == t.cfg.NodeID {
+			return
+		}
+	}
+
 	t.mu.RLock()
 	handler := t.packetHandler
 	t.mu.RUnlock()
@@ -251,13 +258,4 @@ func (t *Transport) onReconnecting(_ paho.Client, _ *paho.ClientOptions) {
 	if handler != nil {
 		handler(t, transport.EventReconnecting)
 	}
-}
-
-func randomString(n int) string {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = alphabet[rand.IntN(len(alphabet))]
-	}
-	return string(b)
 }
