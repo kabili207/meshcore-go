@@ -168,7 +168,7 @@ func (s *Server) sendLoginResponse(origPkt *codec.Packet, recipientID core.MeshC
 	// resp[8:12] = random blob (leave as zero — acceptable for our purposes)
 	resp[12] = FirmwareVersion
 
-	s.sendEncryptedResponse(recipientID, secret, codec.PayloadTypeResponse, resp)
+	s.sendEncryptedResponse(origPkt, recipientID, secret, codec.PayloadTypeResponse, resp)
 	s.log.Debug("sent login response", "peer", recipientID.String())
 }
 

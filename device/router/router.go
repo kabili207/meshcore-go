@@ -35,6 +35,11 @@ const (
 	// DefaultDrainInterval is the default interval for the send queue drain loop.
 	DefaultDrainInterval = 10 * time.Millisecond
 
+	// PathSendDelay is the delay before sending PATH packets. This gives
+	// the original flood packet time to propagate before the response follows.
+	// Firmware: PATH_RETURN_DELAY = 300ms.
+	PathSendDelay = 300 * time.Millisecond
+
 	// Send priorities matching firmware conventions.
 	PriorityDirect      = 0 // Highest: direct-routed traffic
 	PriorityFloodData   = 1 // Flood data, ACKs
@@ -449,6 +454,20 @@ func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
 	r.dedup.HasSeen(pkt)
 
 	r.enqueue(pkt, PriorityDirect, 0, 0, true)
+}
+
+// SendFloodPath prepares and sends a PATH packet in flood mode with a delay.
+// PATH packets use a lower priority than data floods and are delayed to let
+// the original request propagate first. This matches the firmware's
+// createPathReturn() sending behavior.
+func (r *Router) SendFloodPath(pkt *codec.Packet) {
+	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeFlood
+	pkt.PathLen = 0
+	pkt.Path = nil
+
+	r.dedup.HasSeen(pkt)
+
+	r.enqueue(pkt, PriorityFloodPath, PathSendDelay, 0, true)
 }
 
 // SendZeroHop prepares and sends a packet as a zero-hop direct packet.

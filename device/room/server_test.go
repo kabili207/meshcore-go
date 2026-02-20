@@ -203,12 +203,13 @@ func (h *testHarness) buildAnonReqPacketWithKey(t *testing.T, clientKey *crypto.
 	payload := codec.BuildAnonReqPayload(destHash, clientPub, mac, ciphertext)
 
 	return &codec.Packet{
-		Header:  codec.PayloadTypeAnonReq << codec.PHTypeShift,
+		Header:  (codec.PayloadTypeAnonReq << codec.PHTypeShift) | codec.RouteTypeDirect,
 		Payload: payload,
 	}
 }
 
 // buildAddressedPacket builds an encrypted addressed packet from a known client.
+// Defaults to direct route type; use buildFloodAddressedPacket for flood routing.
 func (h *testHarness) buildAddressedPacket(t *testing.T, clientKey *crypto.KeyPair, clientID core.MeshCoreID, payloadType uint8, content []byte) *codec.Packet {
 	t.Helper()
 
@@ -228,9 +229,23 @@ func (h *testHarness) buildAddressedPacket(t *testing.T, clientKey *crypto.KeyPa
 	payload := codec.BuildAddressedPayload(destHash, srcHash, mac, ciphertext)
 
 	return &codec.Packet{
-		Header:  payloadType << codec.PHTypeShift,
+		Header:  (payloadType << codec.PHTypeShift) | codec.RouteTypeDirect,
 		Payload: payload,
 	}
+}
+
+// buildFloodAddressedPacket builds an encrypted addressed packet with flood routing.
+// The path simulates relay hops from sender to server (used for PATH return tests).
+func (h *testHarness) buildFloodAddressedPacket(t *testing.T, clientKey *crypto.KeyPair, clientID core.MeshCoreID, payloadType uint8, content []byte, floodPath []byte) *codec.Packet {
+	t.Helper()
+	pkt := h.buildAddressedPacket(t, clientKey, clientID, payloadType, content)
+	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeFlood
+	if len(floodPath) > 0 {
+		pkt.PathLen = uint8(len(floodPath))
+		pkt.Path = make([]byte, len(floodPath))
+		copy(pkt.Path, floodPath)
+	}
+	return pkt
 }
 
 // --- Dispatch tests ---

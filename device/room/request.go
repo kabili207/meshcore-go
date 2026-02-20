@@ -22,7 +22,7 @@ const (
 
 // handleGetStatus handles a GET_STATUS request. Returns the 52-byte ServerStats
 // struct as a binary blob. No special permission check is required.
-func (s *Server) handleGetStatus(tag uint32, senderID core.MeshCoreID, secret []byte) {
+func (s *Server) handleGetStatus(origPkt *codec.Packet, tag uint32, senderID core.MeshCoreID, secret []byte) {
 	if s.cfg.Stats == nil {
 		return
 	}
@@ -35,12 +35,12 @@ func (s *Server) handleGetStatus(tag uint32, senderID core.MeshCoreID, secret []
 	binary.LittleEndian.PutUint32(resp[0:4], tag)
 	copy(resp[4:], statsBytes)
 
-	s.sendEncryptedResponse(senderID, secret, codec.PayloadTypeResponse, resp)
+	s.sendEncryptedResponse(origPkt, senderID, secret, codec.PayloadTypeResponse, resp)
 }
 
 // handleGetTelemetry handles a GET_TELEMETRY request. Returns CayenneLPP-encoded
 // sensor data. Guest clients are restricted to base telemetry (battery only).
-func (s *Server) handleGetTelemetry(tag uint32, client *ClientInfo, senderID core.MeshCoreID, secret []byte, requestData []byte) {
+func (s *Server) handleGetTelemetry(origPkt *codec.Packet, tag uint32, client *ClientInfo, senderID core.MeshCoreID, secret []byte, requestData []byte) {
 	if s.cfg.Telemetry == nil {
 		return
 	}
@@ -64,12 +64,12 @@ func (s *Server) handleGetTelemetry(tag uint32, client *ClientInfo, senderID cor
 	binary.LittleEndian.PutUint32(resp[0:4], tag)
 	copy(resp[4:], telemetryData)
 
-	s.sendEncryptedResponse(senderID, secret, codec.PayloadTypeResponse, resp)
+	s.sendEncryptedResponse(origPkt, senderID, secret, codec.PayloadTypeResponse, resp)
 }
 
 // handleGetAccessList handles a GET_ACCESS_LIST request. Admin-only: returns
 // the list of admin clients as 7-byte entries (6-byte pubkey prefix + permissions).
-func (s *Server) handleGetAccessList(tag uint32, client *ClientInfo, senderID core.MeshCoreID, secret []byte, requestData []byte) {
+func (s *Server) handleGetAccessList(origPkt *codec.Packet, tag uint32, client *ClientInfo, senderID core.MeshCoreID, secret []byte, requestData []byte) {
 	// Admin-only check
 	if !client.IsAdmin() {
 		return
@@ -104,5 +104,5 @@ func (s *Server) handleGetAccessList(tag uint32, client *ClientInfo, senderID co
 		return true
 	})
 
-	s.sendEncryptedResponse(senderID, secret, codec.PayloadTypeResponse, resp)
+	s.sendEncryptedResponse(origPkt, senderID, secret, codec.PayloadTypeResponse, resp)
 }

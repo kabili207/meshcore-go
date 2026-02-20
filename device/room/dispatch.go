@@ -247,15 +247,15 @@ func (s *Server) handleRequest(pkt *codec.Packet, client *ClientInfo, senderID c
 
 	case codec.ReqTypeGetStats:
 		s.log.Debug("get_status", "peer", senderID.String())
-		s.handleGetStatus(tag, senderID, secret)
+		s.handleGetStatus(pkt, tag, senderID, secret)
 
 	case codec.ReqTypeGetTelemetry:
 		s.log.Debug("get_telemetry", "peer", senderID.String())
-		s.handleGetTelemetry(tag, client, senderID, secret, content.RequestData)
+		s.handleGetTelemetry(pkt, tag, client, senderID, secret, content.RequestData)
 
 	case codec.ReqTypeGetAccessList:
 		s.log.Debug("get_access_list", "peer", senderID.String())
-		s.handleGetAccessList(tag, client, senderID, secret, content.RequestData)
+		s.handleGetAccessList(pkt, tag, client, senderID, secret, content.RequestData)
 
 	default:
 		s.log.Debug("unhandled request type",
