@@ -54,6 +54,16 @@ const (
 // flood forwarding.
 type PacketHandler func(pkt *codec.Packet, src transport.PacketSource)
 
+// PacketMonitor is called for every unique, valid packet after deduplication,
+// regardless of routing decisions. Unlike PacketHandler, it fires for all
+// packets including those that are only forwarded (e.g., direct-routed packets
+// transiting this node). This is useful for observer/telemetry systems that
+// need visibility into all mesh traffic.
+//
+// The monitor must not modify the packet. It runs synchronously, so it should
+// return quickly or dispatch work to a goroutine.
+type PacketMonitor func(pkt *codec.Packet, src transport.PacketSource)
+
 // Config configures a Router.
 type Config struct {
 	// SelfID is this node's identity. Its Hash() (first byte of public key)
@@ -97,6 +107,7 @@ type Router struct {
 	mu         sync.RWMutex
 	transports []transportEntry
 	onPacket   PacketHandler
+	onMonitor  PacketMonitor
 
 	cancel    context.CancelFunc
 	drainDone chan struct{}
@@ -200,6 +211,16 @@ func (r *Router) SetPacketHandler(fn PacketHandler) {
 	r.onPacket = fn
 }
 
+// SetPacketMonitor sets a monitor callback that fires for every unique packet
+// after deduplication, regardless of routing. This includes packets that are
+// only forwarded through this node and never reach the application handler.
+// Useful for observer/telemetry systems.
+func (r *Router) SetPacketMonitor(fn PacketMonitor) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onMonitor = fn
+}
+
 // AddTransport registers a transport with the router. The router installs
 // itself as the transport's packet handler so that incoming packets are
 // automatically routed through HandlePacket.
@@ -255,6 +276,15 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 			r.counters.DirectDups.Add(1)
 		}
 		return
+	}
+
+	// Monitor hook: fires for every unique packet after dedup, regardless
+	// of routing decisions. Used by observer/telemetry systems.
+	r.mu.RLock()
+	monitor := r.onMonitor
+	r.mu.RUnlock()
+	if monitor != nil {
+		monitor(pkt, src)
 	}
 
 	// Gate 3.5: TRACE handling (after dedup, before direct routing —
