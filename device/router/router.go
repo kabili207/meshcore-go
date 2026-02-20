@@ -182,6 +182,7 @@ func (r *Router) drainLoop(ctx context.Context, interval time.Duration) {
 				} else {
 					r.broadcastToTransports(entry.Packet, entry.ExcludeSource)
 				}
+				r.notifyMonitor(entry.Packet, transport.PacketSourceLocal)
 			}
 		}
 	}
@@ -196,6 +197,7 @@ func (r *Router) enqueue(pkt *codec.Packet, priority uint8, delay time.Duration,
 		} else {
 			r.broadcastToTransports(pkt, excludeSource)
 		}
+		r.notifyMonitor(pkt, transport.PacketSourceLocal)
 		return
 	}
 	r.queue.Push(pkt, priority, delay, excludeSource, sendToAll)
@@ -219,6 +221,16 @@ func (r *Router) SetPacketMonitor(fn PacketMonitor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.onMonitor = fn
+}
+
+// notifyMonitor calls the packet monitor callback if one is set.
+func (r *Router) notifyMonitor(pkt *codec.Packet, src transport.PacketSource) {
+	r.mu.RLock()
+	monitor := r.onMonitor
+	r.mu.RUnlock()
+	if monitor != nil {
+		monitor(pkt, src)
+	}
 }
 
 // AddTransport registers a transport with the router. The router installs
@@ -280,12 +292,7 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Monitor hook: fires for every unique packet after dedup, regardless
 	// of routing decisions. Used by observer/telemetry systems.
-	r.mu.RLock()
-	monitor := r.onMonitor
-	r.mu.RUnlock()
-	if monitor != nil {
-		monitor(pkt, src)
-	}
+	r.notifyMonitor(pkt, src)
 
 	// Gate 3.5: TRACE handling (after dedup, before direct routing —
 	// TRACE uses Path[] for SNR values, not relay hashes)

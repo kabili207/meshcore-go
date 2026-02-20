@@ -68,6 +68,8 @@ const (
 	PacketSourceMQTT PacketSource = iota
 	// PacketSourceSerial indicates the packet came from a serial connection.
 	PacketSourceSerial
+	// PacketSourceLocal indicates the packet was originated by this node (TX).
+	PacketSourceLocal
 )
 
 func (s PacketSource) String() string {
@@ -76,6 +78,8 @@ func (s PacketSource) String() string {
 		return "mqtt"
 	case PacketSourceSerial:
 		return "serial"
+	case PacketSourceLocal:
+		return "local"
 	default:
 		return "unknown"
 	}
