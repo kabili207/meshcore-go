@@ -6,13 +6,20 @@
 //   - Direct routing: forwarding packets along a specified path of node hashes
 //   - Deduplication: preventing duplicate packet processing via circular hash tables
 //   - Multipart reassembly: combining fragmented packets before dispatch
+//   - Transport code validation: dropping packets with unrecognized region codes
+//   - ACK forwarding: creating new ACK packets when relaying direct-routed ACKs
+//   - TRACE forwarding: hop-by-hop path tracing with SNR collection
+//   - Send queue: priority-ordered outbound packet queue with optional delay
 //
 // This corresponds to the firmware's Mesh class (src/Mesh.cpp).
 package router
 
 import (
+	"context"
+	"encoding/binary"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
@@ -25,11 +32,15 @@ const (
 	// DefaultMaxFloodHops is the maximum number of flood hops before a packet is dropped.
 	DefaultMaxFloodHops = codec.MaxPathSize // 64
 
+	// DefaultDrainInterval is the default interval for the send queue drain loop.
+	DefaultDrainInterval = 10 * time.Millisecond
+
 	// Send priorities matching firmware conventions.
-	PriorityDirect     = 0 // Highest: direct-routed traffic
-	PriorityFloodData  = 1 // Flood data, ACKs
-	PriorityFloodPath  = 2 // Flood PATH packets
+	PriorityDirect      = 0 // Highest: direct-routed traffic
+	PriorityFloodData   = 1 // Flood data, ACKs
+	PriorityFloodPath   = 2 // Flood PATH packets
 	PriorityFloodAdvert = 3 // Lowest for outbound: ADVERT packets
+	PriorityTrace       = 5 // TRACE forwarding
 )
 
 // PacketHandler is called by the router when a packet is received that should
@@ -56,6 +67,15 @@ type Config struct {
 	// Default: 64 (MaxPathSize).
 	MaxFloodHops int
 
+	// DrainInterval is how often the queue drain goroutine checks for ready
+	// packets. Default: 10ms. Only used when Start() is called.
+	DrainInterval time.Duration
+
+	// ValidateTransportCode is called for packets that include transport codes.
+	// If non-nil, it must return true for the packet to be processed.
+	// If nil, packets with transport codes pass through without validation.
+	ValidateTransportCode TransportCodeValidator
+
 	// Logger for routing events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -66,10 +86,15 @@ type Router struct {
 	log       *slog.Logger
 	dedup     *dedupe.PacketDeduplicator
 	multipart *multipart.Reassembler
+	queue     *SendQueue
 
 	mu         sync.RWMutex
 	transports []transportEntry
 	onPacket   PacketHandler
+
+	cancel    context.CancelFunc
+	drainDone chan struct{}
+	started   bool
 }
 
 type transportEntry struct {
@@ -92,7 +117,71 @@ func New(cfg Config) *Router {
 		log:       logger.WithGroup("router"),
 		dedup:     dedupe.New(),
 		multipart: multipart.New(),
+		queue:     NewSendQueue(),
 	}
+}
+
+// Start begins the queue drain goroutine. Packets pushed to the queue will
+// be sent when ready. If Start is never called, enqueue falls back to
+// synchronous sending.
+func (r *Router) Start(ctx context.Context) {
+	interval := r.cfg.DrainInterval
+	if interval <= 0 {
+		interval = DefaultDrainInterval
+	}
+	ctx, r.cancel = context.WithCancel(ctx)
+	r.drainDone = make(chan struct{})
+	r.started = true
+	go r.drainLoop(ctx, interval)
+}
+
+// Stop cancels the drain goroutine and waits for it to finish.
+func (r *Router) Stop() {
+	if r.cancel != nil {
+		r.cancel()
+		<-r.drainDone
+		r.cancel = nil
+		r.started = false
+	}
+}
+
+// drainLoop pops ready packets from the send queue and sends them.
+func (r *Router) drainLoop(ctx context.Context, interval time.Duration) {
+	defer close(r.drainDone)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for {
+				entry := r.queue.Pop()
+				if entry == nil {
+					break
+				}
+				if entry.SendToAll {
+					r.broadcastToAllTransports(entry.Packet)
+				} else {
+					r.broadcastToTransports(entry.Packet, entry.ExcludeSource)
+				}
+			}
+		}
+	}
+}
+
+// enqueue adds a packet to the send queue if the drain goroutine is running,
+// otherwise sends synchronously.
+func (r *Router) enqueue(pkt *codec.Packet, priority uint8, delay time.Duration, excludeSource transport.PacketSource, sendToAll bool) {
+	if !r.started {
+		if sendToAll {
+			r.broadcastToAllTransports(pkt)
+		} else {
+			r.broadcastToTransports(pkt, excludeSource)
+		}
+		return
+	}
+	r.queue.Push(pkt, priority, delay, excludeSource, sendToAll)
 }
 
 // SetPacketHandler sets the callback for packets that should be processed by
@@ -130,6 +219,17 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 		return
 	}
 
+	// Gate 1.5: transport code validation (before dedup so rejected packets
+	// don't consume dedup slots)
+	if pkt.HasTransportCodes() && r.cfg.ValidateTransportCode != nil {
+		if !r.cfg.ValidateTransportCode(pkt) {
+			r.log.Debug("dropping packet with unrecognized transport code",
+				"code0", pkt.TransportCodes[0],
+				"code1", pkt.TransportCodes[1])
+			return
+		}
+	}
+
 	// Gate 2: multipart reassembly
 	if pkt.PayloadType() == codec.PayloadTypeMultipart {
 		r.handleMultipart(pkt, src)
@@ -138,6 +238,13 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Gate 3: deduplication (also inserts the packet into the seen table)
 	if r.dedup.HasSeen(pkt) {
+		return
+	}
+
+	// Gate 3.5: TRACE handling (after dedup, before direct routing —
+	// TRACE uses Path[] for SNR values, not relay hashes)
+	if pkt.PayloadType() == codec.PayloadTypeTrace {
+		r.handleTrace(pkt, src)
 		return
 	}
 
@@ -196,6 +303,15 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 		return
 	}
 
+	// ACK special case: dispatch to app first (early receive), then create
+	// a new ACK packet and queue it at highest priority.
+	if pkt.PayloadType() == codec.PayloadTypeAck {
+		r.dispatchToApp(pkt, src)
+		removeSelfFromPath(pkt)
+		r.forwardAck(pkt)
+		return
+	}
+
 	// Remove ourselves from the path
 	removeSelfFromPath(pkt)
 
@@ -205,7 +321,31 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 		// Forward it out with empty path.
 	}
 
-	r.broadcastToTransports(pkt, src)
+	r.enqueue(pkt, PriorityDirect, 0, src, false)
+}
+
+// forwardAck creates a new ACK packet from the forwarded packet's payload
+// and queues it at the highest priority. This matches the firmware's
+// routeDirectRecvAcks() behavior where new packets are created rather than
+// retransmitting the original.
+func (r *Router) forwardAck(pkt *codec.Packet) {
+	if len(pkt.Payload) < codec.AckSize {
+		return
+	}
+	crc := binary.LittleEndian.Uint32(pkt.Payload[:4])
+
+	ackPkt := &codec.Packet{
+		Header:  pkt.Header,
+		PathLen: pkt.PathLen,
+		Path:    make([]byte, pkt.PathLen),
+		Payload: codec.BuildAckPayload(crc),
+	}
+	if pkt.HasTransportCodes() {
+		ackPkt.TransportCodes = pkt.TransportCodes
+	}
+	copy(ackPkt.Path, pkt.Path[:pkt.PathLen])
+
+	r.enqueue(ackPkt, PriorityDirect, 0, 0, true)
 }
 
 // handleFlood processes a flood-routed packet.
@@ -244,7 +384,9 @@ func (r *Router) routeFloodForward(pkt *codec.Packet, src transport.PacketSource
 	}
 	fwd.PathLen++
 
-	r.broadcastToTransports(fwd, src)
+	// Firmware uses pathLen as priority for flood forwarding —
+	// closer sources get lower (better) priority.
+	r.enqueue(fwd, fwd.PathLen, 0, src, false)
 }
 
 // dispatchToApp calls the registered application packet handler.
@@ -293,7 +435,7 @@ func (r *Router) SendFlood(pkt *codec.Packet) {
 	// Mark as seen so we don't process it again if it loops back
 	r.dedup.HasSeen(pkt)
 
-	r.broadcastToAllTransports(pkt)
+	r.enqueue(pkt, PriorityFloodData, 0, 0, true)
 }
 
 // SendDirect prepares and sends a packet in direct routing mode.
@@ -306,7 +448,7 @@ func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
 
 	r.dedup.HasSeen(pkt)
 
-	r.broadcastToAllTransports(pkt)
+	r.enqueue(pkt, PriorityDirect, 0, 0, true)
 }
 
 // SendZeroHop prepares and sends a packet as a zero-hop direct packet.
@@ -318,7 +460,7 @@ func (r *Router) SendZeroHop(pkt *codec.Packet) {
 
 	r.dedup.HasSeen(pkt)
 
-	r.broadcastToAllTransports(pkt)
+	r.enqueue(pkt, PriorityDirect, 0, 0, true)
 }
 
 // broadcastToAllTransports sends a packet to every connected transport.

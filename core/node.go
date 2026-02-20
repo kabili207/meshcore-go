@@ -34,6 +34,21 @@ func (m MeshCoreID) IsZero() bool {
 	return true
 }
 
+// IsHashMatch returns true if the first len(hash) bytes of the public key
+// match the provided hash bytes. This supports variable-size hash matching
+// used by TRACE packets (1, 2, 4, or 8 bytes depending on flags).
+func (m MeshCoreID) IsHashMatch(hash []byte) bool {
+	if len(hash) == 0 || len(hash) > len(m) {
+		return false
+	}
+	for i, b := range hash {
+		if m[i] != b {
+			return false
+		}
+	}
+	return true
+}
+
 // ParseMeshCoreID parses a hex-encoded string into a MeshCoreID.
 func ParseMeshCoreID(s string) (MeshCoreID, error) {
 	var id MeshCoreID

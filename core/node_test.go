@@ -37,6 +37,52 @@ func TestMeshCoreIDIsZero(t *testing.T) {
 	}
 }
 
+func TestMeshCoreIDIsHashMatch(t *testing.T) {
+	id := MeshCoreID{0xAA, 0xBB, 0xCC, 0xDD, 0xEE}
+
+	tests := []struct {
+		name  string
+		hash  []byte
+		match bool
+	}{
+		{"1-byte match", []byte{0xAA}, true},
+		{"1-byte mismatch", []byte{0xFF}, false},
+		{"2-byte match", []byte{0xAA, 0xBB}, true},
+		{"2-byte mismatch", []byte{0xAA, 0xFF}, false},
+		{"4-byte match", []byte{0xAA, 0xBB, 0xCC, 0xDD}, true},
+		{"4-byte mismatch at byte 3", []byte{0xAA, 0xBB, 0xCC, 0xFF}, false},
+		{"empty hash", []byte{}, false},
+		{"nil hash", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := id.IsHashMatch(tt.hash); got != tt.match {
+				t.Errorf("IsHashMatch(%v) = %v, want %v", tt.hash, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestMeshCoreIDIsHashMatch_FullKey(t *testing.T) {
+	id := MeshCoreID{
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+		0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+		0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+	}
+	// Full 32-byte match
+	if !id.IsHashMatch(id[:]) {
+		t.Error("full key should match")
+	}
+	// 33 bytes is too long
+	tooLong := make([]byte, 33)
+	copy(tooLong, id[:])
+	if id.IsHashMatch(tooLong) {
+		t.Error("hash longer than key should not match")
+	}
+}
+
 func TestParseMeshCoreID(t *testing.T) {
 	tests := []struct {
 		name    string

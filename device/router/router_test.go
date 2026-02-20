@@ -561,6 +561,210 @@ func TestHandlePacket_Multipart(t *testing.T) {
 	}
 }
 
+// --- ACK Forwarding Tests ---
+
+func TestHandlePacket_DirectAckForward(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{
+		SelfID:         selfID(0xAA),
+		ForwardPackets: true,
+	})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	var appCalled bool
+	r.SetPacketHandler(func(pkt *codec.Packet, src transport.PacketSource) {
+		appCalled = true
+	})
+
+	// ACK with path [0xAA, 0xBB] — we're the first hop
+	ackPayload := codec.BuildAckPayload(0xDEADBEEF)
+	pkt := makeDirectPacket(codec.PayloadTypeAck, []byte{0xAA, 0xBB}, ackPayload)
+
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+
+	// App should be called first (early ACK receive)
+	if !appCalled {
+		t.Error("app handler should be called for ACK (early receive)")
+	}
+
+	// A new ACK packet should be sent
+	if mt.sentCount() != 1 {
+		t.Fatalf("expected 1 ACK forwarded, got %d", mt.sentCount())
+	}
+
+	sent := mt.lastSent()
+	if sent.PayloadType() != codec.PayloadTypeAck {
+		t.Errorf("forwarded type = %d, want ACK(%d)", sent.PayloadType(), codec.PayloadTypeAck)
+	}
+	if sent.PathLen != 1 {
+		t.Errorf("forwarded pathLen = %d, want 1", sent.PathLen)
+	}
+	if sent.Path[0] != 0xBB {
+		t.Errorf("forwarded path[0] = %02x, want 0xBB", sent.Path[0])
+	}
+}
+
+func TestHandlePacket_DirectAckPreservesChecksum(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{
+		SelfID:         selfID(0xAA),
+		ForwardPackets: true,
+	})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	checksum := uint32(0xCAFEBABE)
+	ackPayload := codec.BuildAckPayload(checksum)
+	pkt := makeDirectPacket(codec.PayloadTypeAck, []byte{0xAA, 0xBB}, ackPayload)
+
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+
+	if mt.sentCount() != 1 {
+		t.Fatalf("expected 1 packet sent, got %d", mt.sentCount())
+	}
+
+	sent := mt.lastSent()
+	ack, err := codec.ParseAckPayload(sent.Payload)
+	if err != nil {
+		t.Fatalf("ParseAckPayload() error = %v", err)
+	}
+	if ack.Checksum != checksum {
+		t.Errorf("checksum = %08x, want %08x", ack.Checksum, checksum)
+	}
+}
+
+func TestHandlePacket_DirectAckFinalHop(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{
+		SelfID:         selfID(0xAA),
+		ForwardPackets: true,
+	})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	var appCalled bool
+	r.SetPacketHandler(func(pkt *codec.Packet, src transport.PacketSource) {
+		appCalled = true
+	})
+
+	// ACK with path [0xAA] — we're the last relay hop
+	ackPayload := codec.BuildAckPayload(0x12345678)
+	pkt := makeDirectPacket(codec.PayloadTypeAck, []byte{0xAA}, ackPayload)
+
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+
+	if !appCalled {
+		t.Error("app handler should be called for ACK (early receive)")
+	}
+
+	// Should still forward (with pathLen=0, the next receiver is the destination)
+	if mt.sentCount() != 1 {
+		t.Fatalf("expected 1 ACK forwarded, got %d", mt.sentCount())
+	}
+
+	sent := mt.lastSent()
+	if sent.PathLen != 0 {
+		t.Errorf("forwarded pathLen = %d, want 0", sent.PathLen)
+	}
+}
+
+func TestHandlePacket_DirectAckNotOurHop(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{
+		SelfID:         selfID(0xAA),
+		ForwardPackets: true,
+	})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	// ACK with path[0] = 0xBB — not our hash
+	ackPayload := codec.BuildAckPayload(0x12345678)
+	pkt := makeDirectPacket(codec.PayloadTypeAck, []byte{0xBB, 0xCC}, ackPayload)
+
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+
+	if mt.sentCount() != 0 {
+		t.Errorf("should not forward when path[0] doesn't match, got %d", mt.sentCount())
+	}
+}
+
+func TestHandlePacket_DirectAckSendToAll(t *testing.T) {
+	mqtt := newMockTransport()
+	serial := newMockTransport()
+	r := New(Config{
+		SelfID:         selfID(0xAA),
+		ForwardPackets: true,
+	})
+	r.AddTransport(mqtt, transport.PacketSourceMQTT)
+	r.AddTransport(serial, transport.PacketSourceSerial)
+
+	// ACK arrives from serial — forwarded ACK should go to ALL transports
+	// (ACK forwarding uses sendToAll: true)
+	ackPayload := codec.BuildAckPayload(0xDEADBEEF)
+	pkt := makeDirectPacket(codec.PayloadTypeAck, []byte{0xAA, 0xBB}, ackPayload)
+
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+
+	if mqtt.sentCount() != 1 {
+		t.Errorf("MQTT should receive forwarded ACK, got %d", mqtt.sentCount())
+	}
+	if serial.sentCount() != 1 {
+		t.Errorf("serial should also receive forwarded ACK (sendToAll), got %d", serial.sentCount())
+	}
+}
+
+func TestHandlePacket_DirectAckPreservesTransportCodes(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{
+		SelfID:         selfID(0xAA),
+		ForwardPackets: true,
+	})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	ackPayload := codec.BuildAckPayload(0xDEADBEEF)
+	pkt := &codec.Packet{
+		Header:         (codec.PayloadTypeAck << codec.PHTypeShift) | codec.RouteTypeTransportDirect,
+		TransportCodes: [2]uint16{0x1234, 0x5678},
+		PathLen:        2,
+		Path:           []byte{0xAA, 0xBB},
+		Payload:        ackPayload,
+	}
+
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+
+	if mt.sentCount() != 1 {
+		t.Fatalf("expected 1 packet sent, got %d", mt.sentCount())
+	}
+
+	sent := mt.lastSent()
+	if !sent.HasTransportCodes() {
+		t.Error("forwarded ACK should preserve transport codes")
+	}
+	if sent.TransportCodes[0] != 0x1234 {
+		t.Errorf("transport code[0] = %04x, want 0x1234", sent.TransportCodes[0])
+	}
+}
+
+// --- Queue Drain Tests ---
+
+func TestRouter_StartStop(t *testing.T) {
+	r := New(Config{SelfID: selfID(0xAA)})
+	ctx := context.Background()
+
+	r.Start(ctx)
+	if !r.started {
+		t.Error("router should be started after Start()")
+	}
+
+	r.Stop()
+	if r.started {
+		t.Error("router should not be started after Stop()")
+	}
+}
+
+func TestRouter_StopWithoutStart(t *testing.T) {
+	r := New(Config{SelfID: selfID(0xAA)})
+	// Stop without Start should not panic
+	r.Stop()
+}
+
 // --- AddTransport auto-registration ---
 
 func TestAddTransport_SetsHandler(t *testing.T) {
