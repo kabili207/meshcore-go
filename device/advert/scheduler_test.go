@@ -9,7 +9,7 @@ import (
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
-	"github.com/kabili207/meshcore-go/core/router"
+	"github.com/kabili207/meshcore-go/device/router"
 	"github.com/kabili207/meshcore-go/transport"
 )
 

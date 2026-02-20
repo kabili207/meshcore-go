@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kabili207/meshcore-go/core/router"
+	"github.com/kabili207/meshcore-go/device/router"
 )
 
 const (

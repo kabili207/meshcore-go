@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
-	"github.com/kabili207/meshcore-go/core/ack"
+	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 )

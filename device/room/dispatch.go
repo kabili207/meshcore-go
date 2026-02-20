@@ -3,7 +3,7 @@ package room
 import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
-	"github.com/kabili207/meshcore-go/core/contact"
+	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/transport"
 )
