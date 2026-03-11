@@ -57,7 +57,7 @@ func (s *Server) sendEncryptedResponse(origPkt *codec.Packet, recipientID core.M
 // encrypted together with the path as a single block, NOT double-encrypted.
 func (s *Server) sendPathReturn(origPkt *codec.Packet, recipientID core.MeshCoreID, secret []byte, extraType uint8, plaintext []byte) {
 	// Step 1: Reverse the flood path for the return route
-	returnPath := reverseFloodPath(origPkt)
+	returnPath := codec.ReverseFloodPath(origPkt)
 
 	// Step 2: Build PATH content with raw extra data
 	pathContent := codec.BuildPathContent(returnPath, extraType, plaintext)
@@ -86,16 +86,3 @@ func (s *Server) sendPathReturn(origPkt *codec.Packet, recipientID core.MeshCore
 		"path_len", len(returnPath))
 }
 
-// reverseFloodPath extracts and reverses the flood path from a packet.
-// The flood path lists relay hashes from sender → this node. Reversing it
-// gives a direct route from this node → relays → sender.
-func reverseFloodPath(pkt *codec.Packet) []byte {
-	if pkt == nil || pkt.PathLen == 0 {
-		return nil
-	}
-	path := make([]byte, pkt.PathLen)
-	for i := range pkt.PathLen {
-		path[i] = pkt.Path[pkt.PathLen-1-i]
-	}
-	return path
-}

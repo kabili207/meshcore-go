@@ -10,7 +10,9 @@
 package node
 
 import (
+	"context"
 	"crypto/ed25519"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -94,6 +96,9 @@ type BaseNode struct {
 	autoACK            bool
 	autoUpdateContacts bool
 
+	// Transports registered at construction time.
+	transports []TransportOption
+
 	// Event system
 	eventMu       sync.RWMutex
 	eventHandlers []event.Handler
@@ -150,6 +155,7 @@ func NewBase(cfg BaseConfig) (*BaseNode, error) {
 		contacts:           cfg.Contacts,
 		clock:              clk,
 		ack:                cfg.ACKTracker,
+		transports:         cfg.Transports,
 		autoACK:            autoACK,
 		autoUpdateContacts: autoUpdate,
 		log:                logger.WithGroup("node"),
@@ -178,6 +184,18 @@ func NewBase(cfg BaseConfig) (*BaseNode, error) {
 	r.SetPacketHandler(b.processPacket)
 
 	return b, nil
+}
+
+// StartTransports starts all registered transports. Returns the first error
+// encountered. Transports that started successfully before the error are not
+// stopped — the caller should cancel ctx to shut everything down.
+func (b *BaseNode) StartTransports(ctx context.Context) error {
+	for _, t := range b.transports {
+		if err := t.Transport.Start(ctx); err != nil {
+			return fmt.Errorf("start transport %q: %w", t.Name, err)
+		}
+	}
+	return nil
 }
 
 // ID returns the node's MeshCoreID.
@@ -262,8 +280,8 @@ func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, 
 	return nil
 }
 
-// sendACK sends an ACK packet to the recipient.
-func (b *BaseNode) sendACK(to core.MeshCoreID, ackHash uint32) {
+// SendACK sends an ACK packet to the recipient.
+func (b *BaseNode) SendACK(to core.MeshCoreID, ackHash uint32) {
 	pkt := codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeFlood, codec.BuildAckPayload(ackHash))
 
 	ct := b.contacts.GetByPubKey(to)
@@ -272,6 +290,34 @@ func (b *BaseNode) sendACK(to core.MeshCoreID, ackHash uint32) {
 	} else {
 		b.Router.SendFlood(pkt)
 	}
+}
+
+// SendToContact sends an encrypted packet to a contact by looking up
+// the shared secret and routing info from the contact store. This is used
+// for proactive sends (like the room server's sync loop) that aren't in
+// response to a received event.
+func (b *BaseNode) SendToContact(to core.MeshCoreID, payloadType uint8, plaintext []byte) error {
+	secret, err := b.contacts.GetSharedSecret(to)
+	if err != nil {
+		return fmt.Errorf("get shared secret for %s: %w", to, err)
+	}
+
+	encrypted, err := crypto.EncryptAddressedWithSecret(plaintext, secret)
+	if err != nil {
+		return fmt.Errorf("encrypt: %w", err)
+	}
+
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	payload := codec.BuildAddressedPayload(to.Hash(), b.id.Hash(), mac, ciphertext)
+	pkt := codec.NewPacket(payloadType, codec.RouteTypeFlood, payload)
+
+	ct := b.contacts.GetByPubKey(to)
+	if ct != nil && ct.HasDirectPath() {
+		b.Router.SendDirect(pkt, ct.OutPath[:ct.OutPathLen])
+	} else {
+		b.Router.SendFlood(pkt)
+	}
+	return nil
 }
 
 // buildReplyContext constructs a ReplyContext from a decrypted addressed packet.

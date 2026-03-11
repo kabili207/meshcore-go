@@ -112,24 +112,67 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 		return
 	}
 
-	// Get shared secret for encryption
+	// Compute expected ACK hash
+	ackHash := crypto.ComputeAckHash(post.Content, s.cfg.PublicKey[:])
+
+	// Track this push for ACK
+	clientID := client.ID
+	postTimestamp := post.Timestamp
+	if s.cfg.ACKTracker != nil {
+		s.cfg.ACKTracker.Track(ackHash, ack.PendingACK{
+			OnACK: func() {
+				c := s.cfg.Clients.GetClient(clientID)
+				if c != nil {
+					c.SyncSince = postTimestamp
+					c.PushFailures = 0
+				}
+			},
+			OnTimeout: func() {
+				c := s.cfg.Clients.GetClient(clientID)
+				if c != nil {
+					c.PushFailures++
+				}
+			},
+		})
+	}
+
+	client.PushPostTimestamp = postTimestamp
+
+	// Use event-based sender if available, otherwise fall back to legacy
+	if s.sender != nil {
+		if err := s.sender.SendToContact(client.ID, codec.PayloadTypeTxtMsg, post.Content); err != nil {
+			s.log.Debug("failed to push post", "peer", client.ID.String(), "error", err)
+			return
+		}
+	} else {
+		s.pushPostLegacy(client, post)
+	}
+
+	if s.cfg.PostCounter != nil {
+		s.cfg.PostCounter.IncrementPostPush()
+	}
+
+	s.log.Debug("pushed post to client",
+		"peer", client.ID.String(),
+		"post_ts", postTimestamp)
+}
+
+// pushPostLegacy sends a post using the legacy Router-based path.
+// Deprecated: Use NodeSender via SetSender instead.
+func (s *Server) pushPostLegacy(client *ClientInfo, post *PostInfo) {
 	secret, err := s.cfg.Contacts.GetSharedSecret(client.ID)
 	if err != nil {
 		s.log.Debug("no shared secret for client", "peer", client.ID.String())
 		return
 	}
 
-	// Encrypt the post content
 	encrypted, err := crypto.EncryptAddressedWithSecret(post.Content, secret)
 	if err != nil {
 		s.log.Warn("failed to encrypt post for push", "error", err)
 		return
 	}
 
-	// Split [MAC(2) || ciphertext] for the wire format
 	mac, ciphertext := codec.SplitMAC(encrypted)
-
-	// Build addressed packet
 	destHash := client.ID.Hash()
 	srcHash := core.MeshCoreID(s.cfg.PublicKey).Hash()
 	payload := codec.BuildAddressedPayload(destHash, srcHash, mac, ciphertext)
@@ -139,44 +182,10 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 		Payload: payload,
 	}
 
-	// Compute expected ACK hash
-	ackHash := crypto.ComputeAckHash(post.Content, s.cfg.PublicKey[:])
-
-	// Track this push for ACK
-	clientID := client.ID
-	postTimestamp := post.Timestamp
-	s.cfg.ACKTracker.Track(ackHash, ack.PendingACK{
-		OnACK: func() {
-			// ACK received — advance sync marker
-			c := s.cfg.Clients.GetClient(clientID)
-			if c != nil {
-				c.SyncSince = postTimestamp
-				c.PushFailures = 0
-			}
-		},
-		OnTimeout: func() {
-			// ACK timed out — increment failure counter
-			c := s.cfg.Clients.GetClient(clientID)
-			if c != nil {
-				c.PushFailures++
-			}
-		},
-	})
-
-	client.PushPostTimestamp = postTimestamp
-
-	// Send the packet
 	ct := s.cfg.Contacts.GetByPubKey(client.ID)
 	if ct != nil && ct.HasDirectPath() {
 		s.cfg.Router.SendDirect(pkt, ct.OutPath[:ct.OutPathLen])
 	} else {
 		s.cfg.Router.SendFlood(pkt)
 	}
-	if s.cfg.PostCounter != nil {
-		s.cfg.PostCounter.IncrementPostPush()
-	}
-
-	s.log.Debug("pushed post to client",
-		"peer", client.ID.String(),
-		"post_ts", postTimestamp)
 }

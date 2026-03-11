@@ -106,8 +106,22 @@ type Server struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 
+	// sender is the event-based response sender. When set, the event-based
+	// handler methods (HandleLogin, HandleTextMessage, etc.) use this for
+	// sending responses. When nil, only the legacy HandlePacket path works.
+	sender NodeSender
+
 	// Sync loop state
 	nextClientIdx int
+}
+
+// SetSender sets the NodeSender used by event-based handler methods
+// (HandleLogin, HandleTextMessage, HandleRequest) and the sync loop.
+// This is typically called by the RoomNode during construction.
+func (s *Server) SetSender(sender NodeSender) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sender = sender
 }
 
 // SetOnSettingChanged sets the callback invoked when a CLI set command

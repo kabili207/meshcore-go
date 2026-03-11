@@ -111,7 +111,7 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 	if b.autoACK && content.TxtType == codec.TxtTypePlain {
 		ackData := codec.TrimTxtMsgContent(plaintext, content)
 		ackHash := crypto.ComputeAckHash(ackData, ct.ID[:])
-		b.sendACK(ct.ID, ackHash)
+		b.SendACK(ct.ID, ackHash)
 	}
 
 	reply := b.buildReplyContext(pkt, ct, secret)

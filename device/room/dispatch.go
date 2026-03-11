@@ -176,7 +176,7 @@ func (s *Server) handleTextMessage(pkt *codec.Packet, client *ClientInfo, sender
 	// plaintext may have trailing zero bytes from AES-128 ECB block padding,
 	// but the firmware computes the ACK hash using header + strlen(text),
 	// which excludes padding. We must match that to produce a valid ACK.
-	ackData := trimTxtMsgContent(plaintext, content)
+	ackData := codec.TrimTxtMsgContent(plaintext, content)
 	ackHash := crypto.ComputeAckHash(ackData, senderID[:])
 
 	switch content.TxtType {
@@ -235,7 +235,7 @@ func (s *Server) handleRequest(pkt *codec.Packet, client *ClientInfo, senderID c
 	switch content.RequestType {
 	case codec.ReqTypeKeepalive:
 		s.log.Debug("keepalive", "peer", senderID.String())
-		ackData := trimRequestContent(plaintext, content)
+		ackData := codec.TrimRequestContent(plaintext, content)
 		ackHash := crypto.ComputeAckHash(ackData, senderID[:])
 		s.sendACK(pkt, senderID, secret, ackHash)
 
