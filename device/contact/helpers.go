@@ -25,6 +25,18 @@ type AdvertResult struct {
 	RejectReason string
 }
 
+// AdvertOptions provides optional parameters for ProcessAdvert.
+type AdvertOptions struct {
+	// HopCount is the number of relay hops in the packet that carried this advert.
+	HopCount int
+
+	// MaxAutoAddHops limits auto-add to adverts within this many hops.
+	// 0 means no limit. If HopCount >= MaxAutoAddHops (and MaxAutoAddHops > 0),
+	// the advert is rejected for auto-add but still returns the contact
+	// (for "discovered but not added" events).
+	MaxAutoAddHops int
+}
+
 // ProcessAdvert handles a received ADVERT packet by verifying the signature,
 // checking for replay attacks, and adding or updating the contact in the store.
 //
@@ -33,6 +45,7 @@ type AdvertResult struct {
 //   - advert: the parsed AdvertPayload (from codec.ParseAdvertPayload)
 //   - nowTimestamp: the current local clock time (for LastMod)
 //   - autoAdd: whether to automatically add new contacts to the store
+//   - opts: optional parameters (hop count filtering, etc.)
 //
 // This corresponds to the firmware's onAdvertRecv() in BaseChatMesh.
 func ProcessAdvert(
@@ -40,6 +53,7 @@ func ProcessAdvert(
 	advert *codec.AdvertPayload,
 	nowTimestamp uint32,
 	autoAdd bool,
+	opts ...AdvertOptions,
 ) AdvertResult {
 	// Step 1: validate appdata exists and has a name
 	if advert.AppData == nil || advert.AppData.Name == "" {
@@ -72,7 +86,21 @@ func ProcessAdvert(
 		}
 	}
 
-	// Step 5: new contact without auto-add
+	// Step 5a: max auto-add hops filter (new contacts only)
+	var o AdvertOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	if existing == nil && o.MaxAutoAddHops > 0 && o.HopCount >= o.MaxAutoAddHops {
+		temp := populateContactFromAdvert(advert, nowTimestamp)
+		return AdvertResult{
+			Contact:      temp,
+			Rejected:     true,
+			RejectReason: "beyond max auto-add hops",
+		}
+	}
+
+	// Step 5b: new contact without auto-add
 	if existing == nil && !autoAdd {
 		temp := populateContactFromAdvert(advert, nowTimestamp)
 		return AdvertResult{
@@ -147,10 +175,11 @@ func ProcessPath(
 		return nil, 0, nil, ErrContactNotFound
 	}
 
-	// Update the direct routing path directly on the stored reference
-	found.OutPathLen = int8(pathContent.PathLen)
-	if pathContent.PathLen > 0 {
-		found.OutPath = make([]byte, pathContent.PathLen)
+	// Update the direct routing path directly on the stored reference.
+	// PathLen is the encoded wire byte (mode bits | hop count).
+	found.OutPathLen = pathContent.PathLen
+	if len(pathContent.Path) > 0 {
+		found.OutPath = make([]byte, len(pathContent.Path))
 		copy(found.OutPath, pathContent.Path)
 	} else {
 		found.OutPath = nil

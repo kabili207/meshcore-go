@@ -76,7 +76,7 @@ func (s *Server) handleDecryptedPath(_ *codec.Packet, senderID core.MeshCoreID, 
 	client := s.cfg.Clients.GetClient(ct.ID)
 	if client != nil {
 		client.OutPathLen = ct.OutPathLen
-		if ct.OutPathLen >= 0 && len(ct.OutPath) > 0 {
+		if ct.HasDirectPath() && len(ct.OutPath) > 0 {
 			client.OutPath = make([]byte, len(ct.OutPath))
 			copy(client.OutPath, ct.OutPath)
 		} else {
@@ -270,7 +270,7 @@ func (s *Server) sendACK(origPkt *codec.Packet, recipientID core.MeshCoreID, sec
 	// Send direct if we have a path, otherwise flood
 	ct := s.cfg.Contacts.GetByPubKey(recipientID)
 	if ct != nil && ct.HasDirectPath() {
-		s.cfg.Router.SendDirect(ackPkt, ct.OutPath[:ct.OutPathLen])
+		s.cfg.Router.SendDirect(ackPkt, ct.OutPath)
 	} else {
 		s.cfg.Router.SendFlood(ackPkt)
 	}

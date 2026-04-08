@@ -14,14 +14,26 @@ func NewPacket(payloadType, routeType uint8, payload []byte) *Packet {
 // ReverseFloodPath extracts and reverses the flood path from a packet.
 // The flood path lists relay hashes from sender → this node. Reversing it
 // gives a direct route from this node → relays → sender.
+// Hashes are reversed in HashSize-byte chunks to support variable-width
+// path hashes (1, 2, or 3 bytes per hop).
 // Returns nil if the packet has no path.
 func ReverseFloodPath(pkt *Packet) []byte {
-	if pkt == nil || pkt.PathLen == 0 {
+	if pkt == nil {
 		return nil
 	}
-	path := make([]byte, pkt.PathLen)
-	for i := range pkt.PathLen {
-		path[i] = pkt.Path[pkt.PathLen-1-i]
+	info := pkt.PathInfo()
+	if info.HopCount == 0 {
+		return nil
+	}
+
+	hashSize := int(info.HashSize)
+	hopCount := int(info.HopCount)
+	path := make([]byte, len(pkt.Path))
+
+	for i := 0; i < hopCount; i++ {
+		srcOff := i * hashSize
+		dstOff := (hopCount - 1 - i) * hashSize
+		copy(path[dstOff:dstOff+hashSize], pkt.Path[srcOff:srcOff+hashSize])
 	}
 	return path
 }

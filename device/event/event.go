@@ -72,9 +72,13 @@ type ReplyContext struct {
 	// May be nil if no direct path has been established.
 	DirectPath []byte
 
-	// DirectPathLen is the length of the direct path. Set to -1 when
-	// no direct path is known (flood-only contact).
-	DirectPathLen int8
+	// DirectPathLen is the encoded path_len wire byte from the contact's
+	// stored direct path. Set to 0xFF when no direct path is known.
+	DirectPathLen uint8
+
+	// PathHashSize is the hash size (1, 2, or 3 bytes) from the incoming
+	// flood packet. Used when building PATH return packets.
+	PathHashSize uint8
 }
 
 // HasFloodPath returns true if the original packet arrived via flood routing
@@ -85,5 +89,5 @@ func (r *ReplyContext) HasFloodPath() bool {
 
 // HasDirectPath returns true if a direct routing path to the sender is known.
 func (r *ReplyContext) HasDirectPath() bool {
-	return r.DirectPathLen >= 0 && len(r.DirectPath) > 0
+	return r.DirectPathLen != 0xFF && len(r.DirectPath) > 0
 }

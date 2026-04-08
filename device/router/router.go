@@ -78,9 +78,19 @@ type Config struct {
 	ForwardPackets bool
 
 	// MaxFloodHops limits how far flood packets can propagate through this node.
-	// Packets with path_len >= MaxFloodHops are not forwarded.
+	// Packets with hop count >= MaxFloodHops are not forwarded.
 	// Default: 64 (MaxPathSize).
 	MaxFloodHops int
+
+	// PathHashMode controls the hash size used when originating flood packets.
+	// 0 = 1-byte hashes (default, backward-compatible), 1 = 2-byte, 2 = 3-byte.
+	PathHashMode uint8
+
+	// LoopDetect sets the loop detection level for flood forwarding.
+	// 0 = off (default), 1 = minimal, 2 = moderate, 3 = strict.
+	// When enabled, packets with too many self-hash occurrences in the
+	// path are dropped before forwarding.
+	LoopDetect int
 
 	// DrainInterval is how often the queue drain goroutine checks for ready
 	// packets. Default: 10ms. Only used when Start() is called.
@@ -223,6 +233,31 @@ func (r *Router) SetPacketMonitor(fn PacketMonitor) {
 	r.onMonitor = fn
 }
 
+// GetPathHashMode returns the current path hash mode (0, 1, or 2).
+func (r *Router) GetPathHashMode() uint8 {
+	return r.cfg.PathHashMode
+}
+
+// SetPathHashMode updates the path hash mode used when originating floods.
+func (r *Router) SetPathHashMode(mode uint8) {
+	r.cfg.PathHashMode = mode
+}
+
+// GetLoopDetect returns the current loop detection level.
+func (r *Router) GetLoopDetect() int {
+	return r.cfg.LoopDetect
+}
+
+// SetLoopDetect updates the loop detection level.
+func (r *Router) SetLoopDetect(level int) {
+	r.cfg.LoopDetect = level
+}
+
+// SetForwardPackets enables or disables packet forwarding.
+func (r *Router) SetForwardPackets(enabled bool) {
+	r.cfg.ForwardPackets = enabled
+}
+
 // notifyMonitor calls the packet monitor callback if one is set.
 func (r *Router) notifyMonitor(pkt *codec.Packet, src transport.PacketSource) {
 	r.mu.RLock()
@@ -302,14 +337,14 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 	}
 
 	// Gate 4: direct routing with path
-	if pkt.IsDirect() && pkt.PathLen > 0 {
+	if pkt.IsDirect() && pkt.HopCount() > 0 {
 		r.counters.RecvDirect.Add(1)
 		r.handleDirectForward(pkt, src)
 		return
 	}
 
 	// Gate 5: direct with no path (zero-hop or final destination)
-	if pkt.IsDirect() && pkt.PathLen == 0 {
+	if pkt.IsDirect() && pkt.HopCount() == 0 {
 		r.counters.RecvDirect.Add(1)
 		r.dispatchToApp(pkt, src)
 		return
@@ -336,7 +371,7 @@ func (r *Router) handleMultipart(pkt *codec.Packet, src transport.PacketSource) 
 
 	// Use the first byte of the path (or 0 for zero-hop) as the sender key.
 	var srcHash uint8
-	if pkt.PathLen > 0 {
+	if len(pkt.Path) > 0 {
 		srcHash = pkt.Path[0]
 	}
 
@@ -346,10 +381,16 @@ func (r *Router) handleMultipart(pkt *codec.Packet, src transport.PacketSource) 
 	}
 }
 
-// handleDirectForward processes a direct-routed packet with path_len >= 1.
+// handleDirectForward processes a direct-routed packet with hop count >= 1.
 func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSource) {
-	// Check if we are the next hop
-	if pkt.Path[0] != r.cfg.SelfID.Hash() {
+	info := pkt.PathInfo()
+	hashSize := int(info.HashSize)
+
+	// Check if we are the next hop (first hashSize bytes of path)
+	if len(pkt.Path) < hashSize {
+		return
+	}
+	if !r.cfg.SelfID.IsHashMatch(pkt.Path[:hashSize]) {
 		// Not our hop — drop
 		return
 	}
@@ -371,7 +412,7 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 	// Remove ourselves from the path
 	removeSelfFromPath(pkt)
 
-	if pkt.PathLen == 0 {
+	if pkt.HopCount() == 0 {
 		// We were the last relay hop. The next node to receive this is the
 		// final destination (identified by dest_hash in the payload, not path).
 		// Forward it out with empty path.
@@ -391,15 +432,16 @@ func (r *Router) forwardAck(pkt *codec.Packet) {
 	crc := binary.LittleEndian.Uint32(pkt.Payload[:4])
 
 	ackPkt := &codec.Packet{
-		Header:  pkt.Header,
-		PathLen: pkt.PathLen,
-		Path:    make([]byte, pkt.PathLen),
-		Payload: codec.BuildAckPayload(crc),
+		Header:       pkt.Header,
+		PathLen:      pkt.PathLen,
+		PathHashSize: pkt.PathHashSize,
+		Path:         make([]byte, len(pkt.Path)),
+		Payload:      codec.BuildAckPayload(crc),
 	}
 	if pkt.HasTransportCodes() {
 		ackPkt.TransportCodes = pkt.TransportCodes
 	}
-	copy(ackPkt.Path, pkt.Path[:pkt.PathLen])
+	copy(ackPkt.Path, pkt.Path)
 
 	r.enqueue(ackPkt, PriorityDirect, 0, 0, true)
 }
@@ -423,26 +465,34 @@ func (r *Router) routeFloodForward(pkt *codec.Packet, src transport.PacketSource
 	if pkt.IsMarkedDoNotRetransmit() {
 		return
 	}
-	if int(pkt.PathLen)+1 > r.cfg.MaxFloodHops {
+
+	info := pkt.PathInfo()
+	if int(info.HopCount)+1 > r.cfg.MaxFloodHops {
 		return
+	}
+
+	if r.cfg.LoopDetect > LoopDetectOff {
+		selfHash := r.cfg.SelfID.HashN(int(info.HashSize))
+		if detectLoop(pkt.Path, selfHash, int(info.HashSize), r.cfg.LoopDetect) {
+			return
+		}
 	}
 
 	// Clone the packet before modifying path for forwarding.
 	// The original was already dispatched to the app.
 	fwd := pkt.Clone()
 
-	// Append our hash to the path
-	if int(fwd.PathLen) >= len(fwd.Path) {
-		// Grow path slice if needed
-		fwd.Path = append(fwd.Path, r.cfg.SelfID.Hash())
-	} else {
-		fwd.Path[fwd.PathLen] = r.cfg.SelfID.Hash()
-	}
-	fwd.PathLen++
+	// Append our N-byte hash to the path
+	selfHash := r.cfg.SelfID.HashN(int(info.HashSize))
+	fwd.Path = append(fwd.Path, selfHash...)
 
-	// Firmware uses pathLen as priority for flood forwarding —
+	// Update wire byte: same mode, hop count + 1
+	newInfo := codec.PathInfo{HashSize: info.HashSize, HopCount: info.HopCount + 1}
+	fwd.PathLen = newInfo.ToWireByte()
+
+	// Firmware uses hop count as priority for flood forwarding:
 	// closer sources get lower (better) priority.
-	r.enqueue(fwd, fwd.PathLen, 0, src, false)
+	r.enqueue(fwd, uint8(newInfo.HopCount), 0, src, false)
 }
 
 // dispatchToApp calls the registered application packet handler.
@@ -487,7 +537,10 @@ func (r *Router) broadcastToTransports(pkt *codec.Packet, excludeSource transpor
 func (r *Router) SendFlood(pkt *codec.Packet) {
 	// Set flood route type, preserving payload type and version bits
 	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeFlood
-	pkt.PathLen = 0
+
+	hashSize := r.cfg.PathHashMode + 1
+	pkt.PathLen = codec.PathInfo{HashSize: hashSize, HopCount: 0}.ToWireByte()
+	pkt.PathHashSize = hashSize
 	pkt.Path = nil
 
 	// Mark as seen so we don't process it again if it loops back
@@ -501,7 +554,14 @@ func (r *Router) SendFlood(pkt *codec.Packet) {
 // The path is set to the provided route, and the packet is marked as seen.
 func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
 	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeDirect
-	pkt.PathLen = uint8(len(path))
+
+	hashSize := r.cfg.PathHashMode + 1
+	hopCount := uint8(0)
+	if hashSize > 0 && len(path) > 0 {
+		hopCount = uint8(len(path) / int(hashSize))
+	}
+	pkt.PathLen = codec.PathInfo{HashSize: hashSize, HopCount: hopCount}.ToWireByte()
+	pkt.PathHashSize = hashSize
 	pkt.Path = make([]byte, len(path))
 	copy(pkt.Path, path)
 
@@ -517,7 +577,10 @@ func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
 // createPathReturn() sending behavior.
 func (r *Router) SendFloodPath(pkt *codec.Packet) {
 	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeFlood
-	pkt.PathLen = 0
+
+	hashSize := r.cfg.PathHashMode + 1
+	pkt.PathLen = codec.PathInfo{HashSize: hashSize, HopCount: 0}.ToWireByte()
+	pkt.PathHashSize = hashSize
 	pkt.Path = nil
 
 	r.dedup.HasSeen(pkt)
@@ -530,7 +593,10 @@ func (r *Router) SendFloodPath(pkt *codec.Packet) {
 // These packets are not forwarded by relays (path is empty).
 func (r *Router) SendZeroHop(pkt *codec.Packet) {
 	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeDirect
-	pkt.PathLen = 0
+
+	hashSize := r.cfg.PathHashMode + 1
+	pkt.PathLen = codec.PathInfo{HashSize: hashSize, HopCount: 0}.ToWireByte()
+	pkt.PathHashSize = hashSize
 	pkt.Path = nil
 
 	r.dedup.HasSeen(pkt)
@@ -560,13 +626,22 @@ func (r *Router) broadcastToAllTransports(pkt *codec.Packet) {
 	}
 }
 
-// removeSelfFromPath removes the first byte from the packet's path,
-// shifting all remaining bytes left by one. This is called when this node
-// is the next hop in a direct-routed packet.
+// removeSelfFromPath removes the first hash entry from the packet's path,
+// shifting all remaining bytes left. The hash size is determined from the
+// packet's path encoding. This is called when this node is the next hop
+// in a direct-routed packet.
 func removeSelfFromPath(pkt *codec.Packet) {
-	if pkt.PathLen == 0 {
+	info := pkt.PathInfo()
+	if info.HopCount == 0 {
 		return
 	}
-	pkt.PathLen--
-	copy(pkt.Path, pkt.Path[1:1+pkt.PathLen])
+
+	hashSize := int(info.HashSize)
+	// Shift path left by hashSize bytes
+	copy(pkt.Path, pkt.Path[hashSize:])
+	pkt.Path = pkt.Path[:len(pkt.Path)-hashSize]
+
+	// Decrement hop count, preserve hash mode
+	newInfo := codec.PathInfo{HashSize: info.HashSize, HopCount: info.HopCount - 1}
+	pkt.PathLen = newInfo.ToWireByte()
 }

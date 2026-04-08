@@ -26,7 +26,8 @@ const (
 
 	// PathUnknown is the sentinel value for OutPathLen when no direct routing
 	// path is known. The contact can only be reached via flood routing.
-	PathUnknown int8 = -1
+	// Firmware v1.14+ uses 0xFF (unsigned) instead of -1 (signed).
+	PathUnknown uint8 = 0xFF
 )
 
 // ContactInfo represents a known peer in the mesh network.
@@ -39,7 +40,7 @@ type ContactInfo struct {
 
 	// Flags and routing
 	Flags      uint8  // Bit 0 = favorite (FlagFavorite); other bits reserved
-	OutPathLen int8   // -1 = unknown (flood only), >=0 = direct path length
+	OutPathLen uint8  // 0xFF = unknown (flood only), else encoded path_len wire byte
 	OutPath    []byte // Direct routing path (up to codec.MaxPathSize bytes)
 
 	// Timestamps
@@ -76,7 +77,7 @@ func (c *ContactInfo) SetFavorite(fav bool) {
 
 // HasDirectPath returns true if a direct routing path is known for this contact.
 func (c *ContactInfo) HasDirectPath() bool {
-	return c.OutPathLen >= 0
+	return c.OutPathLen != PathUnknown
 }
 
 // GetSharedSecret lazily computes and caches the ECDH shared secret between

@@ -83,6 +83,43 @@ func TestMeshCoreIDIsHashMatch_FullKey(t *testing.T) {
 	}
 }
 
+func TestMeshCoreIDHashN(t *testing.T) {
+	id := MeshCoreID{0xAA, 0xBB, 0xCC, 0xDD, 0xEE}
+
+	tests := []struct {
+		name string
+		n    int
+		want []byte
+	}{
+		{"1 byte", 1, []byte{0xAA}},
+		{"2 bytes", 2, []byte{0xAA, 0xBB}},
+		{"3 bytes", 3, []byte{0xAA, 0xBB, 0xCC}},
+		{"0 bytes", 0, nil},
+		{"negative", -1, nil},
+		{"too long", 33, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := id.HashN(tt.n)
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("HashN(%d) = %v, want nil", tt.n, got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("HashN(%d) len = %d, want %d", tt.n, len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("HashN(%d)[%d] = 0x%02x, want 0x%02x", tt.n, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestParseMeshCoreID(t *testing.T) {
 	tests := []struct {
 		name    string

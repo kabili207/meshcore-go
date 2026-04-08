@@ -562,7 +562,7 @@ func TestBuildPathContentRoundTrip(t *testing.T) {
 	path := []byte{0xAA, 0xBB, 0xCC}
 	extra := []byte{0x01, 0x02, 0x03, 0x04}
 
-	data := BuildPathContent(path, PayloadTypeAck, extra)
+	data := BuildPathContent(path, 1, PayloadTypeAck, extra)
 
 	parsed, err := ParsePathContent(data)
 	if err != nil {
@@ -586,7 +586,7 @@ func TestBuildPathContentRoundTrip(t *testing.T) {
 func TestBuildPathContentNoExtra(t *testing.T) {
 	path := []byte{0xAA}
 
-	data := BuildPathContent(path, PayloadTypeResponse, nil)
+	data := BuildPathContent(path, 1, PayloadTypeResponse, nil)
 
 	parsed, err := ParsePathContent(data)
 	if err != nil {

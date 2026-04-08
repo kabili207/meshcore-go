@@ -338,7 +338,7 @@ func (s *Server) HandlePath(evt *event.PathReceived) {
 		client := s.cfg.Clients.GetClient(senderID)
 		if client != nil {
 			client.OutPathLen = ct.OutPathLen
-			if ct.OutPathLen >= 0 && len(ct.OutPath) > 0 {
+			if ct.HasDirectPath() && len(ct.OutPath) > 0 {
 				client.OutPath = make([]byte, len(ct.OutPath))
 				copy(client.OutPath, ct.OutPath)
 			} else {
@@ -369,7 +369,7 @@ func (s *Server) HandleAdvertReceived(evt *event.AdvertReceived) {
 	client := s.cfg.Clients.GetClient(evt.Contact.ID)
 	if client != nil {
 		client.OutPathLen = evt.Contact.OutPathLen
-		if evt.Contact.OutPathLen >= 0 && len(evt.Contact.OutPath) > 0 {
+		if evt.Contact.HasDirectPath() && len(evt.Contact.OutPath) > 0 {
 			client.OutPath = make([]byte, len(evt.Contact.OutPath))
 			copy(client.OutPath, evt.Contact.OutPath)
 		} else {

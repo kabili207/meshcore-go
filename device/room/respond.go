@@ -40,7 +40,7 @@ func (s *Server) sendEncryptedResponse(origPkt *codec.Packet, recipientID core.M
 
 	ct := s.cfg.Contacts.GetByPubKey(recipientID)
 	if ct != nil && ct.HasDirectPath() {
-		s.cfg.Router.SendDirect(pkt, ct.OutPath[:ct.OutPathLen])
+		s.cfg.Router.SendDirect(pkt, ct.OutPath)
 	} else {
 		s.cfg.Router.SendFlood(pkt)
 	}
@@ -60,7 +60,11 @@ func (s *Server) sendPathReturn(origPkt *codec.Packet, recipientID core.MeshCore
 	returnPath := codec.ReverseFloodPath(origPkt)
 
 	// Step 2: Build PATH content with raw extra data
-	pathContent := codec.BuildPathContent(returnPath, extraType, plaintext)
+	hashSize := origPkt.PathHashSize
+	if hashSize == 0 {
+		hashSize = 1
+	}
+	pathContent := codec.BuildPathContent(returnPath, hashSize, extraType, plaintext)
 
 	// Step 3: Encrypt the PATH content once as an addressed payload
 	encrypted, err := crypto.EncryptAddressedWithSecret(pathContent, secret)

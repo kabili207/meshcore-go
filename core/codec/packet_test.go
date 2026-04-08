@@ -114,12 +114,23 @@ func TestPacketReadWriteRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			name: "direct with max path",
+			name: "direct with max 1-byte path",
 			packet: Packet{
-				Header:  (PayloadTypePath << PHTypeShift) | RouteTypeDirect,
-				PathLen: MaxPathSize,
-				Path:    make([]byte, MaxPathSize),
-				Payload: []byte{0x42},
+				Header:       (PayloadTypePath << PHTypeShift) | RouteTypeDirect,
+				PathLen:      PathInfo{HashSize: 1, HopCount: MaxHopCount}.ToWireByte(), // 63 hops
+				PathHashSize: 1,
+				Path:         make([]byte, MaxHopCount), // 63 bytes
+				Payload:      []byte{0x42},
+			},
+		},
+		{
+			name: "direct with 2-byte hash path",
+			packet: Packet{
+				Header:       (PayloadTypePath << PHTypeShift) | RouteTypeDirect,
+				PathLen:      PathInfo{HashSize: 2, HopCount: 32}.ToWireByte(), // 32 hops * 2 = 64 bytes
+				PathHashSize: 2,
+				Path:         make([]byte, 64),
+				Payload:      []byte{0x42},
 			},
 		},
 	}

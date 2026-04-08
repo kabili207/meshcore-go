@@ -19,7 +19,7 @@ func makeClient(id core.MeshCoreID, name string, perms uint8, lastActivity uint3
 		ID:           id,
 		Name:         name,
 		Permissions:  perms,
-		OutPathLen:   -1,
+		OutPathLen:   0xFF,
 		LastActivity: lastActivity,
 	}
 }

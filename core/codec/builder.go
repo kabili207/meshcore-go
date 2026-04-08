@@ -221,6 +221,33 @@ func BuildDiscoverRespPayload(nodeType uint8, snr int8, tag uint32, pubKey []byt
 	return data
 }
 
+// BuildNodeDiscoverReqPayload builds a NODE_DISCOVER_REQ control payload.
+// These are sent as zero-hop CONTROL packets.
+func BuildNodeDiscoverReqPayload(typeFilter uint8, tag uint32, since uint32) []byte {
+	flags := uint8(ControlSubtypeDiscoverReq<<4) | ControlFlagNodeDiscover
+
+	data := make([]byte, 1+1+4+4)
+	data[0] = flags
+	data[1] = typeFilter
+	binary.LittleEndian.PutUint32(data[2:6], tag)
+	binary.LittleEndian.PutUint32(data[6:10], since)
+
+	return data
+}
+
+// BuildNodeDiscoverRespPayload builds a NODE_DISCOVER_RESP control payload.
+func BuildNodeDiscoverRespPayload(nodeType uint8, snr int8, tag uint32, pubKey []byte) []byte {
+	flags := uint8(ControlSubtypeDiscoverResp<<4) | (nodeType & 0x0F)
+
+	data := make([]byte, 1+1+4+len(pubKey))
+	data[0] = flags
+	data[1] = byte(snr)
+	binary.LittleEndian.PutUint32(data[2:6], tag)
+	copy(data[6:], pubKey)
+
+	return data
+}
+
 // -----------------------------------------------------------------------------
 // Content Builders (decrypted inner content)
 // -----------------------------------------------------------------------------
@@ -270,9 +297,16 @@ func BuildResponseContent(tag uint32, content []byte) []byte {
 }
 
 // BuildPathContent builds decrypted path content.
-func BuildPathContent(path []byte, extraType uint8, extra []byte) []byte {
+// hashSize is the number of bytes per path hash (1, 2, or 3).
+func BuildPathContent(path []byte, hashSize uint8, extraType uint8, extra []byte) []byte {
+	hopCount := uint8(0)
+	if hashSize > 0 && len(path) > 0 {
+		hopCount = uint8(len(path) / int(hashSize))
+	}
+	wireByte := PathInfo{HashSize: hashSize, HopCount: hopCount}.ToWireByte()
+
 	data := make([]byte, 1+len(path)+1+len(extra))
-	data[0] = uint8(len(path))
+	data[0] = wireByte
 	copy(data[1:1+len(path)], path)
 	data[1+len(path)] = extraType
 	copy(data[2+len(path):], extra)

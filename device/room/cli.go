@@ -9,9 +9,40 @@ import (
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/device/router"
 )
 
 const defaultVersion = "meshcore-go"
+
+func loopDetectName(level int) string {
+	switch level {
+	case router.LoopDetectOff:
+		return "off"
+	case router.LoopDetectMinimal:
+		return "minimal"
+	case router.LoopDetectModerate:
+		return "moderate"
+	case router.LoopDetectStrict:
+		return "strict"
+	default:
+		return fmt.Sprintf("unknown(%d)", level)
+	}
+}
+
+func parseLoopDetectLevel(s string) (int, bool) {
+	switch strings.ToLower(s) {
+	case "off", "0":
+		return router.LoopDetectOff, true
+	case "minimal", "1":
+		return router.LoopDetectMinimal, true
+	case "moderate", "2":
+		return router.LoopDetectModerate, true
+	case "strict", "3":
+		return router.LoopDetectStrict, true
+	default:
+		return 0, false
+	}
+}
 
 // handleCLICommand processes a CLI command from an admin client and sends the
 // reply as an encrypted TXT_MSG with TxtTypeCLI. The firmware does NOT send
@@ -144,6 +175,15 @@ func (s *Server) cliGet(key string) string {
 		return hex.EncodeToString(s.cfg.PublicKey[:])
 	case "role":
 		return "room_server"
+	case "path.hash.mode":
+		return fmt.Sprintf("%d", s.cfg.Router.GetPathHashMode())
+	case "loop.detect":
+		return loopDetectName(s.cfg.Router.GetLoopDetect())
+	case "bootloader.ver":
+		if s.cfg.BootloaderVersion != "" {
+			return s.cfg.BootloaderVersion
+		}
+		return "ERROR: unsupported"
 	default:
 		return "??: " + key
 	}
@@ -198,6 +238,18 @@ func (s *Server) cliSet(key, value string) string {
 		default:
 			return "Error: expected on/off"
 		}
+	case "path.hash.mode":
+		mode, err := strconv.ParseUint(value, 10, 8)
+		if err != nil || mode > 2 {
+			return "Error: expected 0, 1, or 2"
+		}
+		s.cfg.Router.SetPathHashMode(uint8(mode))
+	case "loop.detect":
+		level, ok := parseLoopDetectLevel(value)
+		if !ok {
+			return "Error: expected off/minimal/moderate/strict"
+		}
+		s.cfg.Router.SetLoopDetect(level)
 	default:
 		return "??: " + key
 	}

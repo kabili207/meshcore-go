@@ -184,7 +184,7 @@ func (s *Server) pushPostLegacy(client *ClientInfo, post *PostInfo) {
 
 	ct := s.cfg.Contacts.GetByPubKey(client.ID)
 	if ct != nil && ct.HasDirectPath() {
-		s.cfg.Router.SendDirect(pkt, ct.OutPath[:ct.OutPathLen])
+		s.cfg.Router.SendDirect(pkt, ct.OutPath)
 	} else {
 		s.cfg.Router.SendFlood(pkt)
 	}

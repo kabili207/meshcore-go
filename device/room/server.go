@@ -89,6 +89,10 @@ type ServerConfig struct {
 	// the change to the database. May be nil.
 	OnSettingChanged func(key, value string)
 
+	// BootloaderVersion is returned by "get bootloader.ver". On Go nodes
+	// (not running on NRF52 hardware), this is typically "ERROR: unsupported".
+	BootloaderVersion string
+
 	// CLIHandler is an optional callback for custom CLI commands.
 	// Called when no built-in command matches. Return "" for no reply,
 	// or "Unknown command" to indicate unrecognized input.

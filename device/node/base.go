@@ -255,7 +255,7 @@ func (b *BaseNode) sendEncryptedResponse(reply event.ReplyContext, to core.MeshC
 	pkt := codec.NewPacket(payloadType, codec.RouteTypeFlood, payload)
 
 	if reply.HasDirectPath() {
-		b.Router.SendDirect(pkt, reply.DirectPath[:reply.DirectPathLen])
+		b.Router.SendDirect(pkt, reply.DirectPath)
 	} else {
 		b.Router.SendFlood(pkt)
 	}
@@ -265,7 +265,11 @@ func (b *BaseNode) sendEncryptedResponse(reply event.ReplyContext, to core.MeshC
 // sendPathReturn wraps a response in a PATH packet with the reversed flood
 // path, matching firmware's createPathReturn() behavior.
 func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, extraType uint8, plaintext []byte) error {
-	pathContent := codec.BuildPathContent(reply.FloodPath, extraType, plaintext)
+	hashSize := reply.PathHashSize
+	if hashSize == 0 {
+		hashSize = 1 // default to 1-byte hashes
+	}
+	pathContent := codec.BuildPathContent(reply.FloodPath, hashSize, extraType, plaintext)
 
 	encrypted, err := crypto.EncryptAddressedWithSecret(pathContent, reply.SharedSecret)
 	if err != nil {
@@ -286,7 +290,7 @@ func (b *BaseNode) SendACK(to core.MeshCoreID, ackHash uint32) {
 
 	ct := b.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {
-		b.Router.SendDirect(pkt, ct.OutPath[:ct.OutPathLen])
+		b.Router.SendDirect(pkt, ct.OutPath)
 	} else {
 		b.Router.SendFlood(pkt)
 	}
@@ -313,7 +317,7 @@ func (b *BaseNode) SendToContact(to core.MeshCoreID, payloadType uint8, plaintex
 
 	ct := b.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {
-		b.Router.SendDirect(pkt, ct.OutPath[:ct.OutPathLen])
+		b.Router.SendDirect(pkt, ct.OutPath)
 	} else {
 		b.Router.SendFlood(pkt)
 	}
@@ -327,11 +331,12 @@ func (b *BaseNode) buildReplyContext(pkt *codec.Packet, ct *contact.ContactInfo,
 		DirectPathLen: ct.OutPathLen,
 	}
 	if ct.HasDirectPath() {
-		reply.DirectPath = make([]byte, ct.OutPathLen)
-		copy(reply.DirectPath, ct.OutPath[:ct.OutPathLen])
+		reply.DirectPath = make([]byte, len(ct.OutPath))
+		copy(reply.DirectPath, ct.OutPath)
 	}
-	if pkt.IsFlood() && pkt.PathLen > 0 {
+	if pkt.IsFlood() && pkt.HopCount() > 0 {
 		reply.FloodPath = codec.ReverseFloodPath(pkt)
+		reply.PathHashSize = pkt.PathHashSize
 	}
 	return reply
 }
@@ -339,11 +344,11 @@ func (b *BaseNode) buildReplyContext(pkt *codec.Packet, ct *contact.ContactInfo,
 // updateContactPathFromFlood updates a contact's direct path from an incoming
 // flood packet by reversing the flood path.
 func (b *BaseNode) updateContactPathFromFlood(pkt *codec.Packet, ct *contact.ContactInfo) {
-	if !pkt.IsFlood() || pkt.PathLen == 0 {
+	if !pkt.IsFlood() || pkt.HopCount() == 0 {
 		return
 	}
 	reversed := codec.ReverseFloodPath(pkt)
-	ct.OutPathLen = int8(len(reversed))
+	ct.OutPathLen = pkt.PathLen // preserve the encoded wire byte (mode + hop count)
 	ct.OutPath = reversed
 	ct.LastMod = b.clock.GetCurrentTime()
 }

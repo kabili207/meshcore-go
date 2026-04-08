@@ -60,10 +60,11 @@ var (
 type Packet struct {
 	Header         uint8
 	TransportCodes [2]uint16 // Only present if route type includes transport
-	PathLen        uint8
-	Path           []byte // Up to 64 bytes
-	Payload        []byte // Up to 184 bytes
-	SNR            int8   // Signal-to-noise ratio (raw value, multiply by 0.25 for dB)
+	PathLen        uint8     // Wire byte: mode (bits 7-6) | hop count (bits 5-0)
+	PathHashSize   uint8     // Decoded hash size in bytes: 1, 2, or 3
+	Path           []byte    // Actual path bytes: HopCount * HashSize bytes
+	Payload        []byte    // Up to 184 bytes
+	SNR            int8      // Signal-to-noise ratio (raw value, multiply by 0.25 for dB)
 }
 
 // RouteType returns the routing type from the header (2-bit field).
@@ -109,6 +110,21 @@ func (p *Packet) IsMarkedDoNotRetransmit() bool {
 	return p.Header == HeaderDoNotRetransmit
 }
 
+// PathInfo returns the decoded path hash mode and hop count from the wire byte.
+func (p *Packet) PathInfo() PathInfo {
+	return PathInfoFromWireByte(p.PathLen)
+}
+
+// HopCount returns the number of relay hops in the path (lower 6 bits of PathLen).
+func (p *Packet) HopCount() int {
+	return int(p.PathLen & PathHopCountMask)
+}
+
+// PathByteLen returns the total number of path bytes on the wire.
+func (p *Packet) PathByteLen() int {
+	return p.PathInfo().ByteLen()
+}
+
 // GetSNR returns the signal-to-noise ratio in dB.
 func (p *Packet) GetSNR() float32 {
 	return float32(p.SNR) / 4.0
@@ -120,6 +136,7 @@ func (p *Packet) Clone() *Packet {
 		Header:         p.Header,
 		TransportCodes: p.TransportCodes,
 		PathLen:        p.PathLen,
+		PathHashSize:   p.PathHashSize,
 		SNR:            p.SNR,
 	}
 	if len(p.Path) > 0 {
@@ -158,24 +175,28 @@ func (p *Packet) ReadFrom(data []byte) error {
 		p.TransportCodes[1] = 0
 	}
 
-	// Read path length
+	// Read path length wire byte and decode hash mode + hop count
 	if len(data) < i+1 {
 		return ErrPacketTooShort
 	}
 	p.PathLen = data[i]
 	i++
 
-	if p.PathLen > MaxPathSize {
-		return fmt.Errorf("%w: %d bytes", ErrPathTooLong, p.PathLen)
+	info := PathInfoFromWireByte(p.PathLen)
+	p.PathHashSize = info.HashSize
+	pathByteLen := info.ByteLen()
+
+	if pathByteLen > MaxPathSize {
+		return fmt.Errorf("%w: %d bytes", ErrPathTooLong, pathByteLen)
 	}
 
-	// Read path
-	if len(data) < i+int(p.PathLen) {
+	// Read path bytes (hopCount * hashSize)
+	if len(data) < i+pathByteLen {
 		return ErrPacketTooShort
 	}
-	p.Path = make([]byte, p.PathLen)
-	copy(p.Path, data[i:i+int(p.PathLen)])
-	i += int(p.PathLen)
+	p.Path = make([]byte, pathByteLen)
+	copy(p.Path, data[i:i+pathByteLen])
+	i += pathByteLen
 
 	// Remaining bytes are payload
 	if i >= len(data) {
@@ -213,8 +234,8 @@ func (p *Packet) WriteTo() []byte {
 		i += 2
 	}
 
-	// Write path length and path
-	data[i] = uint8(len(p.Path))
+	// Write path length wire byte (encoded: mode bits | hop count)
+	data[i] = p.PathLen
 	i++
 	copy(data[i:], p.Path)
 	i += len(p.Path)

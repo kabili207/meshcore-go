@@ -47,9 +47,14 @@ const (
 	// Control payload minimum size
 	ControlMinSize = 1
 
-	// Control subtypes (upper 4 bits of flags)
+	// Control subtypes (upper 4 bits of flags byte)
 	ControlSubtypeDiscoverReq  = 0x08
 	ControlSubtypeDiscoverResp = 0x09
+
+	// Node neighbor discovery uses the same subtypes (0x08/0x09) but with
+	// bit 7 set in the full flags byte (0x80/0x90). The firmware distinguishes
+	// them by checking (flags & 0x80) != 0. These are zero-hop only.
+	ControlFlagNodeDiscover = 0x80
 
 	// Text message types (upper 6 bits of txt_type field)
 	TxtTypePlain  = 0x00 // Plain text message
@@ -438,8 +443,8 @@ func ParseResponseContent(data []byte) (*ResponseContent, error) {
 
 // PathContent represents the decrypted content of a PATH payload.
 type PathContent struct {
-	PathLen   uint8  // Length of path
-	Path      []byte // List of node hashes (1 byte each)
+	PathLen   uint8  // Wire byte: mode (bits 7-6) | hop count (bits 5-0)
+	Path      []byte // Actual path bytes (hopCount * hashSize)
 	ExtraType uint8  // Bundled payload type (e.g., ACK or RESPONSE)
 	Extra     []byte // Bundled payload content
 }
@@ -450,18 +455,21 @@ func ParsePathContent(data []byte) (*PathContent, error) {
 		return nil, fmt.Errorf("path content too short: expected at least 2 bytes, got %d", len(data))
 	}
 
-	pathLen := data[0]
-	if len(data) < int(1+pathLen+1) { // path_len + path + extra_type
-		return nil, fmt.Errorf("path content too short for path length %d", pathLen)
+	info := PathInfoFromWireByte(data[0])
+	pathByteLen := info.ByteLen()
+
+	if len(data) < 1+pathByteLen+1 { // wire_byte + path_bytes + extra_type
+		return nil, fmt.Errorf("path content too short for %d hops at %d-byte hashes",
+			info.HopCount, info.HashSize)
 	}
 
 	content := &PathContent{
-		PathLen: pathLen,
-		Path:    make([]byte, pathLen),
+		PathLen: data[0],
+		Path:    make([]byte, pathByteLen),
 	}
-	copy(content.Path, data[1:1+pathLen])
+	copy(content.Path, data[1:1+pathByteLen])
 
-	extraTypeOffset := 1 + int(pathLen)
+	extraTypeOffset := 1 + pathByteLen
 	content.ExtraType = data[extraTypeOffset]
 
 	if extraTypeOffset+1 < len(data) {
@@ -637,6 +645,79 @@ func ParseDiscoverRespFromControl(ctrl *ControlPayload) (*DiscoverRespPayload, e
 
 // GetSNR returns the signal-to-noise ratio in dB.
 func (d *DiscoverRespPayload) GetSNR() float32 {
+	return float32(d.SNR) / 4.0
+}
+
+// -----------------------------------------------------------------------------
+// Node Neighbor Discovery (zero-hop control packets)
+// -----------------------------------------------------------------------------
+
+// IsNodeDiscoverControl returns true if a ControlPayload has bit 7 set in the
+// flags byte. Both regular mesh discovery and node neighbor discovery share
+// subtypes 0x08/0x09 and have this bit set. The distinction is in how they
+// arrive: node neighbor discovery is zero-hop only, while mesh discovery uses
+// flood routing. Higher-level code should check the packet's route type.
+func IsNodeDiscoverControl(ctrl *ControlPayload) bool {
+	return ctrl.Flags&ControlFlagNodeDiscover != 0
+}
+
+// NodeDiscoverReqPayload represents a node neighbor discovery request.
+// Sent as zero-hop only. Repeaters respond with NodeDiscoverRespPayload.
+type NodeDiscoverReqPayload struct {
+	TypeFilter uint8  // Bit mask for node type filtering (e.g., 1<<NodeTypeRepeater)
+	Tag        uint32 // Random tag for matching responses
+	Since      uint32 // Timestamp filter (0 = all)
+}
+
+// ParseNodeDiscoverReqFromControl parses a node discover request from a ControlPayload.
+func ParseNodeDiscoverReqFromControl(ctrl *ControlPayload) (*NodeDiscoverReqPayload, error) {
+	if !IsNodeDiscoverControl(ctrl) || ctrl.Subtype != ControlSubtypeDiscoverReq {
+		return nil, fmt.Errorf("not a NODE_DISCOVER_REQ: flags 0x%02x", ctrl.Flags)
+	}
+	// Data layout: typeFilter(1) + tag(4) + [since(4)]
+	if len(ctrl.Data) < 5 {
+		return nil, fmt.Errorf("node discover request too short: expected at least 5 bytes, got %d", len(ctrl.Data))
+	}
+	payload := &NodeDiscoverReqPayload{
+		TypeFilter: ctrl.Data[0],
+		Tag:        binary.LittleEndian.Uint32(ctrl.Data[1:5]),
+	}
+	if len(ctrl.Data) >= 9 {
+		payload.Since = binary.LittleEndian.Uint32(ctrl.Data[5:9])
+	}
+	return payload, nil
+}
+
+// NodeDiscoverRespPayload represents a node neighbor discovery response.
+type NodeDiscoverRespPayload struct {
+	NodeType uint8  // Node type (lower 4 bits of flags)
+	SNR      int8   // Inbound SNR (raw value, multiply by 0.25 for dB)
+	Tag      uint32 // Reflected from request
+	PubKey   []byte // Public key (8 or 32 bytes)
+}
+
+// ParseNodeDiscoverRespFromControl parses a node discover response from a ControlPayload.
+func ParseNodeDiscoverRespFromControl(ctrl *ControlPayload) (*NodeDiscoverRespPayload, error) {
+	if !IsNodeDiscoverControl(ctrl) || ctrl.Subtype != ControlSubtypeDiscoverResp {
+		return nil, fmt.Errorf("not a NODE_DISCOVER_RESP: flags 0x%02x", ctrl.Flags)
+	}
+	// Data layout: snr(1) + tag(4) + pubkey(8 or 32)
+	if len(ctrl.Data) < 5 {
+		return nil, fmt.Errorf("node discover response too short: expected at least 5 bytes, got %d", len(ctrl.Data))
+	}
+	payload := &NodeDiscoverRespPayload{
+		NodeType: ctrl.Flags & 0x0F,
+		SNR:      int8(ctrl.Data[0]),
+		Tag:      binary.LittleEndian.Uint32(ctrl.Data[1:5]),
+	}
+	if len(ctrl.Data) > 5 {
+		payload.PubKey = ctrl.Data[5:]
+	}
+	return payload, nil
+}
+
+// GetSNR returns the signal-to-noise ratio in dB.
+func (d *NodeDiscoverRespPayload) GetSNR() float32 {
 	return float32(d.SNR) / 4.0
 }
 

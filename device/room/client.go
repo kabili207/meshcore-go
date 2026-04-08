@@ -19,7 +19,7 @@ type ClientInfo struct {
 	Permissions uint8
 
 	// Routing
-	OutPathLen int8   // -1 = unknown, >=0 = direct path length
+	OutPathLen uint8  // 0xFF = unknown, else encoded path_len wire byte
 	OutPath    []byte // direct routing path
 
 	// Timestamps

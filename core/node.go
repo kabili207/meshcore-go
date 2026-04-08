@@ -19,6 +19,17 @@ func (m MeshCoreID) Hash() uint8 {
 	return m[0]
 }
 
+// HashN returns the first n bytes of the public key as a path hash.
+// Used for variable-width path hashes (1, 2, or 3 bytes per hop).
+func (m MeshCoreID) HashN(n int) []byte {
+	if n <= 0 || n > len(m) {
+		return nil
+	}
+	out := make([]byte, n)
+	copy(out, m[:n])
+	return out
+}
+
 // Bytes returns the underlying byte slice.
 func (m MeshCoreID) Bytes() []byte {
 	return m[:]
