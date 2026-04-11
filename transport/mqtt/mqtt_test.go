@@ -13,8 +13,8 @@ func TestNew_Defaults(t *testing.T) {
 		NodeID: "test",
 	})
 
-	if tr.cfg.TopicPrefix != DefaultTopicPrefix {
-		t.Errorf("expected default topic prefix %q, got %q", DefaultTopicPrefix, tr.cfg.TopicPrefix)
+	if tr.cfg.Topic != "meshcore/bridge" {
+		t.Errorf("expected default topic %q, got %q", "meshcore/bridge", tr.cfg.Topic)
 	}
 	if tr.log == nil {
 		t.Error("expected logger to be set")
@@ -23,18 +23,18 @@ func TestNew_Defaults(t *testing.T) {
 
 func TestNew_CustomConfig(t *testing.T) {
 	tr := New(Config{
-		Broker:      "tcp://broker.example.com:1883",
-		Username:    "user",
-		Password:    "pass",
-		TopicPrefix: "custom",
-		NodeID:      "my-mesh",
+		Broker:   "tcp://broker.example.com:1883",
+		Username: "user",
+		Password: "pass",
+		Topic:    "custom/topic",
+		NodeID:   "my-node",
 	})
 
-	if tr.cfg.TopicPrefix != "custom" {
-		t.Errorf("expected topic prefix %q, got %q", "custom", tr.cfg.TopicPrefix)
+	if tr.cfg.Topic != "custom/topic" {
+		t.Errorf("expected topic %q, got %q", "custom/topic", tr.cfg.Topic)
 	}
-	if tr.cfg.NodeID != "my-mesh" {
-		t.Errorf("expected node ID %q, got %q", "my-mesh", tr.cfg.NodeID)
+	if tr.cfg.NodeID != "my-node" {
+		t.Errorf("expected node ID %q, got %q", "my-node", tr.cfg.NodeID)
 	}
 }
 

@@ -1,18 +1,15 @@
 // Package mqtt provides an MQTT transport for connecting to MeshCore mesh networks.
 //
-// MeshCore packets are transmitted as base64-encoded strings over MQTT topics
-// in the format "{prefix}/{nodeID}". Each node publishes to its own topic and
-// subscribes to "{prefix}/+" to receive packets from all other nodes.
+// MeshCore packets are transmitted directly over MQTT topics as raw bytes.
+// A single topic is used for both publishing and subscribing.
 package mqtt
 
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,11 +21,6 @@ import (
 // Compile-time interface check.
 var _ transport.Transport = (*Transport)(nil)
 
-const (
-	// DefaultTopicPrefix is the default MQTT topic prefix for MeshCore packets.
-	DefaultTopicPrefix = "meshcore"
-)
-
 // Config holds the configuration for an MQTT transport.
 type Config struct {
 	// Broker is the MQTT broker URL (e.g., "tcp://broker.example.com:1883").
@@ -39,14 +31,11 @@ type Config struct {
 	Password string
 	// UseTLS enables TLS for the MQTT connection.
 	UseTLS bool
-	// ClientID is the MQTT client identifier. If empty, defaults to "meshcore-{NodeID}".
+	// ClientID is the MQTT client identifier. If empty, defaults to "mc-bridge-{NodeID}".
 	ClientID string
-	// TopicPrefix is the MQTT topic prefix (default: "meshcore").
-	TopicPrefix string
-	// NodeID uniquely identifies this node on the MQTT broker. Each node publishes
-	// to "{TopicPrefix}/{NodeID}" and subscribes to "{TopicPrefix}/+" to receive
-	// packets from all other nodes. Messages from this node's own topic are
-	// filtered out to prevent loopback.
+	// Topic is the MQTT topic for publishing and subscribing.
+	Topic string
+	// NodeID uniquely identifies this node on the MQTT broker.
 	NodeID string
 	// Logger is the logger to use. If nil, slog.Default() is used.
 	Logger *slog.Logger
@@ -65,8 +54,8 @@ type Transport struct {
 
 // New creates a new MQTT transport with the given configuration.
 func New(cfg Config) *Transport {
-	if cfg.TopicPrefix == "" {
-		cfg.TopicPrefix = DefaultTopicPrefix
+	if cfg.Topic == "" {
+		cfg.Topic = "meshcore/bridge"
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -89,7 +78,7 @@ func (t *Transport) Start(ctx context.Context) error {
 
 	clientID := t.cfg.ClientID
 	if clientID == "" {
-		clientID = "meshcore-" + t.cfg.NodeID
+		clientID = "mc-bridge-" + t.cfg.NodeID
 	}
 
 	opts := paho.NewClientOptions().
@@ -165,17 +154,15 @@ func (t *Transport) SetStateHandler(fn transport.StateHandler) {
 	t.stateHandler = fn
 }
 
-// SendPacket encodes a MeshCore packet and publishes it to this node's topic.
+// SendPacket encodes a MeshCore packet and publishes it to the MQTT topic.
 func (t *Transport) SendPacket(packet *codec.Packet) error {
 	if !t.IsConnected() {
 		return errors.New("not connected")
 	}
 
 	data := packet.WriteTo()
-	payload := base64.StdEncoding.EncodeToString(data)
-	topic := t.cfg.TopicPrefix + "/" + t.cfg.NodeID
 
-	token := t.client.Publish(topic, 0, false, payload)
+	token := t.client.Publish(t.cfg.Topic, 0, false, data)
 	if !token.WaitTimeout(10 * time.Second) {
 		return errors.New("timeout publishing to MQTT")
 	}
@@ -183,21 +170,11 @@ func (t *Transport) SendPacket(packet *codec.Packet) error {
 }
 
 func (t *Transport) subscribe() {
-	pattern := t.cfg.TopicPrefix + "/+"
-	t.client.Subscribe(pattern, 0, t.handleMessage)
-	t.log.Debug("subscribed to mesh topic", "pattern", pattern)
+	t.client.Subscribe(t.cfg.Topic, 0, t.handleMessage)
+	t.log.Debug("subscribed to topic", "topic", t.cfg.Topic)
 }
 
 func (t *Transport) handleMessage(_ paho.Client, message paho.Message) {
-	// Drop our own messages to prevent loopback. The source node ID is
-	// the last segment of the topic (e.g., "meshcore/mynode" → "mynode").
-	topic := message.Topic()
-	if lastSlash := strings.LastIndex(topic, "/"); lastSlash >= 0 {
-		if topic[lastSlash+1:] == t.cfg.NodeID {
-			return
-		}
-	}
-
 	t.mu.RLock()
 	handler := t.packetHandler
 	t.mu.RUnlock()
@@ -206,14 +183,8 @@ func (t *Transport) handleMessage(_ paho.Client, message paho.Message) {
 		return
 	}
 
-	rawData, err := base64.StdEncoding.DecodeString(string(message.Payload()))
-	if err != nil {
-		t.log.Debug("failed to decode base64 payload", "error", err)
-		return
-	}
-
 	var packet codec.Packet
-	if err := packet.ReadFrom(rawData); err != nil {
+	if err := packet.ReadFrom(message.Payload()); err != nil {
 		t.log.Debug("failed to parse MeshCore packet", "error", err)
 		return
 	}
