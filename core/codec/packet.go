@@ -21,19 +21,19 @@ const (
 	RouteTypeTransportDirect = 0x03 // Direct route + transport codes
 
 	// Payload types
-	PayloadTypeReq        = 0x00 // Request (dest/src hashes, MAC, encrypted data)
-	PayloadTypeResponse   = 0x01 // Response to REQ or ANON_REQ
-	PayloadTypeTxtMsg     = 0x02 // Plain text message
-	PayloadTypeAck        = 0x03 // Simple acknowledgment
-	PayloadTypeAdvert     = 0x04 // Node advertising its identity
-	PayloadTypeGrpTxt     = 0x05 // Group text message (unverified)
-	PayloadTypeGrpData    = 0x06 // Group datagram (unverified)
-	PayloadTypeAnonReq    = 0x07 // Anonymous request
-	PayloadTypePath       = 0x08 // Returned path
-	PayloadTypeTrace      = 0x09 // Trace path, collecting SNI for each hop
-	PayloadTypeMultipart  = 0x0A // Packet is one of a set
-	PayloadTypeControl    = 0x0B // Control/discovery packet
-	PayloadTypeRawCustom  = 0x0F // Custom packet (raw bytes)
+	PayloadTypeReq       = 0x00 // Request (dest/src hashes, MAC, encrypted data)
+	PayloadTypeResponse  = 0x01 // Response to REQ or ANON_REQ
+	PayloadTypeTxtMsg    = 0x02 // Plain text message
+	PayloadTypeAck       = 0x03 // Simple acknowledgment
+	PayloadTypeAdvert    = 0x04 // Node advertising its identity
+	PayloadTypeGrpTxt    = 0x05 // Group text message (unverified)
+	PayloadTypeGrpData   = 0x06 // Group datagram (unverified)
+	PayloadTypeAnonReq   = 0x07 // Anonymous request
+	PayloadTypePath      = 0x08 // Returned path
+	PayloadTypeTrace     = 0x09 // Trace path, collecting SNI for each hop
+	PayloadTypeMultipart = 0x0A // Packet is one of a set
+	PayloadTypeControl   = 0x0B // Control/discovery packet
+	PayloadTypeRawCustom = 0x0F // Custom packet (raw bytes)
 
 	// Payload versions
 	PayloadVer1 = 0x00 // 1-byte src/dest hashes, 2-byte MAC
@@ -42,8 +42,9 @@ const (
 	PayloadVer4 = 0x03 // Future
 
 	// Size limits
-	MaxPathSize      = 64
-	MaxPacketPayload = 184
+	MaxPathSize        = 64
+	MaxPacketPayload   = 184
+	MaxGroupDataLength = (MaxPacketPayload - 16 - 3) // 165 bytes (184 - CIPHER_BLOCK_SIZE - 3 bytes overhead)
 
 	// HeaderDoNotRetransmit marks a packet that must not be forwarded by relays.
 	HeaderDoNotRetransmit = 0xFF

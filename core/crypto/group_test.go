@@ -222,3 +222,97 @@ func TestEncryptDecryptRoundTripWithDefaultKey(t *testing.T) {
 		t.Errorf("message = %q, want %q", msg, message)
 	}
 }
+
+// Test ParseGrpDataContent and BuildGrpDataPlaintext for v1.15.0+ format.
+func TestBuildAndParseGrpDataContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataType uint16
+		data     []byte
+	}{
+		{
+			name:     "simple binary data",
+			dataType: 0x1234,
+			data:     []byte{0x01, 0x02, 0x03, 0x04},
+		},
+		{
+			name:     "empty data",
+			dataType: 0x0000,
+			data:     []byte{},
+		},
+		{
+			name:     "max length data",
+			dataType: 0xFFFF,
+			data:     make([]byte, 255),
+		},
+		{
+			name:     "JSON-like data",
+			dataType: 0x0001,
+			data:     []byte(`{"temp":22.5,"humidity":60}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Build plaintext
+			plaintext := BuildGrpDataPlaintext(tt.dataType, tt.data)
+
+			// Should be 3 + len(data) bytes
+			expectedLen := 3 + len(tt.data)
+			if len(plaintext) != expectedLen {
+				t.Errorf("plaintext length = %d, want %d", len(plaintext), expectedLen)
+			}
+
+			// Parse and verify
+			content, err := ParseGrpDataContent(plaintext)
+			if err != nil {
+				t.Fatalf("ParseGrpDataContent() error = %v", err)
+			}
+
+			if content.DataType != tt.dataType {
+				t.Errorf("DataType = 0x%04X, want 0x%04X", content.DataType, tt.dataType)
+			}
+
+			if !bytes.Equal(content.Data, tt.data) {
+				t.Errorf("Data = %v, want %v", content.Data, tt.data)
+			}
+		})
+	}
+}
+
+func TestParseGrpDataContentTooShort(t *testing.T) {
+	// Less than 3 bytes (minimum header)
+	_, err := ParseGrpDataContent([]byte{0x01, 0x02})
+	if err == nil {
+		t.Error("ParseGrpDataContent() should error on short input")
+	}
+}
+
+func TestParseGrpDataContentLengthMismatch(t *testing.T) {
+	// Header says data_len=10 but only 5 bytes follow
+	plaintext := []byte{0x01, 0x00, 0x0A, 0x01, 0x02, 0x03, 0x04, 0x05}
+	_, err := ParseGrpDataContent(plaintext)
+	if err == nil {
+		t.Error("ParseGrpDataContent() should error when data shorter than declared length")
+	}
+}
+
+func TestParseGrpDataContentWithExtra(t *testing.T) {
+	// Extra bytes after data should be ignored (they're padding)
+	plaintext := BuildGrpDataPlaintext(0x1234, []byte{0x01, 0x02})
+	plaintext = append(plaintext, 0xFF, 0xFF, 0xFF) // Add padding
+
+	content, err := ParseGrpDataContent(plaintext)
+	if err != nil {
+		t.Fatalf("ParseGrpDataContent() error = %v", err)
+	}
+
+	if content.DataType != 0x1234 {
+		t.Errorf("DataType = 0x%04X, want 0x1234", content.DataType)
+	}
+
+	expectedData := []byte{0x01, 0x02}
+	if !bytes.Equal(content.Data, expectedData) {
+		t.Errorf("Data = %v, want %v", content.Data, expectedData)
+	}
+}

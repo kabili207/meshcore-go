@@ -15,6 +15,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/room"
+	"github.com/kabili207/meshcore-go/device/router"
 )
 
 // RoomConfig configures a RoomNode.
@@ -24,6 +25,12 @@ type RoomConfig struct {
 
 	// Transports to connect to the mesh network.
 	Transports []TransportOption
+
+	// Router is an existing router to use. If nil, RoomNode creates its own.
+	// Pre-creating a router is useful when other components need to reference
+	// it before the node exists, for example a stats provider that reads
+	// router counters or an observer wired via Router.SetPacketMonitor.
+	Router *router.Router
 
 	// Contacts is the contact store. Required.
 	Contacts contact.ContactStore
@@ -112,6 +119,7 @@ func NewRoom(cfg RoomConfig) (*RoomNode, error) {
 		Contacts:       cfg.Contacts,
 		Clock:          clk,
 		ACKTracker:     tracker,
+		Router:         cfg.Router,
 		Transports:     cfg.Transports,
 		ForwardPackets: forwardPackets,
 		EventHandlers:  cfg.EventHandlers,
@@ -136,17 +144,25 @@ func NewRoom(cfg RoomConfig) (*RoomNode, error) {
 	srv := room.NewServer(roomCfg)
 	srv.SetSender(base) // BaseNode implements room.NodeSender
 
-	// Build advert scheduler
-	advertBuilder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
-		PrivateKey: cfg.PrivateKey,
-		PublicKey:  base.PublicKey(),
-		Clock:      clk,
-		AppData: &codec.AdvertAppData{
+	// Share the AppData pointer between the room server's CLI handlers and
+	// the advert builder so that "set name/lat/lon" commands take effect on
+	// subsequent advertisements. If the caller didn't supply AppData, fall
+	// back to the RoomConfig fields.
+	appData := roomCfg.AppData
+	if appData == nil {
+		appData = &codec.AdvertAppData{
 			Name:     cfg.Name,
 			NodeType: nodeType,
 			Lat:      cfg.Lat,
 			Lon:      cfg.Lon,
-		},
+		}
+	}
+
+	advertBuilder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
+		PrivateKey: cfg.PrivateKey,
+		PublicKey:  base.PublicKey(),
+		Clock:      clk,
+		AppData:    appData,
 	})
 
 	localInterval := cfg.AdvertLocalInterval

@@ -156,6 +156,11 @@ func (b *BaseNode) handleAnonReq(pkt *codec.Packet, src transport.PacketSource) 
 		return
 	}
 
+	// Match firmware: drop anon requests not addressed to us.
+	if anonPayload.DestHash != b.id.Hash() {
+		return
+	}
+
 	// Decrypt using our private key and the sender's ephemeral public key
 	plaintext, err := crypto.DecryptAnonymous(
 		codec.PrependMAC(anonPayload.MAC, anonPayload.Ciphertext),
@@ -355,6 +360,14 @@ func (b *BaseNode) decryptAddressed(pkt *codec.Packet) (*contact.ContactInfo, []
 	addrPayload, err := codec.ParseAddressedPayload(pkt.Payload)
 	if err != nil {
 		b.log.Debug("failed to parse addressed payload", "error", err)
+		return nil, nil, nil
+	}
+
+	// Match firmware's isHashMatch() check: only attempt decrypt if the
+	// destination hash matches our own. Without this, every addressed packet
+	// transiting a busy MQTT broker triggers a candidate search and decrypt
+	// attempt, producing log spam.
+	if addrPayload.DestHash != b.id.Hash() {
 		return nil, nil, nil
 	}
 
