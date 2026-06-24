@@ -134,12 +134,5 @@ const (
 	PathLenUnknown = 0xFF // Unknown path (use flood routing)
 )
 
-// Frame format constants.
-const (
-	// FrameHeaderSize is the size of the command frame header (cmd byte + optional fields).
-	FrameHeaderSize = 1
-
-	// MaxChannelDataLength is the maximum payload for CMD_SEND_CHANNEL_DATA.
-	// Calculated as MAX_FRAME_SIZE - 9 bytes overhead.
-	MaxChannelDataLength = 247
-)
+// Frame-size constants (MaxFrameSize, MaxChannelDataLength, FrameHeaderSize)
+// live in constants.go.

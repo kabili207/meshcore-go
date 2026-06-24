@@ -36,6 +36,15 @@ TxtTypePlain messages after successful decryption. The `trimTxtMsgPlaintext` +
 `ComputeAckHash` + send pattern should be encapsulated so consumers don't need to
 know about ECB padding.
 
+**v1.16 update:** Plain text-message ACKs are now 6 bytes, not 4. The first 4 bytes
+are the same hash; byte 4 is the sender's tail attempt byte (the byte after the
+message text, present when the send attempt exceeds 3, else 0) and byte 5 is random.
+The sender still matches only the leading 4 bytes; the extra two make the ACK's
+packet hash unique now that ACKs dedup through the normal packet-hash table instead
+of a separate checksum table. Use `codec.BuildAckPayloadExt(hash, attempt, rnd)` for
+plain text. Signed messages and keepalives keep the 4-byte `codec.BuildAckPayload`.
+The room server's `buildPlainTextAck` in `dispatch.go` is the reference.
+
 ---
 
 ## 2. No Companion Node Packet Handler

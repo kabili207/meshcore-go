@@ -13,6 +13,10 @@ const (
 	// DefaultMaxContacts is the default maximum number of contacts.
 	DefaultMaxContacts = 32
 
+	// DefaultMaxAnonContacts is the default size of the transient/anonymous
+	// contact pool, held in addition to MaxContacts (firmware MAX_ANON_CONTACTS).
+	DefaultMaxAnonContacts = 8
+
 	// MaxSearchResults is the maximum number of results returned by SearchByHash.
 	// Multiple contacts may share the same 1-byte hash (collision).
 	MaxSearchResults = 8
@@ -32,9 +36,14 @@ var _ ContactStore = (*ContactManager)(nil)
 
 // ManagerConfig configures a ContactManager.
 type ManagerConfig struct {
-	// MaxContacts is the maximum number of contacts to store.
+	// MaxContacts is the maximum number of regular contacts to store.
 	// Default: 32 (DefaultMaxContacts).
 	MaxContacts int
+
+	// MaxAnonContacts is the size of the transient/anonymous contact pool,
+	// held in addition to MaxContacts. Transient (ADV_TYPE_NONE) contacts evict
+	// only each other, never a regular contact. Default: 8.
+	MaxAnonContacts int
 
 	// OverwriteWhenFull enables overwriting the oldest non-favorite contact
 	// when the list is full. When false, AddContact returns ErrContactsFull.
@@ -68,6 +77,9 @@ func NewManager(localPrivKey ed25519.PrivateKey, cfg ManagerConfig) *ContactMana
 	if cfg.MaxContacts <= 0 {
 		cfg.MaxContacts = DefaultMaxContacts
 	}
+	if cfg.MaxAnonContacts <= 0 {
+		cfg.MaxAnonContacts = DefaultMaxAnonContacts
+	}
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -75,7 +87,7 @@ func NewManager(localPrivKey ed25519.PrivateKey, cfg ManagerConfig) *ContactMana
 	return &ContactManager{
 		cfg:      cfg,
 		log:      logger.WithGroup("contacts"),
-		contacts: make([]*ContactInfo, 0, cfg.MaxContacts),
+		contacts: make([]*ContactInfo, 0, cfg.MaxContacts+cfg.MaxAnonContacts),
 		localKey: localPrivKey,
 	}
 }
@@ -115,7 +127,7 @@ func (m *ContactManager) AddContact(c *ContactInfo) (*ContactInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	stored := m.allocateSlot()
+	stored := m.allocateSlot(c.IsTransient())
 	if stored == nil {
 		return nil, ErrContactsFull
 	}
@@ -267,20 +279,26 @@ func (m *ContactManager) ForEach(fn func(c *ContactInfo) bool) {
 }
 
 // allocateSlot returns a pointer to an available contact slot.
-// If the list is full and OverwriteWhenFull is enabled, evicts the oldest
-// non-favorite contact (by LastMod timestamp). Returns nil if no slot is available.
+//
+// Transient (ADV_TYPE_NONE) and regular contacts share the same backing array
+// (capacity MaxContacts+MaxAnonContacts) but evict from separate pools: a
+// transientOnly add recycles the oldest transient contact, while a regular add
+// evicts the oldest non-favorite, non-transient contact (only when
+// OverwriteWhenFull is enabled). Returns nil if no slot is available.
 //
 // Must be called with m.mu held for writing.
-func (m *ContactManager) allocateSlot() *ContactInfo {
-	// Case 1: space available
+func (m *ContactManager) allocateSlot(transientOnly bool) *ContactInfo {
+	// Case 1: space available. Matches firmware, where num_contacts is gated by
+	// MAX_CONTACTS; the +MaxAnonContacts only sizes the backing array headroom.
 	if len(m.contacts) < m.cfg.MaxContacts {
 		c := &ContactInfo{}
 		m.contacts = append(m.contacts, c)
 		return c
 	}
 
-	// Case 2: overwrite oldest non-favorite
-	if !m.cfg.OverwriteWhenFull {
+	// Case 2: evict. Transient adds always recycle within the anon pool;
+	// regular adds only overwrite when OverwriteWhenFull is enabled.
+	if !transientOnly && !m.cfg.OverwriteWhenFull {
 		return nil
 	}
 
@@ -288,7 +306,11 @@ func (m *ContactManager) allocateSlot() *ContactInfo {
 	var oldestMod uint32 = 0xFFFFFFFF
 
 	for i, c := range m.contacts {
-		if c.IsFavorite() {
+		if transientOnly {
+			if !c.IsTransient() {
+				continue
+			}
+		} else if c.IsFavorite() || c.IsTransient() {
 			continue
 		}
 		if c.LastMod < oldestMod {
@@ -298,7 +320,7 @@ func (m *ContactManager) allocateSlot() *ContactInfo {
 	}
 
 	if oldestIdx < 0 {
-		// All contacts are favorites
+		// No evictable contact in the target pool.
 		return nil
 	}
 

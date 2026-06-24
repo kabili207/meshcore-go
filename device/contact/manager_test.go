@@ -5,8 +5,15 @@ import (
 	"testing"
 
 	"github.com/kabili207/meshcore-go/core"
+	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 )
+
+func makeTransientContact(id core.MeshCoreID, name string, lastMod uint32) *ContactInfo {
+	c := makeContactWithID(id, name, lastMod)
+	c.Type = codec.NodeTypeNone
+	return c
+}
 
 func makeIDWithHash(hash byte) core.MeshCoreID {
 	var id core.MeshCoreID
@@ -584,5 +591,75 @@ func TestManager_OverwriteEvictsCorrectContact(t *testing.T) {
 	// id2 (favorite) should still be present
 	if m.GetByPubKey(id2) == nil {
 		t.Error("id2 (favorite) should NOT have been evicted")
+	}
+}
+
+// --- Transient/anonymous contact pool (firmware MAX_ANON_CONTACTS) ---
+
+// A transient add recycles the oldest transient even when OverwriteWhenFull is
+// off; transient contacts always churn within their own pool.
+func TestManager_TransientEvictsOnlyTransients(t *testing.T) {
+	m := newTestManager(t, 2, false) // overwrite off
+
+	t1 := makeIDWithHash(0x01)
+	t2 := makeIDWithHash(0x02)
+	t3 := makeIDWithHash(0x03)
+
+	m.AddContact(makeTransientContact(t1, "Anon1", 100)) // oldest
+	m.AddContact(makeTransientContact(t2, "Anon2", 200))
+
+	var evicted core.MeshCoreID
+	m.SetOnContactOverwrite(func(id core.MeshCoreID) { evicted = id })
+
+	if _, err := m.AddContact(makeTransientContact(t3, "Anon3", 300)); err != nil {
+		t.Fatalf("transient add should recycle the oldest transient, got %v", err)
+	}
+	if evicted != t1 {
+		t.Error("oldest transient (t1) should have been evicted")
+	}
+	if m.GetByPubKey(t1) != nil {
+		t.Error("evicted transient should be gone")
+	}
+	if m.GetByPubKey(t2) == nil || m.GetByPubKey(t3) == nil {
+		t.Error("t2 and t3 should be present")
+	}
+}
+
+// A regular add never evicts a transient, even if the transient is the oldest.
+func TestManager_RegularAddNeverEvictsTransient(t *testing.T) {
+	m := newTestManager(t, 2, true) // overwrite on
+
+	tid := makeIDWithHash(0x01)
+	r1 := makeIDWithHash(0x02)
+	r2 := makeIDWithHash(0x03)
+
+	m.AddContact(makeTransientContact(tid, "Anon", 50)) // oldest overall
+	m.AddContact(makeContactWithID(r1, "Reg1", 100))
+
+	var evicted core.MeshCoreID
+	m.SetOnContactOverwrite(func(id core.MeshCoreID) { evicted = id })
+
+	if _, err := m.AddContact(makeContactWithID(r2, "Reg2", 300)); err != nil {
+		t.Fatalf("regular add with overwrite failed: %v", err)
+	}
+	if evicted != r1 {
+		t.Error("regular add should evict the oldest regular (r1), not the older transient")
+	}
+	if m.GetByPubKey(tid) == nil {
+		t.Error("transient should survive a regular add")
+	}
+}
+
+// When the list is full of regular contacts and overwrite is off, a transient
+// add finds nothing to recycle and fails (firmware returns NULL).
+func TestManager_TransientAddFullOfRegulars(t *testing.T) {
+	m := newTestManager(t, 2, false)
+
+	m.AddContact(makeContactWithID(makeIDWithHash(0x01), "Reg1", 100))
+	m.AddContact(makeContactWithID(makeIDWithHash(0x02), "Reg2", 200))
+
+	_, err := m.AddContact(makeTransientContact(makeIDWithHash(0x03), "Anon", 300))
+	if err != ErrContactsFull {
+		t.Errorf("expected ErrContactsFull, got %v", err)
 	}
 }

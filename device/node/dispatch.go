@@ -107,11 +107,13 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 	// Update contact path from flood route
 	b.updateContactPathFromFlood(pkt, ct)
 
-	// Auto-ACK before emitting event (matches firmware behavior)
+	// Auto-ACK before emitting event (matches firmware behavior). Since v1.16
+	// plain text-message ACKs are the 6-byte extended form (hash + tail attempt
+	// byte + random); see codec.BuildAckPayloadExt.
 	if b.autoACK && content.TxtType == codec.TxtTypePlain {
 		ackData := codec.TrimTxtMsgContent(plaintext, content)
 		ackHash := crypto.ComputeAckHash(ackData, ct.ID[:])
-		b.SendACK(ct.ID, ackHash)
+		b.sendAckPayload(ct.ID, codec.BuildPlainTextAck(ackHash, plaintext, ackData))
 	}
 
 	reply := b.buildReplyContext(pkt, ct, secret)

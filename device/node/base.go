@@ -284,9 +284,16 @@ func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, 
 	return nil
 }
 
-// SendACK sends an ACK packet to the recipient.
+// SendACK sends a 4-byte ACK packet to the recipient (signed/keepalive ACKs).
 func (b *BaseNode) SendACK(to core.MeshCoreID, ackHash uint32) {
-	pkt := codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeFlood, codec.BuildAckPayload(ackHash))
+	b.sendAckPayload(to, codec.BuildAckPayload(ackHash))
+}
+
+// sendAckPayload sends an ACK with a caller-supplied wire payload: 4 bytes for
+// signed/keepalive ACKs, or the 6-byte extended form for plain text messages
+// (see codec.BuildAckPayloadExt).
+func (b *BaseNode) sendAckPayload(to core.MeshCoreID, payload []byte) {
+	pkt := codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeFlood, payload)
 
 	ct := b.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {

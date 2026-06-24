@@ -1,23 +1,24 @@
 // Package dedupe provides packet deduplication for MeshCore networks.
 //
-// It tracks recently seen packets using circular buffers, matching the
-// firmware's SimpleMeshTables implementation. Regular packets are identified
-// by an 8-byte SHA256 hash of their payload type and payload content. ACK
-// packets are tracked separately by their 4-byte checksum value.
+// It tracks recently seen packets using a circular buffer, matching the
+// firmware's SimpleMeshTables implementation. Every packet, including ACKs, is
+// identified by an 8-byte SHA256 hash of its payload type and payload content.
+//
+// Since firmware v1.16 ACKs are deduplicated through this same hash table rather
+// than a separate checksum table. Plain text-message ACKs carry a trailing
+// random byte (see codec.BuildAckPayloadExt) so distinct ACKs hash differently
+// and are not falsely collapsed.
 package dedupe
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 
 	"github.com/kabili207/meshcore-go/core/codec"
 )
 
 const (
 	// DefaultMaxPacketHashes is the default capacity for the packet hash table.
-	DefaultMaxPacketHashes = 128
-	// DefaultMaxAckHashes is the default capacity for the ACK hash table.
-	DefaultMaxAckHashes = 64
+	DefaultMaxPacketHashes = 160
 	// PacketHashSize is the truncated SHA256 hash size for packet deduplication.
 	PacketHashSize = 8
 )
@@ -25,55 +26,29 @@ const (
 // PacketDeduplicator tracks recently seen packets to prevent processing duplicates.
 type PacketDeduplicator struct {
 	hashes    []byte // circular buffer of PacketHashSize-byte hashes
-	acks      []uint32
 	maxHashes int
-	maxAcks   int
 	nextHash  int
-	nextAck   int
 }
 
-// New creates a new PacketDeduplicator with default buffer sizes.
+// New creates a new PacketDeduplicator with the default buffer size.
 func New() *PacketDeduplicator {
-	return NewWithCapacity(DefaultMaxPacketHashes, DefaultMaxAckHashes)
+	return NewWithCapacity(DefaultMaxPacketHashes)
 }
 
-// NewWithCapacity creates a new PacketDeduplicator with the specified buffer sizes.
-func NewWithCapacity(maxHashes, maxAcks int) *PacketDeduplicator {
+// NewWithCapacity creates a new PacketDeduplicator with the specified hash table size.
+func NewWithCapacity(maxHashes int) *PacketDeduplicator {
 	return &PacketDeduplicator{
 		hashes:    make([]byte, maxHashes*PacketHashSize),
-		acks:      make([]uint32, maxAcks),
 		maxHashes: maxHashes,
-		maxAcks:   maxAcks,
 	}
 }
 
 // HasSeen checks if a packet has been seen before. If not, it records the
 // packet and returns false. If it has been seen, it returns true.
 //
-// ACK packets are tracked by their 4-byte checksum value in a separate table.
-// All other packets are tracked by a truncated SHA256 hash of their content.
+// All packets, including ACKs, are tracked by a truncated SHA256 hash of their
+// content.
 func (d *PacketDeduplicator) HasSeen(packet *codec.Packet) bool {
-	if packet.PayloadType() == codec.PayloadTypeAck && len(packet.Payload) >= 4 {
-		return d.hasSeenAck(packet)
-	}
-	return d.hasSeenPacket(packet)
-}
-
-func (d *PacketDeduplicator) hasSeenAck(packet *codec.Packet) bool {
-	ack := binary.LittleEndian.Uint32(packet.Payload[:4])
-
-	for i := range d.maxAcks {
-		if d.acks[i] == ack {
-			return true
-		}
-	}
-
-	d.acks[d.nextAck] = ack
-	d.nextAck = (d.nextAck + 1) % d.maxAcks
-	return false
-}
-
-func (d *PacketDeduplicator) hasSeenPacket(packet *codec.Packet) bool {
 	hash := CalculatePacketHash(packet)
 
 	for i := range d.maxHashes {
@@ -92,9 +67,7 @@ func (d *PacketDeduplicator) hasSeenPacket(packet *codec.Packet) bool {
 // Clear resets the deduplicator, forgetting all previously seen packets.
 func (d *PacketDeduplicator) Clear() {
 	clear(d.hashes)
-	clear(d.acks)
 	d.nextHash = 0
-	d.nextAck = 0
 }
 
 // CalculatePacketHash computes the 8-byte deduplication hash for a packet.

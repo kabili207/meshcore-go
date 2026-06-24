@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/kabili207/meshcore-go/core"
+	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 )
 
@@ -78,6 +79,13 @@ func (c *ContactInfo) SetFavorite(fav bool) {
 // HasDirectPath returns true if a direct routing path is known for this contact.
 func (c *ContactInfo) HasDirectPath() bool {
 	return c.OutPathLen != PathUnknown
+}
+
+// IsTransient returns true if the contact is transient/anonymous
+// (firmware ADV_TYPE_NONE). Transient contacts live in a small separate pool
+// and are evicted independently of regular contacts.
+func (c *ContactInfo) IsTransient() bool {
+	return c.Type == codec.NodeTypeNone
 }
 
 // GetSharedSecret lazily computes and caches the ECDH shared secret between

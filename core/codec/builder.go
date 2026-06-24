@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"math"
 )
@@ -122,11 +123,43 @@ func BuildAdvertAppData(appData *AdvertAppData) []byte {
 // ACK Builder
 // -----------------------------------------------------------------------------
 
-// BuildAckPayload builds a wire-format ACK payload.
+// BuildAckPayload builds a wire-format 4-byte ACK payload. Used by signed,
+// keepalive, and connection ACKs.
 func BuildAckPayload(checksum uint32) []byte {
 	data := make([]byte, AckSize)
 	binary.LittleEndian.PutUint32(data, checksum)
 	return data
+}
+
+// BuildAckPayloadExt builds the extended 6-byte ACK payload used by plain
+// text-message ACKs since firmware v1.16. Layout: checksum(4 LE), attempt byte,
+// random byte. The sender only matches the leading 4-byte checksum; the trailing
+// two bytes exist to make the packet hash unique so distinct ACKs are not
+// collapsed by the deduplication table.
+func BuildAckPayloadExt(checksum uint32, attempt, rnd byte) []byte {
+	data := make([]byte, AckSizeExt)
+	binary.LittleEndian.PutUint32(data[0:4], checksum)
+	data[4] = attempt
+	data[5] = rnd
+	return data
+}
+
+// BuildPlainTextAck assembles the 6-byte extended ACK for a received plain text
+// message. Byte [4] is the sender's tail attempt byte (the byte after the
+// message text, which the sender appends when the send attempt exceeds 3, else
+// 0); byte [5] is random.
+//
+// plaintext is the full decrypted (block-padded) content; ackData is the
+// unpadded header+text (length 5+text_len, e.g. from TrimTxtMsgContent), so the
+// tail attempt byte sits at plaintext[len(ackData)+1].
+func BuildPlainTextAck(checksum uint32, plaintext, ackData []byte) []byte {
+	var attempt byte
+	if idx := len(ackData) + 1; idx < len(plaintext) {
+		attempt = plaintext[idx]
+	}
+	var rnd [1]byte
+	_, _ = rand.Read(rnd[:])
+	return BuildAckPayloadExt(checksum, attempt, rnd[0])
 }
 
 // -----------------------------------------------------------------------------

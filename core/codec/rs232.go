@@ -9,7 +9,9 @@ import (
 const (
 	// BridgePacketMagic is the magic number that starts every RS232 frame.
 	BridgePacketMagic uint16 = 0xC03E
-	// MaxTransUnit is the maximum payload size in an RS232 frame (MAX_TRANS_UNIT + 1).
+	// MaxTransUnit is the maximum payload size in an RS232 frame (firmware
+	// MAX_TRANS_UNIT 255, + 1). This bounds a full on-air mesh packet bridged over
+	// RS232. It is NOT the companion serial frame size (see serial.MaxFrameSize).
 	MaxTransUnit = 256
 	// FrameHeaderSize is the size of the RS232 frame header (magic 2 + length 2).
 	FrameHeaderSize = 4

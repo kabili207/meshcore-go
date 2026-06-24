@@ -15,6 +15,7 @@ const (
 	AdvertMinSize       = AdvertPubKeySize + AdvertTimestampSize + AdvertSignatureSize // 100 bytes
 
 	// AppData flags - node types (lower 4 bits)
+	NodeTypeNone     = 0x00 // ADV_TYPE_NONE: transient/anonymous contact
 	NodeTypeChat     = 0x01
 	NodeTypeRepeater = 0x02
 	NodeTypeRoom     = 0x03
@@ -29,8 +30,13 @@ const (
 	// Coordinate scale factor (lat/lon stored as int32 * 1_000_000)
 	CoordScale = 1_000_000.0
 
-	// ACK payload size
-	AckSize = 4
+	// ACK payload size. AckSize is the base size (4-byte hash) used by signed,
+	// keepalive, and connection ACKs. AckSizeExt is the extended size used by
+	// plain text-message ACKs since firmware v1.16: the 4-byte hash plus an
+	// attempt byte and a random byte, which make the packet hash unique for
+	// deduplication.
+	AckSize    = 4
+	AckSizeExt = 6
 
 	// Addressed payload header size (TXT_MSG, REQ, RESPONSE, PATH)
 	// dest_hash(1) + src_hash(1) + MAC(2) = 4 bytes

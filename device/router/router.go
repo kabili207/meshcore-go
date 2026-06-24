@@ -16,7 +16,6 @@ package router
 
 import (
 	"context"
-	"encoding/binary"
 	"log/slog"
 	"sync"
 	"time"
@@ -31,6 +30,12 @@ import (
 const (
 	// DefaultMaxFloodHops is the maximum number of flood hops before a packet is dropped.
 	DefaultMaxFloodHops = codec.MaxPathSize // 64
+
+	// DefaultMaxUnscopedFloodHops is the default hop limit for unscoped flood packets.
+	DefaultMaxUnscopedFloodHops = 64
+
+	// DefaultMaxAdvertFloodHops is the default hop limit for flooded ADVERT packets.
+	DefaultMaxAdvertFloodHops = 8
 
 	// DefaultDrainInterval is the default interval for the send queue drain loop.
 	DefaultDrainInterval = 10 * time.Millisecond
@@ -81,6 +86,16 @@ type Config struct {
 	// Packets with hop count >= MaxFloodHops are not forwarded.
 	// Default: 64 (MaxPathSize).
 	MaxFloodHops int
+
+	// MaxUnscopedFloodHops limits how far unscoped flood packets (RouteTypeFlood,
+	// i.e. without region transport codes) propagate. Scoped flood
+	// (RouteTypeTransportFlood) is not affected. Firmware's flood.max.unscoped.
+	// Default: 64.
+	MaxUnscopedFloodHops int
+
+	// MaxAdvertFloodHops limits how far flooded ADVERT packets propagate, to curb
+	// advert storms. Firmware's flood.max.advert. Default: 8.
+	MaxAdvertFloodHops int
 
 	// PathHashMode controls the hash size used when originating flood packets.
 	// 0 = 1-byte hashes (default, backward-compatible), 1 = 2-byte, 2 = 3-byte.
@@ -133,6 +148,12 @@ type transportEntry struct {
 func New(cfg Config) *Router {
 	if cfg.MaxFloodHops <= 0 {
 		cfg.MaxFloodHops = DefaultMaxFloodHops
+	}
+	if cfg.MaxUnscopedFloodHops <= 0 {
+		cfg.MaxUnscopedFloodHops = DefaultMaxUnscopedFloodHops
+	}
+	if cfg.MaxAdvertFloodHops <= 0 {
+		cfg.MaxAdvertFloodHops = DefaultMaxAdvertFloodHops
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -425,23 +446,28 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 // and queues it at the highest priority. This matches the firmware's
 // routeDirectRecvAcks() behavior where new packets are created rather than
 // retransmitting the original.
+//
+// The full payload is copied verbatim. Since v1.16 plain text-message ACKs are
+// 6 bytes (hash + attempt + random); truncating to the 4-byte hash would both
+// drop those bytes and change the packet hash used for deduplication along the
+// path.
 func (r *Router) forwardAck(pkt *codec.Packet) {
 	if len(pkt.Payload) < codec.AckSize {
 		return
 	}
-	crc := binary.LittleEndian.Uint32(pkt.Payload[:4])
 
 	ackPkt := &codec.Packet{
 		Header:       pkt.Header,
 		PathLen:      pkt.PathLen,
 		PathHashSize: pkt.PathHashSize,
 		Path:         make([]byte, len(pkt.Path)),
-		Payload:      codec.BuildAckPayload(crc),
+		Payload:      make([]byte, len(pkt.Payload)),
 	}
 	if pkt.HasTransportCodes() {
 		ackPkt.TransportCodes = pkt.TransportCodes
 	}
 	copy(ackPkt.Path, pkt.Path)
+	copy(ackPkt.Payload, pkt.Payload)
 
 	r.enqueue(ackPkt, PriorityDirect, 0, 0, true)
 }
@@ -468,6 +494,14 @@ func (r *Router) routeFloodForward(pkt *codec.Packet, src transport.PacketSource
 
 	info := pkt.PathInfo()
 	if int(info.HopCount)+1 > r.cfg.MaxFloodHops {
+		return
+	}
+	// Tiered flood caps (firmware flood.max.unscoped / flood.max.advert).
+	// These mirror the >= semantics of the MaxFloodHops check above.
+	if pkt.RouteType() == codec.RouteTypeFlood && int(info.HopCount)+1 > r.cfg.MaxUnscopedFloodHops {
+		return
+	}
+	if pkt.PayloadType() == codec.PayloadTypeAdvert && int(info.HopCount)+1 > r.cfg.MaxAdvertFloodHops {
 		return
 	}
 

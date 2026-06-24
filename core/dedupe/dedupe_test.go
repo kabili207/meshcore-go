@@ -20,6 +20,10 @@ func makeAckPacket(checksum uint32) *codec.Packet {
 	return makePacket(codec.PayloadTypeAck, payload)
 }
 
+func makeAckPacketExt(checksum uint32, attempt, rnd byte) *codec.Packet {
+	return makePacket(codec.PayloadTypeAck, codec.BuildAckPayloadExt(checksum, attempt, rnd))
+}
+
 func TestHasSeen_NewPacket(t *testing.T) {
 	d := New()
 	pkt := makePacket(codec.PayloadTypeTxtMsg, []byte{0x01, 0x02, 0x03})
@@ -85,8 +89,28 @@ func TestHasSeen_DifferentAcks(t *testing.T) {
 	}
 }
 
+// Since v1.16, plain text-message ACKs carry a trailing random byte so two
+// ACKs for the same message (e.g. different send attempts) hash differently and
+// are not falsely collapsed by the dedup table.
+func TestHasSeen_ExtAcksDifferByRandomByte(t *testing.T) {
+	d := New()
+	ack1 := makeAckPacketExt(0x12345678, 0, 0xAA)
+	ack2 := makeAckPacketExt(0x12345678, 0, 0xBB)
+
+	if d.HasSeen(ack1) {
+		t.Error("first extended ACK should not be marked as seen")
+	}
+	if d.HasSeen(ack2) {
+		t.Error("extended ACK differing only in the random byte should not be seen")
+	}
+	// An identical (e.g. forwarded) copy of ack1 must still dedup.
+	if !d.HasSeen(makeAckPacketExt(0x12345678, 0, 0xAA)) {
+		t.Error("identical extended ACK should be deduped")
+	}
+}
+
 func TestHasSeen_CircularOverwrite(t *testing.T) {
-	d := NewWithCapacity(4, 4)
+	d := NewWithCapacity(4)
 
 	// Fill up the hash table
 	for i := range 4 {
@@ -110,33 +134,6 @@ func TestHasSeen_CircularOverwrite(t *testing.T) {
 	freshFirst := makePacket(codec.PayloadTypeTxtMsg, []byte{0x00})
 	if d.HasSeen(freshFirst) {
 		t.Error("evicted entry should not be marked as seen")
-	}
-}
-
-func TestHasSeen_AckCircularOverwrite(t *testing.T) {
-	d := NewWithCapacity(4, 2)
-
-	ack1 := makeAckPacket(0xAAAAAAAA)
-	ack2 := makeAckPacket(0xBBBBBBBB)
-	ack3 := makeAckPacket(0xCCCCCCCC)
-
-	d.HasSeen(ack1) // slot 0 = ack1
-	d.HasSeen(ack2) // slot 1 = ack2
-	d.HasSeen(ack3) // slot 0 = ack3, evicts ack1
-
-	// ack3 should still be seen (in slot 0)
-	if !d.HasSeen(ack3) {
-		t.Error("ack3 should still be in table")
-	}
-
-	// ack2 should still be seen (in slot 1)
-	if !d.HasSeen(ack2) {
-		t.Error("ack2 should still be in table")
-	}
-
-	// ack1 was evicted — should not be seen
-	if d.HasSeen(ack1) {
-		t.Error("evicted ACK should not be marked as seen")
 	}
 }
 

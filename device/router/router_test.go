@@ -156,6 +156,66 @@ func TestHandlePacket_FloodMaxPath(t *testing.T) {
 	}
 }
 
+func TestHandlePacket_FloodAdvertCap(t *testing.T) {
+	// Default MaxAdvertFloodHops is 8: an advert at 7 hops forwards, at 8 it drops,
+	// while non-advert flood traffic at the same hop count is unaffected.
+	newRouter := func() (*Router, *mockTransport) {
+		mt := newMockTransport()
+		r := New(Config{SelfID: selfID(0xAA), ForwardPackets: true})
+		r.AddTransport(mt, transport.PacketSourceMQTT)
+		return r, mt
+	}
+
+	advert7 := makeFloodPacket(codec.PayloadTypeAdvert, []byte{0x01})
+	advert7.PathLen = 7
+	advert7.Path = []byte{1, 2, 3, 4, 5, 6, 7}
+	r, mt := newRouter()
+	r.HandlePacket(advert7, transport.PacketSourceSerial)
+	if mt.sentCount() != 1 {
+		t.Errorf("advert at 7 hops should forward, got %d sends", mt.sentCount())
+	}
+
+	advert8 := makeFloodPacket(codec.PayloadTypeAdvert, []byte{0x01})
+	advert8.PathLen = 8
+	advert8.Path = []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	r, mt = newRouter()
+	r.HandlePacket(advert8, transport.PacketSourceSerial)
+	if mt.sentCount() != 0 {
+		t.Errorf("advert at 8 hops should drop, got %d sends", mt.sentCount())
+	}
+
+	// A non-advert flood packet at 8 hops is well under MaxFloodHops and forwards.
+	txt8 := makeFloodPacket(codec.PayloadTypeTxtMsg, []byte{0x01})
+	txt8.PathLen = 8
+	txt8.Path = []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	r, mt = newRouter()
+	r.HandlePacket(txt8, transport.PacketSourceSerial)
+	if mt.sentCount() != 1 {
+		t.Errorf("non-advert flood at 8 hops should forward, got %d sends", mt.sentCount())
+	}
+}
+
+func TestHandlePacket_FloodUnscopedCap(t *testing.T) {
+	// With MaxUnscopedFloodHops=4 but MaxFloodHops at its default 64, an unscoped
+	// flood packet at 4 hops is dropped by the unscoped cap specifically.
+	mt := newMockTransport()
+	r := New(Config{
+		SelfID:               selfID(0xAA),
+		ForwardPackets:       true,
+		MaxUnscopedFloodHops: 4,
+	})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	pkt := makeFloodPacket(codec.PayloadTypeTxtMsg, []byte{0x01})
+	pkt.PathLen = 4
+	pkt.Path = []byte{1, 2, 3, 4}
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+
+	if mt.sentCount() != 0 {
+		t.Errorf("unscoped flood at 4 hops should drop, got %d sends", mt.sentCount())
+	}
+}
+
 func TestHandlePacket_FloodDoNotRetransmit(t *testing.T) {
 	mt := newMockTransport()
 	r := New(Config{

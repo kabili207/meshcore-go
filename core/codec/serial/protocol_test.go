@@ -46,7 +46,7 @@ func TestSpecialConstants(t *testing.T) {
 	if PathLenUnknown != 0xFF {
 		t.Errorf("PathLenUnknown = 0x%02X, want 0xFF", PathLenUnknown)
 	}
-	if MaxChannelDataLength != 247 {
-		t.Errorf("MaxChannelDataLength = %d, want 247", MaxChannelDataLength)
+	if MaxChannelDataLength != 167 {
+		t.Errorf("MaxChannelDataLength = %d, want 167", MaxChannelDataLength)
 	}
 }

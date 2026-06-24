@@ -2,6 +2,7 @@ package codec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
@@ -181,6 +182,35 @@ func TestBuildAckPayloadRoundTrip(t *testing.T) {
 
 	if parsed.Checksum != checksum {
 		t.Errorf("Checksum = %08x, want %08x", parsed.Checksum, checksum)
+	}
+}
+
+func TestBuildAckPayloadExt(t *testing.T) {
+	checksum := uint32(0xDEADBEEF)
+	data := BuildAckPayloadExt(checksum, 0x07, 0x42)
+
+	if len(data) != AckSizeExt {
+		t.Fatalf("len = %d, want %d", len(data), AckSizeExt)
+	}
+	// Byte layout: hash(4 LE), attempt, random.
+	if got := binary.LittleEndian.Uint32(data[0:4]); got != checksum {
+		t.Errorf("checksum = %08x, want %08x", got, checksum)
+	}
+	if data[4] != 0x07 {
+		t.Errorf("attempt byte = %02x, want 07", data[4])
+	}
+	if data[5] != 0x42 {
+		t.Errorf("random byte = %02x, want 42", data[5])
+	}
+
+	// The sender matches only the leading 4-byte checksum, so a parse of the
+	// extended payload must yield the same checksum as the 4-byte form.
+	parsed, err := ParseAckPayload(data)
+	if err != nil {
+		t.Fatalf("ParseAckPayload() error = %v", err)
+	}
+	if parsed.Checksum != checksum {
+		t.Errorf("parsed checksum = %08x, want %08x", parsed.Checksum, checksum)
 	}
 }
 

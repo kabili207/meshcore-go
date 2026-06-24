@@ -3,8 +3,8 @@ package room
 import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
-	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/transport"
 )
 
@@ -203,8 +203,10 @@ func (s *Server) handleTextMessage(pkt *codec.Packet, client *ClientInfo, sender
 			"sender", senderID.String(),
 			"timestamp", nowTS)
 
-		// Send ACK back (plain text only — firmware doesn't ACK CLI commands)
-		s.sendACK(pkt, senderID, secret, ackHash)
+		// Send ACK back (plain text only — firmware doesn't ACK CLI commands).
+		// Since v1.16 plain text-message ACKs are the 6-byte extended form: the
+		// 4-byte hash, the sender's tail attempt byte, and a random byte.
+		s.sendACK(pkt, senderID, secret, codec.BuildPlainTextAck(ackHash, plaintext, ackData))
 
 	case codec.TxtTypeCLI:
 		// CLI commands — admin only, reply instead of ACK
@@ -237,7 +239,7 @@ func (s *Server) handleRequest(pkt *codec.Packet, client *ClientInfo, senderID c
 		s.log.Debug("keepalive", "peer", senderID.String())
 		ackData := codec.TrimRequestContent(plaintext, content)
 		ackHash := crypto.ComputeAckHash(ackData, senderID[:])
-		s.sendACK(pkt, senderID, secret, ackHash)
+		s.sendACK(pkt, senderID, secret, codec.BuildAckPayload(ackHash))
 
 	case codec.ReqTypeGetStats:
 		s.log.Debug("get_status", "peer", senderID.String())
@@ -258,10 +260,10 @@ func (s *Server) handleRequest(pkt *codec.Packet, client *ClientInfo, senderID c
 	}
 }
 
-// sendACK sends an ACK packet back to the sender.
-func (s *Server) sendACK(origPkt *codec.Packet, recipientID core.MeshCoreID, secret []byte, ackHash uint32) {
-	ackPayloadBytes := codec.BuildAckPayload(ackHash)
-
+// sendACK sends an ACK packet back to the sender. The caller supplies the
+// wire-format ACK payload: 4 bytes for signed/keepalive ACKs, or the 6-byte
+// extended form for plain text messages (see codec.BuildAckPayloadExt).
+func (s *Server) sendACK(origPkt *codec.Packet, recipientID core.MeshCoreID, secret []byte, ackPayloadBytes []byte) {
 	ackPkt := &codec.Packet{
 		Header:  codec.PayloadTypeAck << codec.PHTypeShift,
 		Payload: ackPayloadBytes,
