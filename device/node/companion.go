@@ -14,6 +14,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/advert"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/router"
 )
 
 // CompanionConfig configures a CompanionNode.
@@ -187,6 +188,18 @@ func (n *CompanionNode) ID() core.MeshCoreID { return n.base.ID() }
 // SendReply sends an encrypted response using a ReplyContext from a received event.
 func (n *CompanionNode) SendReply(reply event.ReplyContext, to core.MeshCoreID, payloadType uint8, plaintext []byte) error {
 	return n.base.SendReply(reply, to, payloadType, plaintext)
+}
+
+// SetSendScope scopes this node's outbound flood traffic (messages, ACKs, path
+// returns) to a region. Derive the key with router.TransportKeyFromRegion.
+// Adverts and direct sends stay unscoped. Call ClearSendScope to revert.
+func (n *CompanionNode) SetSendScope(key router.TransportKey) {
+	n.base.Router.SetSendScope(key)
+}
+
+// ClearSendScope reverts to unscoped flood sending.
+func (n *CompanionNode) ClearSendScope() {
+	n.base.Router.ClearSendScope()
 }
 
 // AdvertScheduler returns the advert scheduler for manual control

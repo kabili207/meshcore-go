@@ -113,8 +113,21 @@ type Config struct {
 
 	// ValidateTransportCode is called for packets that include transport codes.
 	// If non-nil, it must return true for the packet to be processed.
+	//
 	// If nil, packets with transport codes pass through without validation.
+	// This is the correct default for a companion/client node: like the
+	// firmware companion, it accepts scoped traffic and simply processes
+	// whatever is addressed to it. A repeater that forwards scoped floods must
+	// set this (e.g. via NewTransportCodeValidator) so that packets whose code
+	// matches no configured region are dropped, matching the firmware's
+	// allowPacketForward() where an unmatched TRANSPORT_FLOOD is not relayed.
 	ValidateTransportCode TransportCodeValidator
+
+	// SendScope, when non-null, scopes outbound flood traffic to a region by
+	// attaching transport codes (see SendFloodScoped / SendFloodPathScoped).
+	// Adverts and direct sends are never scoped. Mirrors the firmware's
+	// send_scope. Default: null key (unscoped).
+	SendScope TransportKey
 
 	// Logger for routing events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
@@ -582,6 +595,70 @@ func (r *Router) SendFlood(pkt *codec.Packet) {
 
 	r.counters.SentFlood.Add(1)
 	r.enqueue(pkt, PriorityFloodData, 0, 0, true)
+}
+
+// SetSendScope sets the region send scope used by SendFloodScoped and
+// SendFloodPathScoped. Pass a key from TransportKeyFromRegion. A null key
+// disables scoping (equivalent to ClearSendScope).
+func (r *Router) SetSendScope(key TransportKey) { r.cfg.SendScope = key }
+
+// ClearSendScope disables region scoping for outbound flood traffic.
+func (r *Router) ClearSendScope() { r.cfg.SendScope = TransportKey{} }
+
+// SendScope returns the current region send scope (null key if unscoped).
+func (r *Router) SendScope() TransportKey { return r.cfg.SendScope }
+
+// SendFloodScoped sends a flood packet scoped to the configured send scope.
+// When no scope is set (SendScope is null) it is identical to SendFlood.
+// Otherwise the packet is sent as a TRANSPORT_FLOOD carrying transport codes,
+// restricting propagation to repeaters that recognize the region.
+//
+// This mirrors the firmware's BaseChatMesh::sendFloodScoped(), which routes all
+// user-originated flood traffic (messages, ACKs, path returns, responses)
+// through the home-region scope. Adverts remain unscoped.
+func (r *Router) SendFloodScoped(pkt *codec.Packet) {
+	r.sendScopedFlood(pkt, PriorityFloodData, 0)
+}
+
+// SendFloodPathScoped is the scoped counterpart of SendFloodPath: a PATH packet
+// sent at PriorityFloodPath after PathSendDelay, scoped to the send scope when
+// one is set.
+func (r *Router) SendFloodPathScoped(pkt *codec.Packet) {
+	r.sendScopedFlood(pkt, PriorityFloodPath, PathSendDelay)
+}
+
+// sendScopedFlood is the shared implementation for the scoped flood senders.
+// With a null scope it produces an ordinary RouteTypeFlood packet; with a scope
+// set it produces a RouteTypeTransportFlood packet whose transport_codes[0] is
+// the scope's code for this packet and transport_codes[1] is 0 (matching the
+// firmware, which reserves [1] as the reply-region hint, currently unused).
+func (r *Router) sendScopedFlood(pkt *codec.Packet, priority uint8, delay time.Duration) {
+	scope := r.cfg.SendScope
+	scoped := !scope.IsNull()
+
+	routeType := uint8(codec.RouteTypeFlood)
+	if scoped {
+		routeType = codec.RouteTypeTransportFlood
+	}
+	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | routeType
+
+	hashSize := r.cfg.PathHashMode + 1
+	pkt.PathLen = codec.PathInfo{HashSize: hashSize, HopCount: 0}.ToWireByte()
+	pkt.PathHashSize = hashSize
+	pkt.Path = nil
+
+	if scoped {
+		// Transport codes hash the payload type and payload only, so they are
+		// stable regardless of the route-type change above.
+		pkt.TransportCodes[0] = scope.CalcTransportCode(pkt)
+		pkt.TransportCodes[1] = 0
+	}
+
+	// Mark as seen so we don't process it again if it loops back.
+	r.dedup.HasSeen(pkt)
+
+	r.counters.SentFlood.Add(1)
+	r.enqueue(pkt, priority, delay, 0, true)
 }
 
 // SendDirect prepares and sends a packet in direct routing mode.

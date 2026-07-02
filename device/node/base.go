@@ -257,7 +257,7 @@ func (b *BaseNode) sendEncryptedResponse(reply event.ReplyContext, to core.MeshC
 	if reply.HasDirectPath() {
 		b.Router.SendDirect(pkt, reply.DirectPath)
 	} else {
-		b.Router.SendFlood(pkt)
+		b.Router.SendFloodScoped(pkt)
 	}
 	return nil
 }
@@ -280,7 +280,7 @@ func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, 
 	payload := codec.BuildAddressedPayload(to.Hash(), b.id.Hash(), mac, ciphertext)
 	pkt := codec.NewPacket(codec.PayloadTypePath, codec.RouteTypeFlood, payload)
 
-	b.Router.SendFloodPath(pkt)
+	b.Router.SendFloodPathScoped(pkt)
 	return nil
 }
 
@@ -299,7 +299,7 @@ func (b *BaseNode) sendAckPayload(to core.MeshCoreID, payload []byte) {
 	if ct != nil && ct.HasDirectPath() {
 		b.Router.SendDirect(pkt, ct.OutPath)
 	} else {
-		b.Router.SendFlood(pkt)
+		b.Router.SendFloodScoped(pkt)
 	}
 }
 
@@ -326,7 +326,7 @@ func (b *BaseNode) SendToContact(to core.MeshCoreID, payloadType uint8, plaintex
 	if ct != nil && ct.HasDirectPath() {
 		b.Router.SendDirect(pkt, ct.OutPath)
 	} else {
-		b.Router.SendFlood(pkt)
+		b.Router.SendFloodScoped(pkt)
 	}
 	return nil
 }

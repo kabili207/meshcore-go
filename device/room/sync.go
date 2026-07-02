@@ -186,6 +186,6 @@ func (s *Server) pushPostLegacy(client *ClientInfo, post *PostInfo) {
 	if ct != nil && ct.HasDirectPath() {
 		s.cfg.Router.SendDirect(pkt, ct.OutPath)
 	} else {
-		s.cfg.Router.SendFlood(pkt)
+		s.cfg.Router.SendFloodScoped(pkt)
 	}
 }

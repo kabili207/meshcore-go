@@ -130,7 +130,7 @@ func (n *CompanionNode) sendTextChunk(to core.MeshCoreID, message string, o send
 	if ct != nil && ct.HasDirectPath() {
 		n.base.Router.SendDirect(pkt, ct.OutPath)
 	} else {
-		n.base.Router.SendFlood(pkt)
+		n.base.Router.SendFloodScoped(pkt)
 	}
 
 	// Track ACK if callbacks are provided

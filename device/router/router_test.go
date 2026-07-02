@@ -86,6 +86,66 @@ func makeDirectPacket(payloadType uint8, path []byte, payload []byte) *codec.Pac
 
 // --- Flood Routing Tests ---
 
+func TestSendFloodScoped_NoScope(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{SelfID: selfID(0xAA)})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	pkt := makeFloodPacket(codec.PayloadTypeTxtMsg, []byte{0x01, 0x02, 0x03})
+	r.SendFloodScoped(pkt)
+
+	sent := mt.lastSent()
+	if sent == nil {
+		t.Fatal("expected a packet to be sent")
+	}
+	// With no scope set, a scoped send must be an ordinary unscoped flood.
+	if sent.RouteType() != codec.RouteTypeFlood {
+		t.Errorf("route type = %d, want RouteTypeFlood", sent.RouteType())
+	}
+	if sent.HasTransportCodes() {
+		t.Error("unscoped send must not carry transport codes")
+	}
+}
+
+func TestSendFloodScoped_WithScope(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{SelfID: selfID(0xAA)})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	key := TransportKeyFromRegion("#us")
+	r.SetSendScope(key)
+
+	pkt := makeFloodPacket(codec.PayloadTypeTxtMsg, []byte{0x01, 0x02, 0x03})
+	r.SendFloodScoped(pkt)
+
+	sent := mt.lastSent()
+	if sent == nil {
+		t.Fatal("expected a packet to be sent")
+	}
+	if sent.RouteType() != codec.RouteTypeTransportFlood {
+		t.Fatalf("route type = %d, want RouteTypeTransportFlood", sent.RouteType())
+	}
+	// The attached code must be the scope's code for this packet, so a repeater
+	// configured with the same region key accepts it.
+	if got := sent.TransportCodes[0]; got != key.CalcTransportCode(sent) {
+		t.Errorf("transport_codes[0] = %d, want %d", got, key.CalcTransportCode(sent))
+	}
+	if sent.TransportCodes[1] != 0 {
+		t.Errorf("transport_codes[1] = %d, want 0", sent.TransportCodes[1])
+	}
+	if !NewTransportCodeValidator([]TransportKey{key})(sent) {
+		t.Error("a validator with the same region key should accept the scoped packet")
+	}
+
+	// Clearing the scope reverts to unscoped sending.
+	r.ClearSendScope()
+	pkt2 := makeFloodPacket(codec.PayloadTypeTxtMsg, []byte{0x04, 0x05})
+	r.SendFloodScoped(pkt2)
+	if mt.lastSent().HasTransportCodes() {
+		t.Error("after ClearSendScope, send must be unscoped")
+	}
+}
+
 func TestHandlePacket_FloodForward(t *testing.T) {
 	mt := newMockTransport()
 	r := New(Config{

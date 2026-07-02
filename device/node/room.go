@@ -244,6 +244,18 @@ func (n *RoomNode) ID() core.MeshCoreID { return n.base.ID() }
 // (e.g., setting CLI handlers, wiring persistence callbacks).
 func (n *RoomNode) Server() *room.Server { return n.server }
 
+// SetSendScope scopes this node's outbound flood traffic (responses, ACKs, path
+// returns) to a region. Derive the key with router.TransportKeyFromRegion.
+// Adverts and direct sends stay unscoped. Call ClearSendScope to revert.
+func (n *RoomNode) SetSendScope(key router.TransportKey) {
+	n.base.Router.SetSendScope(key)
+}
+
+// ClearSendScope reverts to unscoped flood sending.
+func (n *RoomNode) ClearSendScope() {
+	n.base.Router.ClearSendScope()
+}
+
 // AdvertScheduler returns the advert scheduler for manual control.
 func (n *RoomNode) AdvertScheduler() *advert.Scheduler {
 	return n.advertSched

@@ -274,6 +274,6 @@ func (s *Server) sendACK(origPkt *codec.Packet, recipientID core.MeshCoreID, sec
 	if ct != nil && ct.HasDirectPath() {
 		s.cfg.Router.SendDirect(ackPkt, ct.OutPath)
 	} else {
-		s.cfg.Router.SendFlood(ackPkt)
+		s.cfg.Router.SendFloodScoped(ackPkt)
 	}
 }
