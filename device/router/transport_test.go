@@ -24,6 +24,13 @@ func TestTransportKeyFromRegion(t *testing.T) {
 	if key == key3 {
 		t.Error("different region names should produce different keys")
 	}
+
+	// A bare name and its "#"-prefixed form must derive the same key. The
+	// firmware's getAutoKeyFor() always hashes a '#'-prefixed name, so implicit
+	// hashtag regions (no prefix) must normalize to match "#name".
+	if TransportKeyFromRegion("us") != TransportKeyFromRegion("#us") {
+		t.Error(`"us" and "#us" should produce the same key`)
+	}
 }
 
 func TestCalcTransportCode(t *testing.T) {

@@ -13,10 +13,19 @@ import (
 // are forwarded by repeaters.
 type TransportKey [16]byte
 
-// TransportKeyFromRegion derives a transport key from a region name.
-// The key is SHA256(regionName) truncated to 16 bytes. This matches the
-// firmware's getAutoKeyFor() for hashtag regions.
+// TransportKeyFromRegion derives an auto transport key from a hashtag region
+// name. The key is SHA256("#"+name) truncated to 16 bytes.
+//
+// This matches the firmware's getAutoKeyFor(), which always hashes a name that
+// begins with '#': explicit "#region" names are hashed verbatim, and bare
+// "region" names (implicit hashtag regions) are hashed with a '#' prepended.
+// The name is normalized the same way here, so "us" and "#us" yield the same
+// key. Private "$region" keys are not auto-derived and do not go through this
+// function.
 func TransportKeyFromRegion(regionName string) TransportKey {
+	if len(regionName) == 0 || regionName[0] != '#' {
+		regionName = "#" + regionName
+	}
 	hash := sha256.Sum256([]byte(regionName))
 	var key TransportKey
 	copy(key[:], hash[:16])
