@@ -129,6 +129,18 @@ type Config struct {
 	// send_scope. Default: null key (unscoped).
 	SendScope TransportKey
 
+	// RegionMap, when set, applies region policy to flood forwarding: a scoped
+	// TRANSPORT_FLOOD is forwarded only if it matches a flood-permitting region,
+	// and an unscoped FLOOD is forwarded only if the wildcard region permits
+	// flood (letting a repeater run region-only). This is the repeater-side
+	// analog of the firmware's region_map and gates forwarding only, not
+	// reception or dispatch. It is independent of ValidateTransportCode, which
+	// is a pre-dispatch hard filter.
+	//
+	// The map is read on the receive path and is not internally synchronized;
+	// callers that edit it while routing is active must synchronize those edits.
+	RegionMap *RegionMap
+
 	// Logger for routing events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -290,6 +302,17 @@ func (r *Router) SetLoopDetect(level int) {
 // SetForwardPackets enables or disables packet forwarding.
 func (r *Router) SetForwardPackets(enabled bool) {
 	r.cfg.ForwardPackets = enabled
+}
+
+// SetRegionMap sets (or clears, with nil) the region policy used for flood
+// forwarding. See Config.RegionMap for the concurrency contract.
+func (r *Router) SetRegionMap(rm *RegionMap) {
+	r.cfg.RegionMap = rm
+}
+
+// RegionMap returns the configured region policy, or nil.
+func (r *Router) RegionMap() *RegionMap {
+	return r.cfg.RegionMap
 }
 
 // notifyMonitor calls the packet monitor callback if one is set.
@@ -518,6 +541,11 @@ func (r *Router) routeFloodForward(pkt *codec.Packet, src transport.PacketSource
 		return
 	}
 
+	// Region policy: drop floods the RegionMap does not permit forwarding.
+	if !r.regionAllowsFlood(pkt) {
+		return
+	}
+
 	if r.cfg.LoopDetect > LoopDetectOff {
 		selfHash := r.cfg.SelfID.HashN(int(info.HashSize))
 		if detectLoop(pkt.Path, selfHash, int(info.HashSize), r.cfg.LoopDetect) {
@@ -540,6 +568,23 @@ func (r *Router) routeFloodForward(pkt *codec.Packet, src transport.PacketSource
 	// Firmware uses hop count as priority for flood forwarding:
 	// closer sources get lower (better) priority.
 	r.enqueue(fwd, uint8(newInfo.HopCount), 0, src, false)
+}
+
+// regionAllowsFlood applies the RegionMap policy to a flood packet's forwarding
+// decision, mirroring the firmware's filterRecvFloodPacket + allowPacketForward:
+// a scoped TRANSPORT_FLOOD is forwarded only if it matches a flood-permitting
+// region, and an unscoped FLOOD is forwarded only if the wildcard permits flood.
+// With no RegionMap configured, all floods are allowed.
+func (r *Router) regionAllowsFlood(pkt *codec.Packet) bool {
+	rm := r.cfg.RegionMap
+	if rm == nil {
+		return true
+	}
+	if pkt.RouteType() == codec.RouteTypeTransportFlood {
+		return rm.FindMatch(pkt, RegionDenyFlood) != nil
+	}
+	// Unscoped RouteTypeFlood: gated by the wildcard region's flood flag.
+	return rm.Wildcard().Flags&RegionDenyFlood == 0
 }
 
 // dispatchToApp calls the registered application packet handler.

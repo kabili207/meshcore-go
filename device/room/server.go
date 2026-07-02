@@ -89,6 +89,13 @@ type ServerConfig struct {
 	// the change to the database. May be nil.
 	OnSettingChanged func(key, value string)
 
+	// OnRegionsChanged persists the region map (Router.RegionMap) when the
+	// "region save" CLI command runs, receiving the map's MarshalBinary output.
+	// If nil, "region save" reports that persistence is unsupported. Region
+	// management commands are only available when a RegionMap is set on the
+	// Router. May be nil.
+	OnRegionsChanged func(data []byte) error
+
 	// BootloaderVersion is returned by "get bootloader.ver". On Go nodes
 	// (not running on NRF52 hardware), this is typically "ERROR: unsupported".
 	BootloaderVersion string

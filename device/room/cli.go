@@ -101,6 +101,8 @@ func (s *Server) executeCLI(cmd string) string {
 			return s.cliClearStats()
 		}
 		return "Unknown command"
+	case "region":
+		return s.cliRegion(parts[1:])
 	default:
 		if s.cfg.CLIHandler != nil {
 			return s.cfg.CLIHandler(cmd)
@@ -128,6 +130,26 @@ func (s *Server) cliClock(args []string) string {
 	t := time.Unix(int64(s.cfg.Clock.GetCurrentTime()), 0).UTC()
 	return fmt.Sprintf("%02d:%02d - %02d/%02d/%04d UTC",
 		t.Hour(), t.Minute(), t.Day(), t.Month(), t.Year())
+}
+
+// cliRegion handles "region ..." admin commands against the Router's RegionMap.
+// Requires a RegionMap to be configured on the Router; "region save" persistence
+// requires OnRegionsChanged. Edits assume packet handling is serialized (the
+// RegionMap is not internally synchronized with the router's receive path).
+func (s *Server) cliRegion(args []string) string {
+	if s.cfg.Router == nil {
+		return "Err - regions not enabled"
+	}
+	rm := s.cfg.Router.RegionMap()
+	if rm == nil {
+		return "Err - regions not enabled"
+	}
+
+	var save func() error
+	if s.cfg.OnRegionsChanged != nil {
+		save = func() error { return s.cfg.OnRegionsChanged(rm.MarshalBinary()) }
+	}
+	return rm.HandleCLICommand(args, save)
 }
 
 func (s *Server) cliVer() string {
