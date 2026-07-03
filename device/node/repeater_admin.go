@@ -26,6 +26,11 @@ func (n *RepeaterNode) dispatchEvents(evt any) {
 		n.handleRequest(e)
 	case *event.AdvertReceived:
 		n.recordNeighbor(e)
+	case *event.PacketReceived:
+		// CONTROL packets (node discovery) arrive via the catch-all event.
+		if e.RawPacket != nil && e.RawPacket.PayloadType() == codec.PayloadTypeControl {
+			n.handleControl(e.RawPacket)
+		}
 	}
 }
 

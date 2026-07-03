@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -62,13 +63,18 @@ type RepeaterConfig struct {
 // forwards all packets, advertises its presence, tracks neighbors via advert
 // processing, and authenticates admin/guest clients (ACL) for login.
 type RepeaterNode struct {
-	base        *BaseNode
-	advertSched *advert.Scheduler
-	acl         *acl.MemoryStore
-	auth        acl.Authenticator
-	neighbors   *neighborTable
-	startTime   time.Time
-	log         *slog.Logger
+	base            *BaseNode
+	advertSched     *advert.Scheduler
+	acl             *acl.MemoryStore
+	auth            acl.Authenticator
+	neighbors       *neighborTable
+	discoverLimiter *rateLimiter
+	startTime       time.Time
+	log             *slog.Logger
+
+	discoverMu           sync.Mutex
+	pendingDiscoverTag   uint32
+	pendingDiscoverUntil time.Time
 }
 
 // NewRepeater creates a RepeaterNode from the given configuration.
@@ -145,8 +151,10 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 			GuestPerms:    codec.PermACLGuest,
 		},
 		neighbors: newNeighborTable(cfg.MaxNeighbors),
-		startTime: time.Now(),
-		log:       logger.WithGroup("repeater"),
+		// Firmware discover_limiter: max 4 responses every 2 minutes.
+		discoverLimiter: newRateLimiter(4, 120),
+		startTime:       time.Now(),
+		log:             logger.WithGroup("repeater"),
 	}
 
 	// Wire admin/ACL event handling (login, and later CLI/requests).
