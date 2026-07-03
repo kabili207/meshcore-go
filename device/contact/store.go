@@ -42,3 +42,22 @@ type ContactStore interface {
 	// ForEach calls fn for each contact. Return false from fn to stop iteration.
 	ForEach(fn func(c *ContactInfo) bool)
 }
+
+// ContactPersistence is an optional durable backend for a ContactManager. When
+// configured (ManagerConfig.Persistence), the manager seeds itself from Load at
+// construction and mirrors add/update/remove mutations to Save/Delete, keeping
+// the in-memory store as the fast read path.
+//
+// Save and Delete are called while the manager holds its lock, so implementations
+// must return quickly (queue/debounce actual I/O rather than blocking). See
+// FileContactStore for a JSON-file implementation.
+type ContactPersistence interface {
+	// Load returns all persisted contacts, used to seed the manager on startup.
+	Load() ([]*ContactInfo, error)
+
+	// Save persists a contact (insert or update).
+	Save(c *ContactInfo) error
+
+	// Delete removes a persisted contact by public key.
+	Delete(id core.MeshCoreID) error
+}

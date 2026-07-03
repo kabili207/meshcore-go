@@ -51,6 +51,11 @@ type ManagerConfig struct {
 
 	// Logger for contact management events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
+
+	// Persistence, if set, makes the manager durable: it is seeded from
+	// Persistence.Load at construction, and add/update/remove mutations are
+	// mirrored to Persistence.Save/Delete. Nil keeps the manager in-memory only.
+	Persistence ContactPersistence
 }
 
 // ContactManager is a thread-safe store for known mesh peers.
@@ -59,11 +64,12 @@ type ManagerConfig struct {
 //
 // This is a standalone data structure with no dependency on the router.
 type ContactManager struct {
-	cfg      ManagerConfig
-	log      *slog.Logger
-	mu       sync.RWMutex
-	contacts []*ContactInfo
-	localKey ed25519.PrivateKey
+	cfg         ManagerConfig
+	log         *slog.Logger
+	mu          sync.RWMutex
+	contacts    []*ContactInfo
+	localKey    ed25519.PrivateKey
+	persistence ContactPersistence
 
 	onContactAdded     func(contact *ContactInfo, isNew bool)
 	onContactRemoved   func(id core.MeshCoreID)
@@ -84,12 +90,31 @@ func NewManager(localPrivKey ed25519.PrivateKey, cfg ManagerConfig) *ContactMana
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &ContactManager{
+	m := &ContactManager{
 		cfg:      cfg,
 		log:      logger.WithGroup("contacts"),
 		contacts: make([]*ContactInfo, 0, cfg.MaxContacts+cfg.MaxAnonContacts),
 		localKey: localPrivKey,
 	}
+
+	// Seed from the persistence backend, if any. AddContact runs here with
+	// m.persistence still nil (no callbacks are registered yet either), so the
+	// loaded contacts are not re-persisted. Wire the backend afterward.
+	if cfg.Persistence != nil {
+		loaded, err := cfg.Persistence.Load()
+		if err != nil {
+			m.log.Warn("failed to load persisted contacts", "error", err)
+		} else {
+			for _, c := range loaded {
+				if _, err := m.AddContact(c); err != nil {
+					break // store full
+				}
+			}
+		}
+		m.persistence = cfg.Persistence
+	}
+
+	return m
 }
 
 // SetOnContactAdded sets the callback invoked when a contact is added or updated.
@@ -156,6 +181,7 @@ func (m *ContactManager) AddContact(c *ContactInfo) (*ContactInfo, error) {
 	if m.onContactAdded != nil {
 		m.onContactAdded(stored, true)
 	}
+	m.persist(stored)
 
 	return stored, nil
 }
@@ -188,6 +214,7 @@ func (m *ContactManager) UpdateContact(c *ContactInfo) error {
 			if m.onContactAdded != nil {
 				m.onContactAdded(existing, false)
 			}
+			m.persist(existing)
 			return nil
 		}
 	}
@@ -210,10 +237,26 @@ func (m *ContactManager) RemoveContact(id core.MeshCoreID) error {
 			if m.onContactRemoved != nil {
 				m.onContactRemoved(id)
 			}
+			if m.persistence != nil {
+				if err := m.persistence.Delete(id); err != nil {
+					m.log.Debug("failed to persist contact removal", "error", err)
+				}
+			}
 			return nil
 		}
 	}
 	return ErrContactNotFound
+}
+
+// persist mirrors a contact to the persistence backend, if configured. Called
+// with m.mu held, so the backend must not block.
+func (m *ContactManager) persist(c *ContactInfo) {
+	if m.persistence == nil {
+		return
+	}
+	if err := m.persistence.Save(c); err != nil {
+		m.log.Debug("failed to persist contact", "error", err)
+	}
 }
 
 // GetByPubKey returns the contact with the exact public key, or nil if not found.
