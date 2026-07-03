@@ -118,13 +118,23 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 	// Update contact path from flood route
 	b.updateContactPathFromFlood(pkt, ct)
 
-	// Auto-ACK before emitting event (matches firmware behavior). Since v1.16
-	// plain text-message ACKs are the 6-byte extended form (hash + tail attempt
-	// byte + random); see codec.BuildAckPayloadExt.
-	if b.autoACK && content.TxtType == codec.TxtTypePlain {
-		ackData := codec.TrimTxtMsgContent(plaintext, content)
-		ackHash := crypto.ComputeAckHash(ackData, ct.ID[:])
-		b.sendAckPayload(ct.ID, codec.BuildPlainTextAck(ackHash, plaintext, ackData))
+	// Auto-ACK before emitting event (matches firmware behavior).
+	if b.autoACK {
+		switch content.TxtType {
+		case codec.TxtTypePlain:
+			// Since v1.16 plain text-message ACKs are the 6-byte extended form
+			// (hash + tail attempt byte + random), keyed by the sender's pubkey.
+			ackData := codec.TrimTxtMsgContent(plaintext, content)
+			ackHash := crypto.ComputeAckHash(ackData, ct.ID[:])
+			b.sendAckPayload(ct.ID, codec.BuildPlainTextAck(ackHash, plaintext, ackData))
+		case codec.TxtTypeSigned:
+			// Signed messages (e.g. a room server pushing a post) are ACKed with
+			// a 4-byte hash keyed by the receiver's own pubkey, over the signed
+			// content.
+			ackData := codec.TrimTxtMsgContent(plaintext, content)
+			ackHash := crypto.ComputeAckHash(ackData, b.id[:])
+			b.sendAckPayload(ct.ID, codec.BuildAckPayload(ackHash))
+		}
 	}
 
 	reply := b.buildReplyContext(pkt, ct, secret)

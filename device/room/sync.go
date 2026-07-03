@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"crypto/rand"
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -128,8 +129,25 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 		return
 	}
 
-	// Compute expected ACK hash
-	ackHash := crypto.ComputeAckHash(post.Content, s.cfg.PublicKey[:])
+	// The stored content is the plain post body; extract the text so it can be
+	// re-framed as a signed message carrying the author's identity.
+	stored, err := codec.ParseTxtMsgContent(post.Content)
+	if err != nil {
+		s.log.Debug("failed to parse stored post", "peer", client.ID.String(), "error", err)
+		return
+	}
+
+	// Build a SIGNED_PLAIN payload carrying the original author's 4-byte pubkey
+	// prefix and the post's original timestamp, so the recipient can attribute it
+	// (firmware pushPostToClient). The random attempt byte keeps the packet hash
+	// unique across retransmissions.
+	var rnd [1]byte
+	_, _ = rand.Read(rnd[:])
+	payload := codec.BuildTxtMsgContent(post.Timestamp, codec.TxtTypeSigned, rnd[0]&0x03, stored.Message, post.SenderID[:4])
+
+	// Expected ACK: signed messages are keyed by the recipient's pubkey, hashed
+	// over the full signed payload.
+	ackHash := crypto.ComputeAckHash(payload, client.ID[:])
 
 	// Track this push for ACK
 	clientID := client.ID
@@ -156,12 +174,12 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 
 	// Use event-based sender if available, otherwise fall back to legacy
 	if s.sender != nil {
-		if err := s.sender.SendToContact(client.ID, codec.PayloadTypeTxtMsg, post.Content); err != nil {
+		if err := s.sender.SendToContact(client.ID, codec.PayloadTypeTxtMsg, payload); err != nil {
 			s.log.Debug("failed to push post", "peer", client.ID.String(), "error", err)
 			return
 		}
 	} else {
-		s.pushPostLegacy(client, post)
+		s.pushPostLegacy(client, payload)
 	}
 
 	if s.cfg.PostCounter != nil {
@@ -173,16 +191,16 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 		"post_ts", postTimestamp)
 }
 
-// pushPostLegacy sends a post using the legacy Router-based path.
+// pushPostLegacy sends a pre-built post payload using the legacy Router-based path.
 // Deprecated: Use NodeSender via SetSender instead.
-func (s *Server) pushPostLegacy(client *ClientInfo, post *PostInfo) {
+func (s *Server) pushPostLegacy(client *ClientInfo, plaintext []byte) {
 	secret, err := s.cfg.Contacts.GetSharedSecret(client.ID)
 	if err != nil {
 		s.log.Debug("no shared secret for client", "peer", client.ID.String())
 		return
 	}
 
-	encrypted, err := crypto.EncryptAddressedWithSecret(post.Content, secret)
+	encrypted, err := crypto.EncryptAddressedWithSecret(plaintext, secret)
 	if err != nil {
 		s.log.Warn("failed to encrypt post for push", "error", err)
 		return

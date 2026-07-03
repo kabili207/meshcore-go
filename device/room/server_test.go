@@ -1,6 +1,7 @@
 package room
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"sync"
@@ -755,9 +756,16 @@ func TestHandleLogin_FloodResetsOutPath(t *testing.T) {
 	}
 }
 
-// mockSender captures ACK payloads sent through the NodeSender interface.
+// mockSender captures payloads sent through the NodeSender interface.
 type mockSender struct {
-	ackPayloads [][]byte
+	ackPayloads  [][]byte
+	contactSends []mockContactSend
+}
+
+type mockContactSend struct {
+	to          core.MeshCoreID
+	payloadType uint8
+	plaintext   []byte
 }
 
 func (m *mockSender) SendReply(_ event.ReplyContext, _ core.MeshCoreID, _ uint8, _ []byte) error {
@@ -767,7 +775,14 @@ func (m *mockSender) SendACK(_ core.MeshCoreID, _ uint32) {}
 func (m *mockSender) SendACKPayload(_ core.MeshCoreID, payload []byte) {
 	m.ackPayloads = append(m.ackPayloads, payload)
 }
-func (m *mockSender) SendToContact(_ core.MeshCoreID, _ uint8, _ []byte) error { return nil }
+func (m *mockSender) SendToContact(to core.MeshCoreID, payloadType uint8, plaintext []byte) error {
+	m.contactSends = append(m.contactSends, mockContactSend{
+		to:          to,
+		payloadType: payloadType,
+		plaintext:   append([]byte(nil), plaintext...),
+	})
+	return nil
+}
 
 func keepaliveClient(t *testing.T, h *testHarness) core.MeshCoreID {
 	t.Helper()
@@ -850,6 +865,62 @@ func TestHandleRequest_KeepaliveNoDirectPathSkips(t *testing.T) {
 
 	if len(ms.ackPayloads) != 0 {
 		t.Errorf("keepalive without a direct path should not respond, got %d ACKs", len(ms.ackPayloads))
+	}
+}
+
+func TestPushPost_SignedWithAuthor(t *testing.T) {
+	h := newTestHarness(t)
+	ms := &mockSender{}
+	h.server.SetSender(ms)
+
+	_, clientID := h.makeClientKeyAndContact(t)
+	client, err := h.clients.AddClient(&ClientInfo{
+		ID:           clientID,
+		Permissions:  codec.PermACLReadWrite,
+		LastActivity: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Author of the post, distinct from the recipient.
+	var authorID core.MeshCoreID
+	for i := range authorID {
+		authorID[i] = byte(i + 1)
+	}
+
+	// Store the post the way the room does: a plain content blob.
+	text := "hello room"
+	stored := codec.BuildTxtMsgContent(1234, codec.TxtTypePlain, 0, text, nil)
+	h.server.pushPostToClient(client, &PostInfo{
+		Timestamp: 1234,
+		SenderID:  authorID,
+		Content:   stored,
+	})
+
+	if len(ms.contactSends) != 1 {
+		t.Fatalf("expected 1 push, got %d", len(ms.contactSends))
+	}
+	sent := ms.contactSends[0]
+	if sent.payloadType != codec.PayloadTypeTxtMsg {
+		t.Errorf("payload type = %d, want TXT_MSG (%d)", sent.payloadType, codec.PayloadTypeTxtMsg)
+	}
+
+	parsed, err := codec.ParseTxtMsgContent(sent.plaintext)
+	if err != nil {
+		t.Fatalf("ParseTxtMsgContent: %v", err)
+	}
+	if parsed.TxtType != codec.TxtTypeSigned {
+		t.Errorf("pushed type = %d, want SIGNED (%d)", parsed.TxtType, codec.TxtTypeSigned)
+	}
+	if parsed.Timestamp != 1234 {
+		t.Errorf("pushed timestamp = %d, want 1234 (original post ts)", parsed.Timestamp)
+	}
+	if !bytes.Equal(parsed.SenderPubKeyPrefix, authorID[:4]) {
+		t.Errorf("author prefix = %x, want %x", parsed.SenderPubKeyPrefix, authorID[:4])
+	}
+	if parsed.Message != text {
+		t.Errorf("pushed text = %q, want %q", parsed.Message, text)
 	}
 }
 

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -47,6 +48,21 @@ func testNode(t *testing.T) (*BaseNode, *eventCollector) {
 	}
 
 	return node, collector
+}
+
+// captureTransport records packets the node sends, so tests can inspect ACKs.
+type captureTransport struct {
+	sent []*codec.Packet
+}
+
+func (c *captureTransport) Start(context.Context) error                { return nil }
+func (c *captureTransport) Stop() error                                { return nil }
+func (c *captureTransport) IsConnected() bool                          { return true }
+func (c *captureTransport) SetPacketHandler(_ transport.PacketHandler) {}
+func (c *captureTransport) SetStateHandler(_ transport.StateHandler)   {}
+func (c *captureTransport) SendPacket(pkt *codec.Packet) error {
+	c.sent = append(c.sent, pkt)
+	return nil
 }
 
 // peerKeyPair generates a separate keypair for simulating a remote peer.
@@ -256,6 +272,65 @@ func TestHandleTxtMsg(t *testing.T) {
 	}
 	if len(msg.Reply.SharedSecret) == 0 {
 		t.Error("expected ReplyContext to have SharedSecret")
+	}
+}
+
+// TestHandleTxtMsg_SignedAutoACK verifies that a signed message (as a room server
+// pushes for a post) is auto-ACKed with a 4-byte hash keyed by the receiver's own
+// pubkey — exactly what the server computes as its expected push ACK.
+func TestHandleTxtMsg_SignedAutoACK(t *testing.T) {
+	node, _ := testNode(t)
+	ct := &captureTransport{}
+	node.Router.AddTransport(ct, transport.PacketSourceMQTT)
+
+	peer := peerKeyPair(t)
+	var peerID core.MeshCoreID
+	copy(peerID[:], peer.PublicKey)
+	if _, err := node.contacts.AddContact(&contact.ContactInfo{
+		ID:         peerID,
+		Name:       "Server",
+		OutPathLen: contact.PathUnknown,
+	}); err != nil {
+		t.Fatalf("add contact: %v", err)
+	}
+
+	secret, err := crypto.ComputeSharedSecret(peer.PrivateKey, node.publicKey[:])
+	if err != nil {
+		t.Fatalf("compute shared secret: %v", err)
+	}
+
+	// A SIGNED_PLAIN message carrying an author pubkey prefix.
+	author := []byte{0x01, 0x02, 0x03, 0x04}
+	plaintext := codec.BuildTxtMsgContent(1234, codec.TxtTypeSigned, 0, "posted!", author)
+	encrypted, err := crypto.EncryptAddressedWithSecret(plaintext, secret)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	payload := codec.BuildAddressedPayload(node.id.Hash(), peerID.Hash(), mac, ciphertext)
+	pkt := codec.NewPacket(codec.PayloadTypeTxtMsg, codec.RouteTypeFlood, payload)
+
+	node.processPacket(pkt, transport.PacketSourceMQTT)
+
+	var ackPkt *codec.Packet
+	for _, p := range ct.sent {
+		if p.PayloadType() == codec.PayloadTypeAck {
+			ackPkt = p
+		}
+	}
+	if ackPkt == nil {
+		t.Fatal("expected an auto-ACK for the signed message")
+	}
+	if len(ackPkt.Payload) != codec.AckSize {
+		t.Errorf("signed ACK payload len = %d, want %d (4-byte form)", len(ackPkt.Payload), codec.AckSize)
+	}
+	parsedAck, err := codec.ParseAckPayload(ackPkt.Payload)
+	if err != nil {
+		t.Fatalf("ParseAckPayload: %v", err)
+	}
+	want := crypto.ComputeAckHash(plaintext, node.id[:])
+	if parsedAck.Checksum != want {
+		t.Errorf("signed ACK checksum = %08x, want %08x (keyed by receiver pubkey)", parsedAck.Checksum, want)
 	}
 }
 
