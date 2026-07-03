@@ -7,6 +7,7 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/acl"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 )
@@ -43,7 +44,7 @@ func (s *Server) HandleLogin(evt *event.AnonRequestReceived) {
 		client = existingClient
 	} else {
 		client, err = s.cfg.Clients.AddClient(&ClientInfo{
-			ID: senderID,
+			Client: acl.Client{ID: senderID},
 		})
 		if err != nil {
 			s.log.Warn("failed to add client", "error", err)

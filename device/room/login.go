@@ -7,6 +7,7 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/acl"
 	"github.com/kabili207/meshcore-go/device/contact"
 )
 
@@ -86,7 +87,7 @@ func (s *Server) handleAnonReq(pkt *codec.Packet) {
 		client = existingClient
 	} else {
 		client, err = s.cfg.Clients.AddClient(&ClientInfo{
-			ID: senderID,
+			Client: acl.Client{ID: senderID},
 		})
 		if err != nil {
 			s.log.Warn("failed to add client", "error", err)
@@ -122,32 +123,24 @@ func (s *Server) handleAnonReq(pkt *codec.Packet) {
 }
 
 // resolvePermissions determines what permission level to grant for a login.
-// Returns -1 if no permission should be granted (reject).
+// Returns -1 (acl.Reject) if no permission should be granted.
+//
+// Room mapping: admin password -> Admin, guest password -> ReadWrite, and an
+// open room (AllowReadOnly) grants Guest. Firmware assigns PERM_ACL_GUEST for
+// allow_read_only logins, and guests are blocked from posting; granting ReadOnly
+// would let open-room users post (only guests are gated in HandleTextMessage).
 func (s *Server) resolvePermissions(existing *ClientInfo, password string) int {
-	// If client already exists and is re-logging in, keep their permissions
-	if existing != nil && password == "" {
-		return int(existing.Permissions)
+	existingPerms := acl.Reject
+	if existing != nil {
+		existingPerms = int(existing.Permissions)
 	}
-
-	// Try admin password
-	if s.cfg.AdminPassword != "" && password == s.cfg.AdminPassword {
-		return int(codec.PermACLAdmin)
-	}
-
-	// Try guest password
-	if s.cfg.GuestPassword != "" && password == s.cfg.GuestPassword {
-		return int(codec.PermACLReadWrite)
-	}
-
-	// Open room grants guest access. Firmware assigns PERM_ACL_GUEST for
-	// allow_read_only logins (simple_room_server MyMesh.cpp), and guests are
-	// blocked from posting. Granting ReadOnly here would let open-room users
-	// post, since only guests are gated out in HandleTextMessage.
-	if s.cfg.AllowReadOnly {
-		return int(codec.PermACLGuest)
-	}
-
-	return -1
+	return acl.Authenticator{
+		AdminPassword: s.cfg.AdminPassword,
+		GuestPassword: s.cfg.GuestPassword,
+		GuestPerms:    codec.PermACLReadWrite,
+		AllowOpen:     s.cfg.AllowReadOnly,
+		OpenPerms:     codec.PermACLGuest,
+	}.Resolve(existingPerms, password)
 }
 
 // sendLoginResponse sends a login OK response back to the client.

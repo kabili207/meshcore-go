@@ -13,6 +13,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/ack"
+	"github.com/kabili207/meshcore-go/device/acl"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
@@ -454,7 +455,7 @@ func TestLogin_ReloginHigherTimestamp(t *testing.T) {
 func TestResolvePermissions_ExistingClient_NoPassword(t *testing.T) {
 	h := newTestHarness(t)
 
-	existing := &ClientInfo{Permissions: codec.PermACLAdmin}
+	existing := &ClientInfo{Client: acl.Client{Permissions: codec.PermACLAdmin}}
 	perm := h.server.resolvePermissions(existing, "")
 
 	if perm != int(codec.PermACLAdmin) {
@@ -503,10 +504,7 @@ func TestTextMessage_PlainPost(t *testing.T) {
 	// Login a client first
 	clientKey, clientID := h.makeClientKeyAndContact(t)
 
-	client, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite,
-	})
+	client, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,11 +536,7 @@ func TestTextMessage_ReplayRejected(t *testing.T) {
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
 
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:            clientID,
-		Permissions:   codec.PermACLReadWrite,
-		LastTimestamp: 200, // already seen timestamp 200
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite, LastTimestamp: 200}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,10 +557,7 @@ func TestTextMessage_GuestCantPost(t *testing.T) {
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
 
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLGuest, // guest can't write
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLGuest}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,10 +576,7 @@ func TestTextMessage_ReadOnlyCantPost(t *testing.T) {
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
 
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadOnly, // ReadOnly can't write
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadOnly}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,10 +596,7 @@ func TestTextMessage_AdminCanPost(t *testing.T) {
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
 
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLAdmin,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLAdmin}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,10 +655,7 @@ func TestHandleTextMessage_DuplicatePostPrevented(t *testing.T) {
 	h := newTestHarness(t)
 
 	_, clientID := h.makeClientKeyAndContact(t)
-	if _, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite,
-	}); err != nil {
+	if _, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -700,11 +682,7 @@ func TestHandleTextMessage_ReplayRejected(t *testing.T) {
 	h := newTestHarness(t)
 
 	_, clientID := h.makeClientKeyAndContact(t)
-	if _, err := h.clients.AddClient(&ClientInfo{
-		ID:            clientID,
-		Permissions:   codec.PermACLReadWrite,
-		LastTimestamp: 200,
-	}); err != nil {
+	if _, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite, LastTimestamp: 200}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -727,11 +705,7 @@ func TestHandleLogin_FloodResetsOutPath(t *testing.T) {
 	_, clientID := h.makeClientKeyAndContact(t)
 
 	// Existing client with a stored direct path.
-	if _, err := h.clients.AddClient(&ClientInfo{
-		ID:            clientID,
-		Permissions:   codec.PermACLReadWrite,
-		LastTimestamp: 100,
-	}); err != nil {
+	if _, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite, LastTimestamp: 100}}); err != nil {
 		t.Fatal(err)
 	}
 	ct := h.contacts.GetByPubKey(clientID)
@@ -787,11 +761,7 @@ func (m *mockSender) SendToContact(to core.MeshCoreID, payloadType uint8, plaint
 func keepaliveClient(t *testing.T, h *testHarness) core.MeshCoreID {
 	t.Helper()
 	_, clientID := h.makeClientKeyAndContact(t)
-	if _, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite,
-		SyncSince:   100,
-	}); err != nil {
+	if _, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}, SyncSince: 100}); err != nil {
 		t.Fatal(err)
 	}
 	return clientID
@@ -874,11 +844,7 @@ func TestPushPost_SignedWithAuthor(t *testing.T) {
 	h.server.SetSender(ms)
 
 	_, clientID := h.makeClientKeyAndContact(t)
-	client, err := h.clients.AddClient(&ClientInfo{
-		ID:           clientID,
-		Permissions:  codec.PermACLReadWrite,
-		LastActivity: 1,
-	})
+	client, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite, LastActivity: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -972,10 +938,7 @@ func TestRequest_Keepalive(t *testing.T) {
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
 
-	client, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite,
-	})
+	client, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1006,10 +969,7 @@ func TestRequest_GetStatus(t *testing.T) {
 	h.server.cfg.Stats = sp
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1062,10 +1022,7 @@ func TestRequest_GetStatus_NoProvider(t *testing.T) {
 	// No Stats provider set
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1089,10 +1046,7 @@ func TestRequest_GetTelemetry(t *testing.T) {
 	h.server.cfg.Telemetry = tp
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1139,10 +1093,7 @@ func TestRequest_GetTelemetry_GuestRestricted(t *testing.T) {
 	h.server.cfg.Telemetry = tp
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLGuest, // guest
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLGuest}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1166,10 +1117,7 @@ func TestRequest_GetTelemetry_NoProvider(t *testing.T) {
 	h := newTestHarness(t)
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1187,10 +1135,7 @@ func TestRequest_GetAccessList_Admin(t *testing.T) {
 	h := newTestHarness(t)
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLAdmin,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLAdmin}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1202,10 +1147,7 @@ func TestRequest_GetAccessList_Admin(t *testing.T) {
 	}
 	var otherID core.MeshCoreID
 	copy(otherID[:], otherKey.PublicKey)
-	_, err = h.clients.AddClient(&ClientInfo{
-		ID:          otherID,
-		Permissions: codec.PermACLAdmin,
-	})
+	_, err = h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: otherID, Permissions: codec.PermACLAdmin}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1217,10 +1159,7 @@ func TestRequest_GetAccessList_Admin(t *testing.T) {
 	}
 	var thirdID core.MeshCoreID
 	copy(thirdID[:], thirdKey.PublicKey)
-	_, err = h.clients.AddClient(&ClientInfo{
-		ID:          thirdID,
-		Permissions: codec.PermACLReadWrite,
-	})
+	_, err = h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: thirdID, Permissions: codec.PermACLReadWrite}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1263,10 +1202,7 @@ func TestRequest_GetAccessList_NonAdminRejected(t *testing.T) {
 	h := newTestHarness(t)
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLReadWrite, // not admin
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1285,10 +1221,7 @@ func TestRequest_GetAccessList_ReservedNonZero(t *testing.T) {
 	h := newTestHarness(t)
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLAdmin,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLAdmin}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1308,10 +1241,7 @@ func TestRequest_GetAccessList_EmptyACL(t *testing.T) {
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
 	// The requesting client is admin but is also the only admin
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:          clientID,
-		Permissions: codec.PermACLAdmin,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLAdmin}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1349,12 +1279,7 @@ func TestSyncOnce_PushesPost(t *testing.T) {
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
 
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:           clientID,
-		Permissions:  codec.PermACLReadWrite,
-		LastActivity: 1,
-		SyncSince:    0,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite, LastActivity: 1}, SyncSince: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1394,12 +1319,7 @@ func TestSyncOnce_SkipsOwnPosts(t *testing.T) {
 
 	_, clientID := h.makeClientKeyAndContact(t)
 
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:           clientID,
-		Permissions:  codec.PermACLReadWrite,
-		LastActivity: 1,
-		SyncSince:    0,
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite, LastActivity: 1}, SyncSince: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1436,13 +1356,7 @@ func TestSyncOnce_SkipsPushFailures(t *testing.T) {
 
 	_, clientID := h.makeClientKeyAndContact(t)
 
-	_, err := h.clients.AddClient(&ClientInfo{
-		ID:           clientID,
-		Permissions:  codec.PermACLReadWrite,
-		LastActivity: 1,
-		SyncSince:    0,
-		PushFailures: MaxPushFailures, // maxed out
-	})
+	_, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLReadWrite, LastActivity: 1}, SyncSince: 0, PushFailures: MaxPushFailures})
 	if err != nil {
 		t.Fatal(err)
 	}

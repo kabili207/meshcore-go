@@ -1,4 +1,4 @@
-package room
+package acl
 
 import (
 	"sync"
@@ -6,42 +6,38 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 )
 
-const (
-	// DefaultMaxClients is the default maximum number of clients.
-	// Firmware uses MAX_CLIENTS = 20.
-	DefaultMaxClients = 20
-)
+// DefaultMaxClients is the default client-store capacity (firmware MAX_CLIENTS = 20).
+const DefaultMaxClients = 20
 
-// Compile-time assertion that MemoryClientStore implements ClientStore.
-var _ ClientStore = (*MemoryClientStore)(nil)
+var _ Store = (*MemoryStore)(nil)
 
-// MemoryClientStore is an in-memory implementation of ClientStore.
-type MemoryClientStore struct {
+// MemoryStore is an in-memory Store. When full, it evicts the least-recently
+// active non-admin client, matching the firmware's ClientACL behavior.
+type MemoryStore struct {
 	mu         sync.RWMutex
-	clients    []*ClientInfo
+	clients    []*Client
 	maxClients int
 }
 
-// NewMemoryClientStore creates an in-memory client store with the given capacity.
+// NewMemoryStore creates an in-memory store with the given capacity.
 // If maxClients is 0, DefaultMaxClients is used.
-func NewMemoryClientStore(maxClients int) *MemoryClientStore {
+func NewMemoryStore(maxClients int) *MemoryStore {
 	if maxClients <= 0 {
 		maxClients = DefaultMaxClients
 	}
-	return &MemoryClientStore{
-		clients:    make([]*ClientInfo, 0, maxClients),
+	return &MemoryStore{
+		clients:    make([]*Client, 0, maxClients),
 		maxClients: maxClients,
 	}
 }
 
-// AddClient adds a client or updates an existing one. If the store is full,
-// the least-recently-active non-admin client is evicted. Returns ErrClientsFull
-// if all clients are admins and no slot is available.
-func (s *MemoryClientStore) AddClient(c *ClientInfo) (*ClientInfo, error) {
+// AddClient adds a client or updates an existing one. If the store is full, the
+// least-recently-active non-admin client is evicted. Returns ErrClientsFull if
+// all clients are admins and no slot is available.
+func (s *MemoryStore) AddClient(c *Client) (*Client, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check for existing client
 	for _, existing := range s.clients {
 		if existing.ID == c.ID {
 			copyClientFields(existing, c)
@@ -49,7 +45,6 @@ func (s *MemoryClientStore) AddClient(c *ClientInfo) (*ClientInfo, error) {
 		}
 	}
 
-	// Allocate new slot
 	slot := s.allocateSlot()
 	if slot == nil {
 		return nil, ErrClientsFull
@@ -60,7 +55,7 @@ func (s *MemoryClientStore) AddClient(c *ClientInfo) (*ClientInfo, error) {
 }
 
 // RemoveClient removes the client with the given public key.
-func (s *MemoryClientStore) RemoveClient(id core.MeshCoreID) error {
+func (s *MemoryStore) RemoveClient(id core.MeshCoreID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -76,7 +71,7 @@ func (s *MemoryClientStore) RemoveClient(id core.MeshCoreID) error {
 }
 
 // GetClient returns the client with the given public key, or nil.
-func (s *MemoryClientStore) GetClient(id core.MeshCoreID) *ClientInfo {
+func (s *MemoryStore) GetClient(id core.MeshCoreID) *Client {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -89,7 +84,7 @@ func (s *MemoryClientStore) GetClient(id core.MeshCoreID) *ClientInfo {
 }
 
 // UpdateClient updates mutable fields of an existing client.
-func (s *MemoryClientStore) UpdateClient(c *ClientInfo) error {
+func (s *MemoryStore) UpdateClient(c *Client) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -103,14 +98,14 @@ func (s *MemoryClientStore) UpdateClient(c *ClientInfo) error {
 }
 
 // Count returns the number of stored clients.
-func (s *MemoryClientStore) Count() int {
+func (s *MemoryStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.clients)
 }
 
 // ForEach calls fn for each client. Return false to stop.
-func (s *MemoryClientStore) ForEach(fn func(c *ClientInfo) bool) {
+func (s *MemoryStore) ForEach(fn func(c *Client) bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -121,19 +116,17 @@ func (s *MemoryClientStore) ForEach(fn func(c *ClientInfo) bool) {
 	}
 }
 
-// allocateSlot returns a pointer to a new or evicted client slot.
-// Must be called with s.mu held for writing.
-func (s *MemoryClientStore) allocateSlot() *ClientInfo {
+// allocateSlot returns a pointer to a new or evicted client slot, or nil if the
+// store is full of admins. Must be called with s.mu held for writing.
+func (s *MemoryStore) allocateSlot() *Client {
 	if len(s.clients) < s.maxClients {
-		c := &ClientInfo{}
+		c := &Client{}
 		s.clients = append(s.clients, c)
 		return c
 	}
 
-	// Evict least-recently-active non-admin
 	oldestIdx := -1
 	var oldestActivity uint32 = 0xFFFFFFFF
-
 	for i, c := range s.clients {
 		if c.IsAdmin() {
 			continue
@@ -143,26 +136,26 @@ func (s *MemoryClientStore) allocateSlot() *ClientInfo {
 			oldestIdx = i
 		}
 	}
-
 	if oldestIdx < 0 {
 		return nil // all admins
 	}
 
-	s.clients[oldestIdx] = &ClientInfo{}
+	s.clients[oldestIdx] = &Client{}
 	return s.clients[oldestIdx]
 }
 
-// copyClientFields copies mutable fields from src to dst.
-func copyClientFields(dst, src *ClientInfo) {
-	dst.Client = src.Client // includes ID, Name, Permissions, routing, timestamps
-	// Deep-copy the routing path (the struct copy above shares the slice).
+// copyClientFields copies mutable fields from src to dst (not the slot pointer).
+func copyClientFields(dst, src *Client) {
+	dst.ID = src.ID
+	dst.Name = src.Name
+	dst.Permissions = src.Permissions
+	dst.OutPathLen = src.OutPathLen
 	if len(src.OutPath) > 0 {
 		dst.OutPath = make([]byte, len(src.OutPath))
 		copy(dst.OutPath, src.OutPath)
 	} else {
 		dst.OutPath = nil
 	}
-	dst.SyncSince = src.SyncSince
-	dst.PushPostTimestamp = src.PushPostTimestamp
-	dst.PushFailures = src.PushFailures
+	dst.LastTimestamp = src.LastTimestamp
+	dst.LastActivity = src.LastActivity
 }

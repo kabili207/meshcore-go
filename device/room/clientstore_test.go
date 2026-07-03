@@ -6,6 +6,7 @@ import (
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/device/acl"
 )
 
 func makeClientID(b byte) core.MeshCoreID {
@@ -15,17 +16,11 @@ func makeClientID(b byte) core.MeshCoreID {
 }
 
 func makeClient(id core.MeshCoreID, name string, perms uint8, lastActivity uint32) *ClientInfo {
-	return &ClientInfo{
-		ID:           id,
-		Name:         name,
-		Permissions:  perms,
-		OutPathLen:   0xFF,
-		LastActivity: lastActivity,
-	}
+	return &ClientInfo{Client: acl.Client{ID: id, Name: name, Permissions: perms, OutPathLen: 0xFF, LastActivity: lastActivity}}
 }
 
 func TestClientInfo_Role(t *testing.T) {
-	c := &ClientInfo{Permissions: codec.PermACLReadWrite}
+	c := &ClientInfo{Client: acl.Client{Permissions: codec.PermACLReadWrite}}
 	if c.Role() != codec.PermACLReadWrite {
 		t.Errorf("Role() = %d, want %d", c.Role(), codec.PermACLReadWrite)
 	}
@@ -47,7 +42,7 @@ func TestClientInfo_IsAdmin(t *testing.T) {
 		{codec.PermACLAdmin, true},
 	}
 	for _, tt := range tests {
-		c := &ClientInfo{Permissions: tt.perms}
+		c := &ClientInfo{Client: acl.Client{Permissions: tt.perms}}
 		if got := c.IsAdmin(); got != tt.want {
 			t.Errorf("perms=%d: IsAdmin() = %v, want %v", tt.perms, got, tt.want)
 		}
@@ -55,7 +50,7 @@ func TestClientInfo_IsAdmin(t *testing.T) {
 }
 
 func TestClientInfo_IsGuest(t *testing.T) {
-	c := &ClientInfo{Permissions: codec.PermACLGuest}
+	c := &ClientInfo{Client: acl.Client{Permissions: codec.PermACLGuest}}
 	if !c.IsGuest() {
 		t.Error("codec.PermACLGuest should be guest")
 	}
@@ -76,7 +71,7 @@ func TestClientInfo_CanWrite(t *testing.T) {
 		{codec.PermACLAdmin, true},
 	}
 	for _, tt := range tests {
-		c := &ClientInfo{Permissions: tt.perms}
+		c := &ClientInfo{Client: acl.Client{Permissions: tt.perms}}
 		if got := c.CanWrite(); got != tt.want {
 			t.Errorf("perms=%d: CanWrite() = %v, want %v", tt.perms, got, tt.want)
 		}
@@ -94,7 +89,7 @@ func TestClientInfo_CanRead(t *testing.T) {
 		{codec.PermACLAdmin, true},
 	}
 	for _, tt := range tests {
-		c := &ClientInfo{Permissions: tt.perms}
+		c := &ClientInfo{Client: acl.Client{Permissions: tt.perms}}
 		if got := c.CanRead(); got != tt.want {
 			t.Errorf("perms=%d: CanRead() = %v, want %v", tt.perms, got, tt.want)
 		}
@@ -267,13 +262,7 @@ func TestMemoryClientStore_UpdateClient(t *testing.T) {
 
 	s.AddClient(makeClient(id, "Alice", codec.PermACLReadOnly, 100))
 
-	updated := &ClientInfo{
-		ID:           id,
-		Name:         "Alice Updated",
-		Permissions:  codec.PermACLReadWrite,
-		LastActivity: 200,
-		SyncSince:    500,
-	}
+	updated := &ClientInfo{Client: acl.Client{ID: id, Name: "Alice Updated", Permissions: codec.PermACLReadWrite, LastActivity: 200}, SyncSince: 500}
 
 	if err := s.UpdateClient(updated); err != nil {
 		t.Fatalf("UpdateClient failed: %v", err)
@@ -294,7 +283,7 @@ func TestMemoryClientStore_UpdateClient(t *testing.T) {
 func TestMemoryClientStore_UpdateClient_NotFound(t *testing.T) {
 	s := NewMemoryClientStore(10)
 
-	err := s.UpdateClient(&ClientInfo{ID: makeClientID(0xFF)})
+	err := s.UpdateClient(&ClientInfo{Client: acl.Client{ID: makeClientID(0xFF)}})
 	if err != ErrClientNotFound {
 		t.Errorf("expected ErrClientNotFound, got %v", err)
 	}
