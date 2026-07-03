@@ -18,6 +18,12 @@ type TextMessageReceived struct {
 	// indicates the sender retransmitted because it did not receive an ACK.
 	Attempt uint8
 
+	// Timestamp is the sender-supplied message timestamp from the TXT_MSG
+	// content. Consumers can use it for replay/retry detection: a message whose
+	// Timestamp is not greater than the last one seen from that sender is a
+	// retransmission and should not be reprocessed.
+	Timestamp uint32
+
 	// SenderPubKeyPrefix is the first 4 bytes of the sender's public key,
 	// present only for signed messages (TxtType == TxtTypeSigned). Nil otherwise.
 	SenderPubKeyPrefix []byte

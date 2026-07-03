@@ -116,19 +116,16 @@ func (s *Server) HandleTextMessage(evt *event.TextMessageReceived) {
 	nowTS := s.cfg.Clock.GetCurrentTime()
 	client.LastActivity = nowTS
 
-	// Replay check — the event's timestamp is from the parsed content
-	// We need to parse the raw packet content for the timestamp
-	// since the event only carries the text message string.
-	// The BaseNode has already parsed the content, but we need the sender
-	// timestamp for replay protection.
-	//
-	// For the event-based flow, the event carries the message text but
-	// the room server needs to do its own replay check using the raw
-	// packet timestamp. Since the event doesn't expose the raw timestamp,
-	// we use the RawPacket if available, or trust the event (BaseNode
-	// already verified decryption).
-	//
-	// TODO: Consider adding Timestamp to TextMessageReceived event.
+	// Replay/retry check. A message whose sender timestamp is not greater than
+	// the last one seen from this client is a retransmission (or an old replay);
+	// the ACK was already sent by BaseNode, so just skip reprocessing. Mirrors
+	// the firmware's sender_timestamp vs last_timestamp gate.
+	if evt.Timestamp <= client.LastTimestamp {
+		s.log.Debug("txt replay", "peer", senderID.String(), "ts", evt.Timestamp)
+		return
+	}
+	client.LastTimestamp = evt.Timestamp
+	client.PushFailures = 0
 
 	switch evt.TxtType {
 	case codec.TxtTypePlain:

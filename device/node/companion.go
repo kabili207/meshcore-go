@@ -100,15 +100,25 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 
 	clk := clock.New()
 
+	// Default contact store: an in-memory ContactManager. Without this, a nil
+	// Contacts store would panic on first use.
+	contacts := cfg.Contacts
+	if contacts == nil {
+		contacts = contact.NewManager(cfg.PrivateKey, contact.ManagerConfig{
+			MaxContacts:       256,
+			OverwriteWhenFull: true,
+		})
+	}
+
 	base, err := NewBase(BaseConfig{
-		PrivateKey:    cfg.PrivateKey,
-		Contacts:      cfg.Contacts,
-		Clock:         clk,
-		ACKTracker:    tracker,
-		Transports:    cfg.Transports,
+		PrivateKey:     cfg.PrivateKey,
+		Contacts:       contacts,
+		Clock:          clk,
+		ACKTracker:     tracker,
+		Transports:     cfg.Transports,
 		ForwardPackets: cfg.ForwardPackets,
-		EventHandlers: cfg.EventHandlers,
-		Logger:        logger,
+		EventHandlers:  cfg.EventHandlers,
+		Logger:         logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create base node: %w", err)

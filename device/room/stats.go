@@ -8,11 +8,13 @@ import (
 	"github.com/kabili207/meshcore-go/device/router"
 )
 
-// ServerStatsSize is the wire size of the ServerStats struct (56 bytes).
+// ServerStatsSize is the wire size of the ServerStats struct (52 bytes).
 // This must match the firmware's ServerStats struct layout exactly.
-const ServerStatsSize = 56
+// Note: the room server's ServerStats ends at n_post_push. n_recv_errors is a
+// RepeaterStats field, not a room-server one, so it is not included here.
+const ServerStatsSize = 52
 
-// ServerStats mirrors the firmware's ServerStats struct (56 bytes, little-endian).
+// ServerStats mirrors the firmware's ServerStats struct (52 bytes, little-endian).
 // It is serialized as a flat binary blob in GET_STATUS responses.
 type ServerStats struct {
 	BattMilliVolts   uint16 // Offset 0:  battery voltage in millivolts
@@ -33,11 +35,10 @@ type ServerStats struct {
 	NFloodDups       uint16 // Offset 46: flood route duplicate count
 	NPosted          uint16 // Offset 48: posts added to server
 	NPostPush        uint16 // Offset 50: posts pushed to clients
-	NRecvErrors      uint32 // Offset 52: radio receive errors (firmware v1.14+)
 }
 
 // MarshalBinary serializes the stats to a 52-byte little-endian blob
-// matching the firmware's memcpy layout.
+// matching the firmware's memcpy layout (simple_room_server ServerStats).
 func (s *ServerStats) MarshalBinary() []byte {
 	data := make([]byte, ServerStatsSize)
 	binary.LittleEndian.PutUint16(data[0:2], s.BattMilliVolts)
@@ -58,7 +59,6 @@ func (s *ServerStats) MarshalBinary() []byte {
 	binary.LittleEndian.PutUint16(data[46:48], s.NFloodDups)
 	binary.LittleEndian.PutUint16(data[48:50], s.NPosted)
 	binary.LittleEndian.PutUint16(data[50:52], s.NPostPush)
-	binary.LittleEndian.PutUint32(data[52:56], s.NRecvErrors)
 	return data
 }
 

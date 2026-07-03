@@ -138,9 +138,12 @@ func (s *Server) resolvePermissions(existing *ClientInfo, password string) int {
 		return int(codec.PermACLReadWrite)
 	}
 
-	// Open room (read-only access)
+	// Open room grants guest access. Firmware assigns PERM_ACL_GUEST for
+	// allow_read_only logins (simple_room_server MyMesh.cpp), and guests are
+	// blocked from posting. Granting ReadOnly here would let open-room users
+	// post, since only guests are gated out in HandleTextMessage.
 	if s.cfg.AllowReadOnly {
-		return int(codec.PermACLReadOnly)
+		return int(codec.PermACLGuest)
 	}
 
 	return -1

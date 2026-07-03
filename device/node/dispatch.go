@@ -124,6 +124,7 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 		Message:            content.Message,
 		TxtType:            content.TxtType,
 		Attempt:            content.Attempt,
+		Timestamp:          content.Timestamp,
 		SenderPubKeyPrefix: content.SenderPubKeyPrefix,
 	})
 }

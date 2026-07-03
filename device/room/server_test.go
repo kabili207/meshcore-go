@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
-	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/core/clock"
 	"github.com/kabili207/meshcore-go/core/codec"
-	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/ack"
+	"github.com/kabili207/meshcore-go/device/contact"
+	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
 	"github.com/kabili207/meshcore-go/transport"
 )
@@ -28,9 +29,9 @@ func newMockTransport() *mockTransport {
 	return &mockTransport{connected: true}
 }
 
-func (m *mockTransport) Start(_ context.Context) error            { return nil }
-func (m *mockTransport) Stop() error                               { return nil }
-func (m *mockTransport) IsConnected() bool                         { return m.connected }
+func (m *mockTransport) Start(_ context.Context) error              { return nil }
+func (m *mockTransport) Stop() error                                { return nil }
+func (m *mockTransport) IsConnected() bool                          { return m.connected }
 func (m *mockTransport) SetPacketHandler(_ transport.PacketHandler) {}
 func (m *mockTransport) SetStateHandler(_ transport.StateHandler)   {}
 
@@ -344,10 +345,11 @@ func TestLogin_GuestPassword(t *testing.T) {
 	}
 }
 
-func TestLogin_OpenRoom_ReadOnly(t *testing.T) {
+func TestLogin_OpenRoom_Guest(t *testing.T) {
 	h := newTestHarness(t)
 
-	// No password → AllowReadOnly gives ReadOnly
+	// No password → AllowReadOnly gives Guest (matching firmware: open-room
+	// logins get PERM_ACL_GUEST, which is blocked from posting).
 	pkt := h.buildAnonReqPacket(t, 100, 0, "")
 	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
 
@@ -361,8 +363,8 @@ func TestLogin_OpenRoom_ReadOnly(t *testing.T) {
 		return false
 	})
 
-	if client.Role() != codec.PermACLReadOnly {
-		t.Errorf("expected ReadOnly role (%d), got %d", codec.PermACLReadOnly, client.Role())
+	if client.Role() != codec.PermACLGuest {
+		t.Errorf("expected Guest role (%d), got %d", codec.PermACLGuest, client.Role())
 	}
 }
 
@@ -475,11 +477,11 @@ func TestResolvePermissions_GuestPassword(t *testing.T) {
 	}
 }
 
-func TestResolvePermissions_ReadOnly(t *testing.T) {
+func TestResolvePermissions_OpenRoomGuest(t *testing.T) {
 	h := newTestHarness(t)
 	perm := h.server.resolvePermissions(nil, "")
-	if perm != int(codec.PermACLReadOnly) {
-		t.Errorf("expected ReadOnly, got %d", perm)
+	if perm != int(codec.PermACLGuest) {
+		t.Errorf("expected Guest, got %d", perm)
 	}
 }
 
@@ -538,7 +540,7 @@ func TestTextMessage_ReplayRejected(t *testing.T) {
 	_, err := h.clients.AddClient(&ClientInfo{
 		ID:            clientID,
 		Permissions:   codec.PermACLReadWrite,
-		LastTimestamp:  200, // already seen timestamp 200
+		LastTimestamp: 200, // already seen timestamp 200
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -656,6 +658,64 @@ func TestTextMessage_ContactButNotClient(t *testing.T) {
 	// No post stored (not a registered client)
 	if h.posts.Count() != 0 {
 		t.Errorf("expected 0 posts (not client), got %d", h.posts.Count())
+	}
+}
+
+// TestHandleTextMessage_DuplicatePostPrevented covers the event-based path
+// (HandleTextMessage), which is the path RoomNode actually wires. A sender that
+// retransmits a message (same sender timestamp) because it missed the ACK must
+// not create a duplicate post.
+func TestHandleTextMessage_DuplicatePostPrevented(t *testing.T) {
+	h := newTestHarness(t)
+
+	_, clientID := h.makeClientKeyAndContact(t)
+	if _, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLReadWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	newMsg := func(ts uint32) *event.TextMessageReceived {
+		return &event.TextMessageReceived{
+			Event:     event.Event{From: clientID},
+			Message:   "hello",
+			TxtType:   codec.TxtTypePlain,
+			Timestamp: ts,
+		}
+	}
+
+	h.server.HandleTextMessage(newMsg(200)) // first delivery stores the post
+	h.server.HandleTextMessage(newMsg(200)) // retransmission must be ignored
+
+	if h.posts.Count() != 1 {
+		t.Errorf("expected 1 post after duplicate delivery, got %d", h.posts.Count())
+	}
+}
+
+// TestHandleTextMessage_ReplayRejected verifies the event path rejects a message
+// whose sender timestamp is not newer than the last one seen from that client.
+func TestHandleTextMessage_ReplayRejected(t *testing.T) {
+	h := newTestHarness(t)
+
+	_, clientID := h.makeClientKeyAndContact(t)
+	if _, err := h.clients.AddClient(&ClientInfo{
+		ID:            clientID,
+		Permissions:   codec.PermACLReadWrite,
+		LastTimestamp: 200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.server.HandleTextMessage(&event.TextMessageReceived{
+		Event:     event.Event{From: clientID},
+		Message:   "replay",
+		TxtType:   codec.TxtTypePlain,
+		Timestamp: 200,
+	})
+
+	if h.posts.Count() != 0 {
+		t.Errorf("expected 0 posts (replay), got %d", h.posts.Count())
 	}
 }
 
@@ -1172,11 +1232,11 @@ func TestSyncOnce_SkipsPushFailures(t *testing.T) {
 	_, clientID := h.makeClientKeyAndContact(t)
 
 	_, err := h.clients.AddClient(&ClientInfo{
-		ID:            clientID,
-		Permissions:   codec.PermACLReadWrite,
-		LastActivity:  1,
-		SyncSince:     0,
-		PushFailures:  MaxPushFailures, // maxed out
+		ID:           clientID,
+		Permissions:  codec.PermACLReadWrite,
+		LastActivity: 1,
+		SyncSince:    0,
+		PushFailures: MaxPushFailures, // maxed out
 	})
 	if err != nil {
 		t.Fatal(err)
