@@ -103,6 +103,10 @@ type BaseNode struct {
 	eventMu       sync.RWMutex
 	eventHandlers []event.Handler
 
+	// Group channels: channel hash -> shared key, for GRP_TXT/GRP_DATA decryption.
+	channelMu sync.RWMutex
+	channels  map[uint8][]byte
+
 	log *slog.Logger
 }
 

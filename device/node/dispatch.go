@@ -347,12 +347,25 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 		return
 	}
 
-	// TODO: group decryption using channel shared key
-	// For now, emit with the raw ciphertext info
+	key := b.channelKey(grp.ChannelHash)
+	if key == nil {
+		return // no key registered for this channel — cannot decrypt
+	}
+	plaintext, err := crypto.DecryptGroupMessage(codec.PrependMAC(grp.MAC, grp.Ciphertext), key)
+	if err != nil {
+		b.log.Debug("failed to decrypt group text", "channel", grp.ChannelHash, "error", err)
+		return
+	}
+	_, _, message, err := crypto.ParseGrpTxtPlaintext(plaintext)
+	if err != nil {
+		b.log.Debug("failed to parse group text plaintext", "error", err)
+		return
+	}
+
 	b.emitEvent(&event.GroupTextReceived{
 		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
 		ChannelHash: grp.ChannelHash,
-		Message:     string(grp.Ciphertext), // Placeholder until group crypto is implemented
+		Message:     message,
 	})
 }
 
@@ -364,11 +377,25 @@ func (b *BaseNode) handleGrpData(pkt *codec.Packet, src transport.PacketSource) 
 		return
 	}
 
-	// TODO: group decryption using channel shared key
+	key := b.channelKey(grp.ChannelHash)
+	if key == nil {
+		return // no key registered for this channel — cannot decrypt
+	}
+	plaintext, err := crypto.DecryptGroupMessage(codec.PrependMAC(grp.MAC, grp.Ciphertext), key)
+	if err != nil {
+		b.log.Debug("failed to decrypt group data", "channel", grp.ChannelHash, "error", err)
+		return
+	}
+	content, err := crypto.ParseGrpDataContent(plaintext)
+	if err != nil {
+		b.log.Debug("failed to parse group data content", "error", err)
+		return
+	}
+
 	b.emitEvent(&event.GroupDataReceived{
 		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
 		ChannelHash: grp.ChannelHash,
-		Data:        grp.Ciphertext, // Placeholder until group crypto is implemented
+		Data:        content.Data,
 	})
 }
 

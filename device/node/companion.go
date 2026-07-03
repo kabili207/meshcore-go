@@ -10,6 +10,7 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/clock"
 	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/device/advert"
 	"github.com/kabili207/meshcore-go/device/contact"
@@ -124,6 +125,9 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 		return nil, fmt.Errorf("create base node: %w", err)
 	}
 
+	// Register the built-in "Public" channel so group messages decrypt by default.
+	base.AddChannel(crypto.DefaultChannelKey)
+
 	// Build advert scheduler
 	advertBuilder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
 		PrivateKey: cfg.PrivateKey,
@@ -216,6 +220,17 @@ func (n *CompanionNode) ClearSendScope() {
 // (e.g., triggering an immediate advert after settings change).
 func (n *CompanionNode) AdvertScheduler() *advert.Scheduler {
 	return n.advertSched
+}
+
+// AddChannel registers a group channel by its shared key and returns the channel
+// hash. The built-in "Public" channel is registered automatically.
+func (n *CompanionNode) AddChannel(key []byte) uint8 {
+	return n.base.AddChannel(key)
+}
+
+// SendChannelText sends a plain group text message on a registered channel.
+func (n *CompanionNode) SendChannelText(channelHash uint8, text string) error {
+	return n.base.SendChannelText(channelHash, text)
 }
 
 // ACKTracker returns the ACK tracker for manual tracking if needed.
