@@ -36,6 +36,9 @@ type RepeaterConfig struct {
 	// MaxClients caps the ACL client table. Default: acl.DefaultMaxClients (20).
 	MaxClients int
 
+	// MaxNeighbors caps the directly-heard neighbor table. Default: 32.
+	MaxNeighbors int
+
 	// Advertisement
 	Name string   // Node name broadcast in adverts.
 	Lat  *float64 // Optional GPS latitude.
@@ -63,6 +66,7 @@ type RepeaterNode struct {
 	advertSched *advert.Scheduler
 	acl         *acl.MemoryStore
 	auth        acl.Authenticator
+	neighbors   *neighborTable
 	startTime   time.Time
 	log         *slog.Logger
 }
@@ -140,6 +144,7 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 			GuestPassword: cfg.GuestPassword,
 			GuestPerms:    codec.PermACLGuest,
 		},
+		neighbors: newNeighborTable(cfg.MaxNeighbors),
 		startTime: time.Now(),
 		log:       logger.WithGroup("repeater"),
 	}

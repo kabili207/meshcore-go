@@ -19,6 +19,13 @@ const (
 
 	// aclEntrySize is one access-list entry: 6-byte prefix + permissions byte.
 	aclEntrySize = aclPrefixSize + 1
+
+	// maxNeighborResultBytes caps the neighbor entries in a GET_NEIGHBOURS reply
+	// (firmware results_buffer is 130 bytes).
+	maxNeighborResultBytes = 130
+
+	// neighborRequestMinSize is version(1)+count(1)+offset(2)+order(1)+prefix(1).
+	neighborRequestMinSize = 6
 )
 
 // handleRequest processes an addressed REQ from an authenticated client. Requests
@@ -41,6 +48,9 @@ func (n *RepeaterNode) handleRequest(evt *event.RequestReceived) {
 			return
 		}
 		n.sendAccessList(evt.Reply, evt.From, evt.Tag, evt.RequestData)
+	case codec.ReqTypeGetNeighbors:
+		// Any authenticated client may query neighbors (firmware allows guests).
+		n.sendNeighbors(evt.Reply, evt.From, evt.Tag, evt.RequestData)
 	default:
 		n.log.Debug("unhandled repeater request", "type", evt.RequestType, "peer", evt.From.String())
 	}
@@ -101,5 +111,50 @@ func (n *RepeaterNode) sendAccessList(reply event.ReplyContext, to core.MeshCore
 
 	if err := n.base.SendReply(reply, to, codec.PayloadTypeResponse, resp); err != nil {
 		n.log.Warn("failed to send access list", "error", err)
+	}
+}
+
+// sendNeighbors replies to REQ_TYPE_GET_NEIGHBOURS with a tag-prefixed, sorted,
+// paginated list of directly-heard repeater neighbors. Request data is
+// version(1) + count(1) + offset(2) + order_by(1) + prefix_len(1) [+ random(4)].
+// Each entry is [pubkey_prefix][heard_seconds_ago(4)][snr(1)].
+func (n *RepeaterNode) sendNeighbors(reply event.ReplyContext, to core.MeshCoreID, tag uint32, reqData []byte) {
+	if len(reqData) < neighborRequestMinSize || reqData[0] != 0 {
+		return // only request version 0 is supported
+	}
+	count := int(reqData[1])
+	offset := int(binary.LittleEndian.Uint16(reqData[2:4]))
+	orderBy := reqData[4]
+	prefixLen := int(reqData[5])
+	if prefixLen > len(to) {
+		prefixLen = len(to)
+	}
+
+	sorted := n.neighbors.snapshot(orderBy)
+	now := n.base.Clock().GetCurrentTime()
+
+	// Header: tag(4) + neighbours_count(2) + results_count(2).
+	resp := make([]byte, 8, 8+maxNeighborResultBytes)
+	binary.LittleEndian.PutUint32(resp[0:4], tag)
+	binary.LittleEndian.PutUint16(resp[4:6], uint16(len(sorted)))
+
+	entrySize := prefixLen + 5 // prefix + heard_seconds_ago(4) + snr(1)
+	results := 0
+	for i := offset; i < len(sorted) && results < count; i++ {
+		if (len(resp)-8)+entrySize > maxNeighborResultBytes {
+			break
+		}
+		nb := sorted[i]
+		entry := make([]byte, entrySize)
+		copy(entry[0:prefixLen], nb.id[:prefixLen])
+		binary.LittleEndian.PutUint32(entry[prefixLen:prefixLen+4], now-nb.heardTimestamp)
+		entry[prefixLen+4] = byte(nb.snr)
+		resp = append(resp, entry...)
+		results++
+	}
+	binary.LittleEndian.PutUint16(resp[6:8], uint16(results))
+
+	if err := n.base.SendReply(reply, to, codec.PayloadTypeResponse, resp); err != nil {
+		n.log.Warn("failed to send neighbours", "error", err)
 	}
 }

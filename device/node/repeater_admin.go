@@ -24,6 +24,8 @@ func (n *RepeaterNode) dispatchEvents(evt any) {
 		n.handleLogin(e)
 	case *event.RequestReceived:
 		n.handleRequest(e)
+	case *event.AdvertReceived:
+		n.recordNeighbor(e)
 	}
 }
 
