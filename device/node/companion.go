@@ -80,8 +80,9 @@ type CompanionNode struct {
 
 	keepAliveEvery time.Duration
 
-	pendingMu     sync.Mutex
-	pendingLogins map[core.MeshCoreID]uint32 // server -> login send time
+	pendingMu        sync.Mutex
+	pendingLogins    map[core.MeshCoreID]uint32 // server -> login send time
+	pendingTelemetry map[uint32]core.MeshCoreID // request tag -> peer
 }
 
 // NewCompanion creates a CompanionNode from the given configuration.
@@ -181,10 +182,11 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 			KeepAliveInterval: keepAlive,
 			Logger:            logger,
 		}),
-		clk:            clk,
-		log:            logger.WithGroup("companion"),
-		keepAliveEvery: keepAlive,
-		pendingLogins:  make(map[core.MeshCoreID]uint32),
+		clk:              clk,
+		log:              logger.WithGroup("companion"),
+		keepAliveEvery:   keepAlive,
+		pendingLogins:    make(map[core.MeshCoreID]uint32),
+		pendingTelemetry: make(map[uint32]core.MeshCoreID),
 	}
 
 	// Watch responses for login-OK correlation and connection liveness.

@@ -65,3 +65,13 @@ type LoginResponse struct {
 	// codec.PermACL* constants).
 	Permissions uint8
 }
+
+// TelemetryResponse fires when a peer answers a SendTelemetryReq. The embedded
+// Event's From field is the responding peer.
+type TelemetryResponse struct {
+	Event
+
+	// Data is the CayenneLPP-encoded telemetry payload. Decoding is the
+	// application's responsibility.
+	Data []byte
+}
