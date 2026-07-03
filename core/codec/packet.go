@@ -43,6 +43,7 @@ const (
 
 	// Size limits
 	MaxPathSize        = 64
+	MaxPathHashSize    = 3 // Largest valid per-hop hash width (modes 0-2). Mode 3 is reserved.
 	MaxPacketPayload   = 184
 	MaxGroupDataLength = (MaxPacketPayload - 16 - 3) // 165 bytes (184 - CIPHER_BLOCK_SIZE - 3 bytes overhead)
 
@@ -51,10 +52,11 @@ const (
 )
 
 var (
-	ErrPacketTooShort  = errors.New("packet too short")
-	ErrPathTooLong     = errors.New("path length exceeds maximum")
-	ErrPayloadTooLong  = errors.New("payload length exceeds maximum")
-	ErrInvalidEncoding = errors.New("invalid packet encoding")
+	ErrPacketTooShort   = errors.New("packet too short")
+	ErrPathTooLong      = errors.New("path length exceeds maximum")
+	ErrPayloadTooLong   = errors.New("payload length exceeds maximum")
+	ErrInvalidEncoding  = errors.New("invalid packet encoding")
+	ErrReservedPathMode = errors.New("reserved path hash mode")
 )
 
 // Packet represents a MeshCore packet.
@@ -186,6 +188,12 @@ func (p *Packet) ReadFrom(data []byte) error {
 	info := PathInfoFromWireByte(p.PathLen)
 	p.PathHashSize = info.HashSize
 	pathByteLen := info.ByteLen()
+
+	// Reject the reserved path-hash mode (mode 3 → 4-byte hashes). Firmware's
+	// isValidPathLen drops these; accepting one would mis-parse the path.
+	if info.HashSize > MaxPathHashSize {
+		return ErrReservedPathMode
+	}
 
 	if pathByteLen > MaxPathSize {
 		return fmt.Errorf("%w: %d bytes", ErrPathTooLong, pathByteLen)

@@ -14,6 +14,12 @@ const (
 	AdvertSignatureSize = 64
 	AdvertMinSize       = AdvertPubKeySize + AdvertTimestampSize + AdvertSignatureSize // 100 bytes
 
+	// MaxAdvertAppDataSize caps the total advert app data (firmware
+	// MAX_ADVERT_DATA_SIZE). Firmware truncates app data to this length before
+	// both signing and verifying, so exceeding it breaks cross-implementation
+	// signature verification.
+	MaxAdvertAppDataSize = 32
+
 	// AppData flags - node types (lower 4 bits)
 	NodeTypeNone     = 0x00 // ADV_TYPE_NONE: transient/anonymous contact
 	NodeTypeChat     = 0x01
@@ -68,11 +74,11 @@ const (
 	TxtTypeSigned = 0x02 // Signed plain text message
 
 	// Request types (inner type byte in decrypted REQ content)
-	ReqTypeLogin        = 0x00
-	ReqTypeGetStats     = 0x01
-	ReqTypeKeepalive    = 0x02
-	ReqTypeGetTelemetry = 0x03
-	ReqTypeGetMinMaxAvg = 0x04
+	ReqTypeLogin         = 0x00
+	ReqTypeGetStats      = 0x01
+	ReqTypeKeepalive     = 0x02
+	ReqTypeGetTelemetry  = 0x03
+	ReqTypeGetMinMaxAvg  = 0x04
 	ReqTypeGetAccessList = 0x05
 	ReqTypeGetNeighbors  = 0x06
 	ReqTypeGetOwnerInfo  = 0x07

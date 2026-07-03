@@ -62,6 +62,17 @@ func (b *BaseNode) handleAdvert(pkt *codec.Packet, src transport.PacketSource) {
 	var advertID core.MeshCoreID
 	copy(advertID[:], advert.PubKey[:])
 
+	// Verify the signature before doing anything else, including forwarding.
+	// Firmware checks the advert signature ahead of routeRecvPacket so a forged
+	// advert is never re-flooded. MarkDoNotRetransmit suppresses the router's
+	// flood forward for this packet. (ProcessAdvert re-verifies below; that only
+	// runs for already-valid adverts, so the extra check is negligible.)
+	if !crypto.VerifyAdvert(advert) {
+		pkt.MarkDoNotRetransmit()
+		b.log.Debug("advert signature invalid, dropping", "peer", advertID.String())
+		return
+	}
+
 	if b.autoUpdateContacts {
 		nowTS := b.clock.GetCurrentTime()
 		result := contact.ProcessAdvert(b.contacts, advert, nowTS, true)

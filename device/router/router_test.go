@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -652,32 +653,38 @@ func TestHandlePacket_Multipart(t *testing.T) {
 	})
 	r.AddTransport(mt, transport.PacketSourceMQTT)
 
-	var receivedPayload []byte
+	var dispatched []*codec.Packet
 	r.SetPacketHandler(func(pkt *codec.Packet, src transport.PacketSource) {
-		receivedPayload = pkt.Payload
+		dispatched = append(dispatched, pkt)
 	})
 
-	// Two-part ACK: fragment 1 (remaining=1), fragment 2 (remaining=0)
-	frag1 := &codec.Packet{
-		Header:  (codec.PayloadTypeMultipart << codec.PHTypeShift) | codec.RouteTypeFlood,
-		Payload: codec.BuildMultipartPayload(1, codec.PayloadTypeAck, []byte{0x78, 0x56}),
-	}
-	frag2 := &codec.Packet{
-		Header:  (codec.PayloadTypeMultipart << codec.PHTypeShift) | codec.RouteTypeFlood,
-		Payload: codec.BuildMultipartPayload(0, codec.PayloadTypeAck, []byte{0x34, 0x12}),
-	}
-
-	r.HandlePacket(frag1, transport.PacketSourceMQTT)
-	if receivedPayload != nil {
-		t.Error("should not dispatch after first fragment")
+	// A multipart ACK is self-contained: it carries a complete ACK. `remaining`
+	// only says how many more identical copies the sender will emit; the copies
+	// are not fragments to concatenate.
+	ack := []byte{0x12, 0x34, 0x56, 0x78}
+	mp := func(remaining uint8) *codec.Packet {
+		return &codec.Packet{
+			Header:  (codec.PayloadTypeMultipart << codec.PHTypeShift) | codec.RouteTypeFlood,
+			Payload: codec.BuildMultipartPayload(remaining, codec.PayloadTypeAck, ack),
+		}
 	}
 
-	r.HandlePacket(frag2, transport.PacketSourceMQTT)
-	if receivedPayload == nil {
-		t.Fatal("should dispatch assembled packet after final fragment")
+	// The first copy dispatches the inner ACK immediately (no waiting).
+	r.HandlePacket(mp(1), transport.PacketSourceMQTT)
+	if len(dispatched) != 1 {
+		t.Fatalf("expected 1 dispatch from a self-contained multipart ACK, got %d", len(dispatched))
 	}
-	if len(receivedPayload) != 4 {
-		t.Errorf("assembled payload len = %d, want 4", len(receivedPayload))
+	if pt := dispatched[0].PayloadType(); pt != codec.PayloadTypeAck {
+		t.Errorf("inner payload type = %d, want ACK (%d)", pt, codec.PayloadTypeAck)
+	}
+	if !bytes.Equal(dispatched[0].Payload, ack) {
+		t.Errorf("inner payload = %x, want %x", dispatched[0].Payload, ack)
+	}
+
+	// A redundant copy of the same ACK is deduplicated, not dispatched again.
+	r.HandlePacket(mp(0), transport.PacketSourceMQTT)
+	if len(dispatched) != 1 {
+		t.Errorf("redundant multipart ACK should be deduped; got %d dispatches", len(dispatched))
 	}
 }
 

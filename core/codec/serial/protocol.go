@@ -65,6 +65,7 @@ const (
 	CmdSendChannelData      = 62 // Send binary data to group channel (v1.15.0+)
 	CmdSetDefaultFloodScope = 63 // Set default flood scope (v1.15.0+)
 	CmdGetDefaultFloodScope = 64 // Get default flood scope (v1.15.0+)
+	CmdSendRawPacket        = 65 // Send a raw mesh packet (v1.16.0+)
 )
 
 // Response codes sent from companion radio to host.

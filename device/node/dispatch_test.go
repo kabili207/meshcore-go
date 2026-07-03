@@ -164,6 +164,44 @@ func TestHandleAdvert_Replay(t *testing.T) {
 	}
 }
 
+// TestHandleAdvert_ForgedSignatureNotForwarded verifies that an advert with an
+// invalid signature is dropped without being processed and, critically, is
+// marked do-not-retransmit so the router will not re-flood it (matching the
+// firmware, which verifies before forwarding).
+func TestHandleAdvert_ForgedSignatureNotForwarded(t *testing.T) {
+	node, collector := testNode(t)
+	peer := peerKeyPair(t)
+
+	var pubKey [32]byte
+	copy(pubKey[:], peer.PublicKey)
+	ts := uint32(time.Now().Unix())
+	appData := &codec.AdvertAppData{NodeType: codec.NodeTypeChat, Name: "Forged"}
+	appDataBytes := codec.BuildAdvertAppData(appData)
+	sig, err := crypto.SignAdvert(peer.PrivateKey, pubKey, ts, appDataBytes)
+	if err != nil {
+		t.Fatalf("sign advert: %v", err)
+	}
+	sig[0] ^= 0xFF // corrupt the signature
+
+	payload := codec.BuildAdvertPayload(pubKey, ts, sig, appData)
+	pkt := codec.NewPacket(codec.PayloadTypeAdvert, codec.RouteTypeFlood, payload)
+
+	node.processPacket(pkt, transport.PacketSourceMQTT)
+
+	if got := len(collector.get()); got != 0 {
+		t.Fatalf("expected 0 events for forged advert, got %d", got)
+	}
+	if !pkt.IsMarkedDoNotRetransmit() {
+		t.Error("expected forged advert to be marked do-not-retransmit")
+	}
+
+	var peerID core.MeshCoreID
+	copy(peerID[:], peer.PublicKey)
+	if node.contacts.GetByPubKey(peerID) != nil {
+		t.Error("forged advert should not have created a contact")
+	}
+}
+
 func TestHandleTxtMsg(t *testing.T) {
 	node, collector := testNode(t)
 	peer := peerKeyPair(t)

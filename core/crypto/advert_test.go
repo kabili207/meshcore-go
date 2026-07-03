@@ -46,6 +46,45 @@ func TestSignVerifyAdvert(t *testing.T) {
 	}
 }
 
+// TestSignVerifyAdvert_LongNameCapped checks that a name long enough to overflow
+// the 32-byte app data cap still round-trips: the cap is applied consistently to
+// the signed bytes and the wire payload, so verification succeeds. This is what
+// keeps a Go advert verifiable by firmware, which truncates to MAX_ADVERT_DATA_SIZE.
+func TestSignVerifyAdvert_LongNameCapped(t *testing.T) {
+	kp, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair() error = %v", err)
+	}
+
+	var pubKey [32]byte
+	copy(pubKey[:], kp.PublicKey)
+	timestamp := uint32(1704067200)
+
+	appData := &codec.AdvertAppData{
+		NodeType: codec.NodeTypeChat,
+		Name:     "this-node-name-is-far-too-long-to-fit-in-the-advert-appdata",
+	}
+	appDataBytes := codec.BuildAdvertAppData(appData)
+	if len(appDataBytes) != codec.MaxAdvertAppDataSize {
+		t.Fatalf("expected app data capped to %d, got %d", codec.MaxAdvertAppDataSize, len(appDataBytes))
+	}
+
+	sig, err := SignAdvert(kp.PrivateKey, pubKey, timestamp, appDataBytes)
+	if err != nil {
+		t.Fatalf("SignAdvert() error = %v", err)
+	}
+
+	payload := codec.BuildAdvertPayload(pubKey, timestamp, sig, appData)
+	parsed, err := codec.ParseAdvertPayload(payload)
+	if err != nil {
+		t.Fatalf("ParseAdvertPayload() error = %v", err)
+	}
+
+	if !VerifyAdvert(parsed) {
+		t.Error("VerifyAdvert() = false for capped long-name advert, want true")
+	}
+}
+
 func TestSignVerifyAdvertMinimal(t *testing.T) {
 	kp, _ := GenerateKeyPair()
 

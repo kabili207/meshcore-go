@@ -116,6 +116,13 @@ func BuildAdvertAppData(appData *AdvertAppData) []byte {
 		copy(data[offset:], appData.Name)
 	}
 
+	// Cap total app data to MaxAdvertAppDataSize, matching firmware, which
+	// truncates to MAX_ADVERT_DATA_SIZE before signing and verifying. Without
+	// this, a long name would produce a signature firmware cannot verify.
+	if len(data) > MaxAdvertAppDataSize {
+		data = data[:MaxAdvertAppDataSize]
+	}
+
 	return data
 }
 

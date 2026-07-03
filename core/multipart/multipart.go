@@ -1,14 +1,12 @@
-// Package multipart provides MULTIPART packet reassembly for MeshCore.
+// Package multipart parses MULTIPART packets for MeshCore.
 //
-// MULTIPART packets split a logical payload across multiple radio packets.
-// Each fragment contains a header byte encoding the remaining fragment count
-// (upper 4 bits) and the inner payload type (lower 4 bits). Fragments arrive
-// in order with the remaining count decrementing to 0 for the final fragment.
-//
-// Currently the firmware only uses MULTIPART for ACK packets, where each
-// fragment carries a complete 4-byte ACK value (no actual splitting of data
-// across fragments). The reassembler handles both this case and the general
-// case of concatenating fragment data.
+// A MULTIPART packet is self-contained: payload[0] encodes a redundancy count
+// (upper 4 bits) and the inner payload type (lower 4 bits), and payload[1:] is a
+// complete inner packet payload. Firmware uses MULTIPART only for ACKs, sending
+// the same complete ACK in several packets for reliability. The count is a hint
+// about how many more copies to expect, NOT a fragment index — the packets are
+// not fragments of a larger payload and must not be concatenated. Use
+// ParseFragment to split off the header, then handle the inner packet on its own.
 package multipart
 
 import (
@@ -55,7 +53,12 @@ type reassemblyState struct {
 	startTime time.Time
 }
 
-// Reassembler collects MULTIPART fragments and emits complete payloads.
+// Reassembler collects MULTIPART fragments and concatenates their data.
+//
+// Deprecated: this models a fragmentation scheme MeshCore does not use. Real
+// MULTIPART packets are self-contained (see the package doc); concatenating them
+// corrupts the inner packet. Nothing in this module uses it. Parse each packet
+// with ParseFragment and handle the inner packet directly instead.
 type Reassembler struct {
 	pending map[reassemblyKey]*reassemblyState
 	timeout time.Duration

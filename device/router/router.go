@@ -147,12 +147,11 @@ type Config struct {
 
 // Router handles packet routing and forwarding for a MeshCore node.
 type Router struct {
-	cfg       Config
-	log       *slog.Logger
-	dedup     *dedupe.PacketDeduplicator
-	multipart *multipart.Reassembler
-	queue     *SendQueue
-	counters  RouterCounters
+	cfg      Config
+	log      *slog.Logger
+	dedup    *dedupe.PacketDeduplicator
+	queue    *SendQueue
+	counters RouterCounters
 
 	mu         sync.RWMutex
 	transports []transportEntry
@@ -186,11 +185,10 @@ func New(cfg Config) *Router {
 	}
 
 	return &Router{
-		cfg:       cfg,
-		log:       logger.WithGroup("router"),
-		dedup:     dedupe.New(),
-		multipart: multipart.New(),
-		queue:     NewSendQueue(),
+		cfg:   cfg,
+		log:   logger.WithGroup("router"),
+		dedup: dedupe.New(),
+		queue: NewSendQueue(),
 	}
 }
 
@@ -417,8 +415,14 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 	// Unknown route type — drop silently
 }
 
-// handleMultipart processes a MULTIPART packet fragment. If reassembly completes,
-// the assembled packet is dispatched through HandlePacket.
+// handleMultipart processes a MULTIPART packet. Firmware uses MULTIPART only for
+// ACKs, and each packet is self-contained: payload[0] = (remaining<<4)|inner_type
+// and payload[1:] is a complete inner packet payload. `remaining` is a redundancy
+// hint (how many more copies the sender will emit), NOT a fragment index — the
+// fragments are not concatenated. We reconstruct the inner packet and feed it back
+// through HandlePacket so it is deduplicated and handled like a regular ACK (which
+// also forwards it when it arrived on a direct path). See firmware Mesh.cpp
+// PAYLOAD_TYPE_MULTIPART handling and forwardMultipartDirect().
 func (r *Router) handleMultipart(pkt *codec.Packet, src transport.PacketSource) {
 	frag, err := multipart.ParseFragment(pkt.Payload)
 	if err != nil {
@@ -426,16 +430,24 @@ func (r *Router) handleMultipart(pkt *codec.Packet, src transport.PacketSource) 
 		return
 	}
 
-	// Use the first byte of the path (or 0 for zero-hop) as the sender key.
-	var srcHash uint8
-	if len(pkt.Path) > 0 {
-		srcHash = pkt.Path[0]
+	// Only ACK is defined as an inner type today (firmware treats others as
+	// future work). Guarding also prevents re-dispatch recursion.
+	if frag.InnerType != codec.PayloadTypeAck {
+		r.log.Debug("ignoring non-ACK multipart", "innerType", frag.InnerType)
+		return
 	}
 
-	assembled := r.multipart.HandleFragment(frag, srcHash)
-	if assembled != nil {
-		r.HandlePacket(assembled, src)
+	inner := &codec.Packet{
+		Header: (pkt.PayloadVersion() << codec.PHVerShift) |
+			(frag.InnerType << codec.PHTypeShift) | pkt.RouteType(),
+		TransportCodes: pkt.TransportCodes,
+		PathLen:        pkt.PathLen,
+		PathHashSize:   pkt.PathHashSize,
+		Path:           append([]byte(nil), pkt.Path...),
+		Payload:        frag.Data,
+		SNR:            pkt.SNR,
 	}
+	r.HandlePacket(inner, src)
 }
 
 // handleDirectForward processes a direct-routed packet with hop count >= 1.

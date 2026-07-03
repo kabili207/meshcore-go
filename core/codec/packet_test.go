@@ -2,6 +2,7 @@ package codec
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -193,9 +194,17 @@ func TestPacketReadFromErrors(t *testing.T) {
 			name: "path length exceeds max",
 			data: []byte{
 				RouteTypeFlood, // header
-				0xFF,           // path_len = 255 (exceeds MaxPathSize)
+				0x7F,           // mode 1 (2-byte hashes), 63 hops = 126 bytes > MaxPathSize
 			},
 			wantErr: ErrPathTooLong,
+		},
+		{
+			name: "reserved path hash mode",
+			data: []byte{
+				RouteTypeFlood, // header
+				0xC0,           // mode 3 (reserved, 4-byte hashes), 0 hops
+			},
+			wantErr: ErrReservedPathMode,
 		},
 	}
 
@@ -207,9 +216,8 @@ func TestPacketReadFromErrors(t *testing.T) {
 				t.Error("ReadFrom() expected error, got nil")
 				return
 			}
-			// Check that we got some error (specific error types may vary)
-			if tt.wantErr != nil && err.Error() == "" {
-				t.Errorf("ReadFrom() error type unexpected")
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("ReadFrom() error = %v, want %v", err, tt.wantErr)
 			}
 		})
 	}
