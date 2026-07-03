@@ -21,7 +21,7 @@ const loginResponseSize = 13
 func (n *RepeaterNode) dispatchEvents(evt any) {
 	switch e := evt.(type) {
 	case *event.AnonRequestReceived:
-		n.handleLogin(e)
+		n.handleAnonRequest(e)
 	case *event.RequestReceived:
 		n.handleRequest(e)
 	case *event.TextMessageReceived:
@@ -37,17 +37,11 @@ func (n *RepeaterNode) dispatchEvents(evt any) {
 }
 
 // handleLogin authenticates an ANON_REQ login and, on success, records the client
-// in the ACL and sends a login response. Non-login anon request types
-// (regions/owner/clock) are not handled yet.
+// in the ACL and sends a login response. Typed anon requests (regions/owner/clock)
+// are dispatched separately by handleAnonRequest.
 func (n *RepeaterNode) handleLogin(evt *event.AnonRequestReceived) {
-	// Decrypted login data is timestamp(4) + password(null-terminated). Firmware
-	// treats data[4] as a login password when it is 0 (blank) or a printable
-	// byte; smaller values are typed anon requests (regions/owner/clock).
+	// Decrypted login data is timestamp(4) + password(null-terminated).
 	if len(evt.Plaintext) < 5 {
-		return
-	}
-	if b := evt.Plaintext[4]; b != 0 && b < ' ' {
-		n.log.Debug("ignoring non-login anon request", "type", b)
 		return
 	}
 

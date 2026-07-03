@@ -98,6 +98,7 @@ type RepeaterNode struct {
 	auth            acl.Authenticator
 	neighbors       *neighborTable
 	discoverLimiter *rateLimiter
+	anonLimiter     *rateLimiter
 	cli             *cli.Dispatcher
 	appData         *codec.AdvertAppData
 	cfg             RepeaterConfig
@@ -187,10 +188,12 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 		neighbors: newNeighborTable(cfg.MaxNeighbors),
 		// Firmware discover_limiter: max 4 responses every 2 minutes.
 		discoverLimiter: newRateLimiter(4, 120),
-		appData:         appData,
-		cfg:             cfg,
-		startTime:       time.Now(),
-		log:             logger.WithGroup("repeater"),
+		// Firmware anon_limiter: max 4 regions/owner/clock replies every 3 minutes.
+		anonLimiter: newRateLimiter(4, 180),
+		appData:     appData,
+		cfg:         cfg,
+		startTime:   time.Now(),
+		log:         logger.WithGroup("repeater"),
 	}
 	n.cli = n.buildCLI()
 
