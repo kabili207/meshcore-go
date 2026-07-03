@@ -73,6 +73,10 @@ type ServerConfig struct {
 	Lat *float64
 	Lon *float64
 
+	// OwnerInfo is a free-form owner/contact string exposed via the "owner.info"
+	// CLI key. Stored for the app to consume; not applied by the library.
+	OwnerInfo string
+
 	// Radio settings (opaque strings for software nodes without hardware).
 	RadioFreq  string // frequency in MHz (e.g., "915.0")
 	RadioBW    string // bandwidth in kHz (e.g., "250.0")

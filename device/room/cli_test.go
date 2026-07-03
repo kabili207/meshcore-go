@@ -170,3 +170,56 @@ func TestRoomCLI_GetACL(t *testing.T) {
 		t.Errorf("empty acl = %q, want (no clients)", got)
 	}
 }
+
+func TestRoomCLI_FloodCaps(t *testing.T) {
+	h := newTestHarness(t)
+	r := h.server.cfg.Router
+
+	if got := h.server.executeCLI("set flood.max 20"); got != "OK" {
+		t.Fatalf("set flood.max = %q, want OK", got)
+	}
+	if r.GetMaxFloodHops() != 20 {
+		t.Errorf("flood.max = %d, want 20", r.GetMaxFloodHops())
+	}
+	if got := h.server.executeCLI("set flood.max.advert 5"); got != "OK" {
+		t.Fatalf("set flood.max.advert = %q, want OK", got)
+	}
+	if r.GetMaxAdvertFloodHops() != 5 {
+		t.Errorf("flood.max.advert = %d, want 5", r.GetMaxAdvertFloodHops())
+	}
+	if got := h.server.executeCLI("set flood.max.unscoped 30"); got != "OK" {
+		t.Fatalf("set flood.max.unscoped = %q, want OK", got)
+	}
+	if r.GetMaxUnscopedFloodHops() != 30 {
+		t.Errorf("flood.max.unscoped = %d, want 30", r.GetMaxUnscopedFloodHops())
+	}
+	if got := h.server.executeCLI("set flood.max nope"); got != "Error: expected a non-negative number" {
+		t.Errorf("bad value = %q", got)
+	}
+}
+
+func TestRoomCLI_OwnerInfo(t *testing.T) {
+	h := newTestHarness(t)
+	if got := h.server.executeCLI("set owner.info café owner"); got != "OK" {
+		t.Fatalf("set owner.info = %q, want OK", got)
+	}
+	if h.server.cfg.OwnerInfo != "café owner" {
+		t.Errorf("OwnerInfo = %q", h.server.cfg.OwnerInfo)
+	}
+	if got := h.server.executeCLI("get owner.info"); got != "café owner" {
+		t.Errorf("get owner.info = %q", got)
+	}
+}
+
+func TestRoomCLI_Stats(t *testing.T) {
+	h := newTestHarness(t)
+	if got := h.server.executeCLI("stats-packets"); !strings.Contains(got, "recv=") {
+		t.Errorf("stats-packets = %q, want a recv= line", got)
+	}
+	if got := h.server.executeCLI("stats-core"); !strings.Contains(got, "clients=") {
+		t.Errorf("stats-core = %q, want a clients= line", got)
+	}
+	if got := h.server.executeCLI("stats-radio"); got != "unsupported" {
+		t.Errorf("stats-radio = %q, want unsupported", got)
+	}
+}

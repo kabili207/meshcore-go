@@ -311,6 +311,34 @@ func (r *Router) SetMaxFloodHops(n int) {
 	r.cfg.MaxFloodHops = n
 }
 
+// GetMaxUnscopedFloodHops returns the hop limit for unscoped flood packets.
+func (r *Router) GetMaxUnscopedFloodHops() int {
+	return r.cfg.MaxUnscopedFloodHops
+}
+
+// SetMaxUnscopedFloodHops updates the unscoped flood hop limit. A value <= 0
+// restores the default.
+func (r *Router) SetMaxUnscopedFloodHops(n int) {
+	if n <= 0 {
+		n = DefaultMaxUnscopedFloodHops
+	}
+	r.cfg.MaxUnscopedFloodHops = n
+}
+
+// GetMaxAdvertFloodHops returns the hop limit for flooded ADVERT packets.
+func (r *Router) GetMaxAdvertFloodHops() int {
+	return r.cfg.MaxAdvertFloodHops
+}
+
+// SetMaxAdvertFloodHops updates the flooded ADVERT hop limit. A value <= 0
+// restores the default.
+func (r *Router) SetMaxAdvertFloodHops(n int) {
+	if n <= 0 {
+		n = DefaultMaxAdvertFloodHops
+	}
+	r.cfg.MaxAdvertFloodHops = n
+}
+
 // GetForwardPackets reports whether packet forwarding is enabled.
 func (r *Router) GetForwardPackets() bool {
 	return r.cfg.ForwardPackets

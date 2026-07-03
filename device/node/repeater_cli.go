@@ -115,6 +115,51 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 			return nil
 		},
 	})
+	d.Key("flood.max.advert", cli.ConfigKey{
+		Get: func() string { return strconv.Itoa(r.GetMaxAdvertFloodHops()) },
+		Set: func(v string) error { return setHops(v, r.SetMaxAdvertFloodHops) },
+	})
+	d.Key("flood.max.unscoped", cli.ConfigKey{
+		Get: func() string { return strconv.Itoa(r.GetMaxUnscopedFloodHops()) },
+		Set: func(v string) error { return setHops(v, r.SetMaxUnscopedFloodHops) },
+	})
+	d.Key("advert.interval", cli.ConfigKey{
+		Get: func() string { return strconv.Itoa(int(n.advertSched.LocalInterval())) },
+		Set: func(v string) error {
+			iv, err := parseInterval(v)
+			if err != nil {
+				return err
+			}
+			n.advertSched.UpdateIntervals(iv, n.advertSched.FloodInterval())
+			return nil
+		},
+	})
+	d.Key("flood.advert.interval", cli.ConfigKey{
+		Get: func() string { return strconv.Itoa(int(n.advertSched.FloodInterval())) },
+		Set: func(v string) error {
+			iv, err := parseInterval(v)
+			if err != nil {
+				return err
+			}
+			n.advertSched.UpdateIntervals(n.advertSched.LocalInterval(), iv)
+			return nil
+		},
+	})
+	d.Key("multi.acks", cli.ConfigKey{
+		Get: func() string { return strconv.Itoa(n.base.GetExtraAckTransmits()) },
+		Set: func(v string) error {
+			acks, err := strconv.Atoi(v)
+			if err != nil || acks < 0 {
+				return errors.New("expected a non-negative number")
+			}
+			n.base.SetExtraAckTransmits(acks)
+			return nil
+		},
+	})
+	d.Key("owner.info", cli.ConfigKey{
+		Get: func() string { return n.cfg.OwnerInfo },
+		Set: func(v string) error { n.cfg.OwnerInfo = v; return nil },
+	})
 
 	// --- Read-only keys ---
 	d.Key("public.key", cli.ConfigKey{Get: func() string {
@@ -144,6 +189,9 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 	d.Command("neighbors", func([]string) string { return n.cliNeighbors() })
 	d.Command("neighbor.remove", func(args []string) string { return n.cliNeighborRemove(args) })
 	d.Command("discover.neighbors", func([]string) string { n.SendNodeDiscover(); return "OK" })
+	d.Command("stats-packets", func([]string) string { return r.Counters().Snapshot().String() })
+	d.Command("stats-core", func([]string) string { return n.cliStatsCore() })
+	d.Command("stats-radio", func([]string) string { return "unsupported" })
 	d.Command("password", func(args []string) string {
 		if len(args) < 1 {
 			return "Error: usage: password <new>"
@@ -184,6 +232,13 @@ func (n *RepeaterNode) cliACL() string {
 		return "(no clients)"
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// cliStatsCore reports node-level counters: uptime and table sizes.
+func (n *RepeaterNode) cliStatsCore() string {
+	uptime := int(time.Since(n.startTime).Seconds())
+	return fmt.Sprintf("uptime=%ds neighbors=%d clients=%d",
+		uptime, n.neighbors.count(), n.acl.Count())
 }
 
 // cliNeighborRemove drops neighbors matching a public-key prefix.
@@ -264,6 +319,25 @@ func setCoord(dst **float64, value, errMsg string) error {
 	}
 	*dst = &f
 	return nil
+}
+
+// setHops parses a non-negative hop count and applies it via set.
+func setHops(v string, set func(int)) error {
+	hops, err := strconv.Atoi(v)
+	if err != nil || hops < 0 {
+		return errors.New("expected a non-negative number")
+	}
+	set(hops)
+	return nil
+}
+
+// parseInterval parses an advert interval byte (firmware units).
+func parseInterval(v string) (uint8, error) {
+	iv, err := strconv.ParseUint(v, 10, 8)
+	if err != nil {
+		return 0, errors.New("expected a number 0-255")
+	}
+	return uint8(iv), nil
 }
 
 func onOff(b bool) string {

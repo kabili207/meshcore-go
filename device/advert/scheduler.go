@@ -142,6 +142,21 @@ func (s *Scheduler) SendNow(flood bool) {
 	}
 }
 
+// LocalInterval returns the current local (zero-hop) advert interval in firmware
+// units (actual interval = value * 2 minutes).
+func (s *Scheduler) LocalInterval() uint8 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.LocalAdvertInterval
+}
+
+// FloodInterval returns the current flood advert interval in hours.
+func (s *Scheduler) FloodInterval() uint8 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.FloodAdvertInterval
+}
+
 // UpdateIntervals updates the scheduling intervals at runtime.
 // Setting an interval to 0 disables that timer type.
 func (s *Scheduler) UpdateIntervals(localInterval, floodInterval uint8) {

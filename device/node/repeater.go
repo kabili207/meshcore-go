@@ -70,6 +70,10 @@ type RepeaterConfig struct {
 	Lat  *float64 // Optional GPS latitude.
 	Lon  *float64 // Optional GPS longitude.
 
+	// OwnerInfo is a free-form owner/contact string exposed via the "owner.info"
+	// CLI key. Stored for the app to consume; not applied by the library.
+	OwnerInfo string
+
 	// AdvertLocalInterval is the local (zero-hop) advert interval in firmware
 	// units (value * 2 minutes). Default: 1 (2 minutes).
 	AdvertLocalInterval uint8

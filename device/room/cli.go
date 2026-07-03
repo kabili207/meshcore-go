@@ -171,6 +171,22 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 			return nil
 		},
 	})
+	d.Key("flood.max", cli.ConfigKey{
+		Get: func() string { return strconv.Itoa(s.cfg.Router.GetMaxFloodHops()) },
+		Set: func(v string) error { return setHops(v, s.cfg.Router.SetMaxFloodHops) },
+	})
+	d.Key("flood.max.advert", cli.ConfigKey{
+		Get: func() string { return strconv.Itoa(s.cfg.Router.GetMaxAdvertFloodHops()) },
+		Set: func(v string) error { return setHops(v, s.cfg.Router.SetMaxAdvertFloodHops) },
+	})
+	d.Key("flood.max.unscoped", cli.ConfigKey{
+		Get: func() string { return strconv.Itoa(s.cfg.Router.GetMaxUnscopedFloodHops()) },
+		Set: func(v string) error { return setHops(v, s.cfg.Router.SetMaxUnscopedFloodHops) },
+	})
+	d.Key("owner.info", cli.ConfigKey{
+		Get: func() string { return s.cfg.OwnerInfo },
+		Set: func(v string) error { s.cfg.OwnerInfo = v; return nil },
+	})
 
 	// --- Read-only keys ---
 	d.Key("public.key", cli.ConfigKey{Get: func() string { return hex.EncodeToString(s.cfg.PublicKey[:]) }})
@@ -192,6 +208,9 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 	d.Command("password", func(args []string) string { return s.cliPassword(args) })
 	d.Command("setperm", func(args []string) string { return s.cliSetPerm(args) })
 	d.Command("region", func(args []string) string { return s.cliRegion(args) })
+	d.Command("stats-packets", func([]string) string { return s.cfg.Router.Counters().Snapshot().String() })
+	d.Command("stats-core", func([]string) string { return s.cliStatsCore() })
+	d.Command("stats-radio", func([]string) string { return "unsupported" })
 	d.Command("clear", func(args []string) string {
 		if len(args) >= 1 && args[0] == "stats" {
 			return s.cliClearStats()
@@ -252,6 +271,21 @@ func (s *Server) cliVer() string {
 		return s.cfg.Version
 	}
 	return defaultVersion
+}
+
+// cliStatsCore reports node-level counters: table sizes.
+func (s *Server) cliStatsCore() string {
+	return fmt.Sprintf("clients=%d posts=%d", s.cfg.Clients.Count(), s.cfg.Posts.Count())
+}
+
+// setHops parses a non-negative hop count and applies it via set.
+func setHops(v string, set func(int)) error {
+	hops, err := strconv.Atoi(v)
+	if err != nil || hops < 0 {
+		return errors.New("expected a non-negative number")
+	}
+	set(hops)
+	return nil
 }
 
 // cliACL dumps the client table, one client per line as "<id> perms=<n>".

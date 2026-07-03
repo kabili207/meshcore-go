@@ -1,6 +1,9 @@
 package router
 
-import "sync/atomic"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 // RouterCounters tracks packet routing statistics using atomic counters.
 // All fields are safe for concurrent access.
@@ -39,6 +42,16 @@ func (c *RouterCounters) Snapshot() CountersSnapshot {
 		FloodDups:   c.FloodDups.Load(),
 		DirectDups:  c.DirectDups.Load(),
 	}
+}
+
+// String renders the counters as a compact multi-line report for a CLI dump.
+func (c CountersSnapshot) String() string {
+	return fmt.Sprintf(
+		"recv=%d sent=%d\nrecv.flood=%d recv.direct=%d\nsent.flood=%d sent.direct=%d\ndups.flood=%d dups.direct=%d",
+		c.PacketsRecv, c.PacketsSent,
+		c.RecvFlood, c.RecvDirect,
+		c.SentFlood, c.SentDirect,
+		c.FloodDups, c.DirectDups)
 }
 
 // Reset zeroes all counters.

@@ -90,3 +90,92 @@ func TestRepeaterCLI_DiscoverNeighbors(t *testing.T) {
 		t.Errorf("discover.neighbors = %q, want OK", got)
 	}
 }
+
+func TestRepeaterCLI_FloodCaps(t *testing.T) {
+	n, _ := newTestRepeater(t, "adminpw", "guestpw")
+	r := n.base.Router
+
+	if got := n.cli.Execute("set flood.max.advert 5"); got != "OK" {
+		t.Fatalf("set flood.max.advert = %q, want OK", got)
+	}
+	if r.GetMaxAdvertFloodHops() != 5 {
+		t.Errorf("flood.max.advert = %d, want 5", r.GetMaxAdvertFloodHops())
+	}
+	if got := n.cli.Execute("get flood.max.advert"); got != "5" {
+		t.Errorf("get flood.max.advert = %q, want 5", got)
+	}
+
+	if got := n.cli.Execute("set flood.max.unscoped 30"); got != "OK" {
+		t.Fatalf("set flood.max.unscoped = %q, want OK", got)
+	}
+	if r.GetMaxUnscopedFloodHops() != 30 {
+		t.Errorf("flood.max.unscoped = %d, want 30", r.GetMaxUnscopedFloodHops())
+	}
+	if got := n.cli.Execute("set flood.max.advert nope"); got != "Error: expected a non-negative number" {
+		t.Errorf("bad value = %q", got)
+	}
+}
+
+func TestRepeaterCLI_AdvertIntervals(t *testing.T) {
+	n, _ := newTestRepeater(t, "adminpw", "guestpw")
+
+	if got := n.cli.Execute("set advert.interval 3"); got != "OK" {
+		t.Fatalf("set advert.interval = %q, want OK", got)
+	}
+	if got := n.cli.Execute("get advert.interval"); got != "3" {
+		t.Errorf("get advert.interval = %q, want 3", got)
+	}
+	if got := n.advertSched.LocalInterval(); got != 3 {
+		t.Errorf("LocalInterval = %d, want 3", got)
+	}
+
+	if got := n.cli.Execute("set flood.advert.interval 6"); got != "OK" {
+		t.Fatalf("set flood.advert.interval = %q, want OK", got)
+	}
+	if got := n.advertSched.FloodInterval(); got != 6 {
+		t.Errorf("FloodInterval = %d, want 6", got)
+	}
+	// Setting one interval must not disturb the other.
+	if got := n.advertSched.LocalInterval(); got != 3 {
+		t.Errorf("LocalInterval after flood set = %d, want 3", got)
+	}
+}
+
+func TestRepeaterCLI_MultiAcks(t *testing.T) {
+	n, _ := newTestRepeater(t, "adminpw", "guestpw")
+	if got := n.cli.Execute("set multi.acks 2"); got != "OK" {
+		t.Fatalf("set multi.acks = %q, want OK", got)
+	}
+	if got := n.base.GetExtraAckTransmits(); got != 2 {
+		t.Errorf("ExtraAckTransmits = %d, want 2", got)
+	}
+	if got := n.cli.Execute("get multi.acks"); got != "2" {
+		t.Errorf("get multi.acks = %q, want 2", got)
+	}
+}
+
+func TestRepeaterCLI_OwnerInfo(t *testing.T) {
+	n, _ := newTestRepeater(t, "adminpw", "guestpw")
+	if got := n.cli.Execute("set owner.info hello there"); got != "OK" {
+		t.Fatalf("set owner.info = %q, want OK", got)
+	}
+	if n.cfg.OwnerInfo != "hello there" {
+		t.Errorf("OwnerInfo = %q, want %q", n.cfg.OwnerInfo, "hello there")
+	}
+	if got := n.cli.Execute("get owner.info"); got != "hello there" {
+		t.Errorf("get owner.info = %q", got)
+	}
+}
+
+func TestRepeaterCLI_Stats(t *testing.T) {
+	n, _ := newTestRepeater(t, "adminpw", "guestpw")
+	if got := n.cli.Execute("stats-packets"); !strings.Contains(got, "recv=") {
+		t.Errorf("stats-packets = %q, want a recv= line", got)
+	}
+	if got := n.cli.Execute("stats-core"); !strings.Contains(got, "uptime=") {
+		t.Errorf("stats-core = %q, want an uptime= line", got)
+	}
+	if got := n.cli.Execute("stats-radio"); got != "unsupported" {
+		t.Errorf("stats-radio = %q, want unsupported", got)
+	}
+}

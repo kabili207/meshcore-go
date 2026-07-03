@@ -306,6 +306,21 @@ func (b *BaseNode) SendACKPayload(to core.MeshCoreID, payload []byte) {
 	b.sendAckPayload(to, payload)
 }
 
+// GetExtraAckTransmits returns the number of redundant multipart ACK copies
+// sent per ACK (firmware's multi_acks setting).
+func (b *BaseNode) GetExtraAckTransmits() int {
+	return b.extraAckTransmits
+}
+
+// SetExtraAckTransmits sets the number of redundant multipart ACK copies sent
+// per ACK. Negative values are clamped to 0.
+func (b *BaseNode) SetExtraAckTransmits(n int) {
+	if n < 0 {
+		n = 0
+	}
+	b.extraAckTransmits = n
+}
+
 // sendExtraAcks sends redundant multipart ACK copies over a known direct path,
 // implementing the firmware's multi_acks feature. Each copy is a MULTIPART
 // packet wrapping the same ACK; the receiver deduplicates so only one resolves.
