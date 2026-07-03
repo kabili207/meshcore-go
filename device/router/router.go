@@ -452,6 +452,15 @@ func (r *Router) handleMultipart(pkt *codec.Packet, src transport.PacketSource) 
 
 // handleDirectForward processes a direct-routed packet with hop count >= 1.
 func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSource) {
+	// Early ACK receive: resolve any direct ACK we hear, even if we are not the
+	// next hop and even if forwarding is disabled. Firmware calls onAckRecv before
+	// the next-hop / allowPacketForward checks, so a node that merely overhears an
+	// ACK routed through a neighbor can resolve its own pending ACK early. Dedup
+	// (run before this) ensures each unique ACK is resolved only once.
+	if pkt.PayloadType() == codec.PayloadTypeAck {
+		r.dispatchToApp(pkt, src)
+	}
+
 	info := pkt.PathInfo()
 	hashSize := int(info.HashSize)
 
@@ -460,7 +469,7 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 		return
 	}
 	if !r.cfg.SelfID.IsHashMatch(pkt.Path[:hashSize]) {
-		// Not our hop — drop
+		// Not our hop — drop (an ACK was already resolved above)
 		return
 	}
 
@@ -469,10 +478,9 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 		return
 	}
 
-	// ACK special case: dispatch to app first (early receive), then create
-	// a new ACK packet and queue it at highest priority.
+	// ACK special case: already resolved above; forward a fresh copy at highest
+	// priority.
 	if pkt.PayloadType() == codec.PayloadTypeAck {
-		r.dispatchToApp(pkt, src)
 		removeSelfFromPath(pkt)
 		r.forwardAck(pkt)
 		return

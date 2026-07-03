@@ -719,6 +719,140 @@ func TestHandleTextMessage_ReplayRejected(t *testing.T) {
 	}
 }
 
+func TestHandleLogin_FloodResetsOutPath(t *testing.T) {
+	h := newTestHarness(t)
+	h.server.SetSender(&mockSender{})
+
+	_, clientID := h.makeClientKeyAndContact(t)
+
+	// Existing client with a stored direct path.
+	if _, err := h.clients.AddClient(&ClientInfo{
+		ID:            clientID,
+		Permissions:   codec.PermACLReadWrite,
+		LastTimestamp: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ct := h.contacts.GetByPubKey(clientID)
+	ct.OutPath = []byte{0x05}
+	ct.OutPathLen = 1
+	if !ct.HasDirectPath() {
+		t.Fatal("precondition: contact should have a direct path")
+	}
+
+	// Flood-routed login (FloodPath set) with a newer timestamp and empty
+	// password (open room grants the existing client's permissions).
+	plaintext := make([]byte, 9)
+	binary.LittleEndian.PutUint32(plaintext[0:4], 300) // timestamp > LastTimestamp
+	h.server.HandleLogin(&event.AnonRequestReceived{
+		Event:     event.Event{From: clientID},
+		Plaintext: plaintext,
+		Reply:     event.ReplyContext{FloodPath: []byte{0x01, 0x02}},
+	})
+
+	if ct.HasDirectPath() {
+		t.Errorf("flood login should reset out_path; OutPathLen = %d, want PathUnknown", ct.OutPathLen)
+	}
+}
+
+// mockSender captures ACK payloads sent through the NodeSender interface.
+type mockSender struct {
+	ackPayloads [][]byte
+}
+
+func (m *mockSender) SendReply(_ event.ReplyContext, _ core.MeshCoreID, _ uint8, _ []byte) error {
+	return nil
+}
+func (m *mockSender) SendACK(_ core.MeshCoreID, _ uint32) {}
+func (m *mockSender) SendACKPayload(_ core.MeshCoreID, payload []byte) {
+	m.ackPayloads = append(m.ackPayloads, payload)
+}
+func (m *mockSender) SendToContact(_ core.MeshCoreID, _ uint8, _ []byte) error { return nil }
+
+func keepaliveClient(t *testing.T, h *testHarness) core.MeshCoreID {
+	t.Helper()
+	_, clientID := h.makeClientKeyAndContact(t)
+	if _, err := h.clients.AddClient(&ClientInfo{
+		ID:          clientID,
+		Permissions: codec.PermACLReadWrite,
+		SyncSince:   100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return clientID
+}
+
+func TestHandleRequest_KeepaliveAppendsUnsyncedCount(t *testing.T) {
+	h := newTestHarness(t)
+	ms := &mockSender{}
+	h.server.SetSender(ms)
+	clientID := keepaliveClient(t, h)
+
+	// Two posts newer than the client's sync point (100), from another author.
+	var other core.MeshCoreID
+	other[0] = 0x99
+	_ = h.posts.AddPost(&PostInfo{Timestamp: 150, SenderID: other, Content: []byte("a")})
+	_ = h.posts.AddPost(&PostInfo{Timestamp: 160, SenderID: other, Content: []byte("b")})
+
+	h.server.HandleRequest(&event.RequestReceived{
+		Event:       event.Event{From: clientID},
+		RequestType: codec.ReqTypeKeepalive,
+		Tag:         200,
+		Reply:       event.ReplyContext{DirectPath: []byte{0x01}, DirectPathLen: 1},
+	})
+
+	if len(ms.ackPayloads) != 1 {
+		t.Fatalf("expected 1 keepalive ACK, got %d", len(ms.ackPayloads))
+	}
+	payload := ms.ackPayloads[0]
+	if len(payload) != codec.AckSize+1 {
+		t.Fatalf("ACK payload len = %d, want %d (hash + count byte)", len(payload), codec.AckSize+1)
+	}
+	if got := payload[codec.AckSize]; got != 2 {
+		t.Errorf("unsynced count byte = %d, want 2", got)
+	}
+}
+
+func TestHandleRequest_KeepaliveForceSince(t *testing.T) {
+	h := newTestHarness(t)
+	ms := &mockSender{}
+	h.server.SetSender(ms)
+	clientID := keepaliveClient(t, h)
+
+	rd := make([]byte, 4)
+	binary.LittleEndian.PutUint32(rd, 500)
+	h.server.HandleRequest(&event.RequestReceived{
+		Event:       event.Event{From: clientID},
+		RequestType: codec.ReqTypeKeepalive,
+		Tag:         200,
+		RequestData: rd,
+		Reply:       event.ReplyContext{DirectPath: []byte{0x01}, DirectPathLen: 1},
+	})
+
+	c := h.clients.GetClient(clientID)
+	if c.SyncSince != 500 {
+		t.Errorf("SyncSince = %d, want 500 (forceSince)", c.SyncSince)
+	}
+}
+
+func TestHandleRequest_KeepaliveNoDirectPathSkips(t *testing.T) {
+	h := newTestHarness(t)
+	ms := &mockSender{}
+	h.server.SetSender(ms)
+	clientID := keepaliveClient(t, h)
+
+	// Empty reply context => no direct path.
+	h.server.HandleRequest(&event.RequestReceived{
+		Event:       event.Event{From: clientID},
+		RequestType: codec.ReqTypeKeepalive,
+		Tag:         200,
+	})
+
+	if len(ms.ackPayloads) != 0 {
+		t.Errorf("keepalive without a direct path should not respond, got %d ACKs", len(ms.ackPayloads))
+	}
+}
+
 // --- Mock providers ---
 
 type mockStatsProvider struct {

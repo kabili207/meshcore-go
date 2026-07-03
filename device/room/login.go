@@ -1,6 +1,7 @@
 package room
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -168,7 +169,9 @@ func (s *Server) sendLoginResponse(origPkt *codec.Packet, recipientID core.MeshC
 	}
 
 	resp[7] = perms
-	// resp[8:12] = random blob (leave as zero — acceptable for our purposes)
+	// resp[8:12] is a random blob so retransmitted login responses have distinct
+	// packet hashes and are not deduplicated (matching firmware).
+	_, _ = rand.Read(resp[8:12])
 	resp[12] = FirmwareVersion
 
 	s.sendEncryptedResponse(origPkt, recipientID, secret, codec.PayloadTypeResponse, resp)

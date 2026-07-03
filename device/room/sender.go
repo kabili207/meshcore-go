@@ -21,6 +21,10 @@ type NodeSender interface {
 	// SendACK sends an ACK packet to the specified recipient.
 	SendACK(to core.MeshCoreID, ackHash uint32)
 
+	// SendACKPayload sends an ACK with a caller-supplied wire payload. Used for
+	// the keep-alive ACK, which appends an unsynced-post count byte to the hash.
+	SendACKPayload(to core.MeshCoreID, payload []byte)
+
 	// SendToContact sends an encrypted packet to a contact, constructing
 	// routing context from the contact store. Used by the sync loop to push
 	// posts independently of received events.

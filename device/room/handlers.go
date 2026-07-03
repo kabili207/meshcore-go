@@ -1,6 +1,7 @@
 package room
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -66,6 +67,15 @@ func (s *Server) HandleLogin(evt *event.AnonRequestReceived) {
 		})
 	}
 
+	// A flood-routed login means any stored direct path may be stale (the client
+	// moved or lost the route). Reset it so the path is rediscovered, matching
+	// firmware, which sets out_path_len to UNKNOWN on a flood login.
+	if evt.Reply.HasFloodPath() {
+		if ct := s.cfg.Contacts.GetByPubKey(senderID); ct != nil {
+			ct.OutPathLen = contact.PathUnknown
+		}
+	}
+
 	s.log.Info("client logged in",
 		"peer", senderID.String(),
 		"perms", perm,
@@ -92,6 +102,8 @@ func (s *Server) sendLoginResponseEvent(reply event.ReplyContext, recipientID co
 	}
 
 	resp[7] = perms
+	// Random blob so retransmitted login responses have distinct packet hashes.
+	_, _ = rand.Read(resp[8:12])
 	resp[12] = FirmwareVersion
 
 	if s.sender != nil {
@@ -217,16 +229,35 @@ func (s *Server) HandleRequest(evt *event.RequestReceived) {
 	switch evt.RequestType {
 	case codec.ReqTypeKeepalive:
 		s.log.Debug("keepalive", "peer", senderID.String())
-		// For keepalive, compute ACK hash from the raw request content.
-		// Since the event doesn't carry raw plaintext, we reconstruct
-		// the request content to compute the hash.
-		reqContent := codec.BuildRequestContent(tag, codec.ReqTypeKeepalive, nil)
-		ackData := codec.TrimRequestContent(reqContent, &codec.RequestContent{
-			RequestType: codec.ReqTypeKeepalive,
-		})
-		ackHash := crypto.ComputeAckHash(ackData, senderID[:])
+
+		// Firmware only answers keep-alives over a direct path (the response
+		// goes back on the client's known out_path).
+		if !evt.Reply.HasDirectPath() {
+			s.log.Debug("keepalive without direct path, not responding", "peer", senderID.String())
+			return
+		}
+
+		// Optional forceSince: the last post timestamp the client already has.
+		// Firmware reads 4 bytes (zero-filled when absent) and, when non-zero,
+		// force-advances the client's sync point.
+		var forceSinceBytes [4]byte
+		if len(evt.RequestData) >= 4 {
+			copy(forceSinceBytes[:], evt.RequestData[:4])
+		}
+		if fs := binary.LittleEndian.Uint32(forceSinceBytes[:]); fs > 0 {
+			client.SyncSince = fs
+		}
+		client.PushFailures = 0
+
+		// ACK hash over timestamp(4) + type(1) + forceSince(4), keyed by the
+		// client's pubkey. This must match what firmware hashes (data[0:9]).
+		ackContent := codec.BuildRequestContent(tag, codec.ReqTypeKeepalive, forceSinceBytes[:])
+		ackHash := crypto.ComputeAckHash(ackContent, senderID[:])
+
+		// Append the unsynced-post count byte (firmware getUnsyncedCount).
+		payload := append(codec.BuildAckPayload(ackHash), s.unsyncedCount(client))
 		if s.sender != nil {
-			s.sender.SendACK(senderID, ackHash)
+			s.sender.SendACKPayload(senderID, payload)
 		}
 
 	case codec.ReqTypeGetStats:

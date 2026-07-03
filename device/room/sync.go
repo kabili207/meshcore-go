@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
-	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/ack"
 )
 
 const (
@@ -104,6 +104,22 @@ func (s *Server) syncOnce() bool {
 	}
 
 	return false
+}
+
+// unsyncedCount returns how many stored posts are newer than the client's sync
+// point and not authored by the client (firmware getUnsyncedCount). The result
+// is clamped to a single byte for the keep-alive ACK.
+func (s *Server) unsyncedCount(client *ClientInfo) uint8 {
+	count := 0
+	for _, p := range s.cfg.Posts.GetPostsSince(client.SyncSince) {
+		if p.SenderID != client.ID {
+			count++
+		}
+	}
+	if count > 255 {
+		count = 255
+	}
+	return uint8(count)
 }
 
 // pushPostToClient sends a post to a client and tracks the expected ACK.

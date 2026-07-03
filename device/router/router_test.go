@@ -731,6 +731,35 @@ func TestHandlePacket_DirectAckForward(t *testing.T) {
 	}
 }
 
+func TestHandlePacket_DirectAckOverheard(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{
+		SelfID:         selfID(0xAA),
+		ForwardPackets: true,
+	})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	var appCalled bool
+	r.SetPacketHandler(func(pkt *codec.Packet, src transport.PacketSource) {
+		appCalled = true
+	})
+
+	// Direct ACK whose next hop is 0xCC, not us (0xAA) — we only overhear it.
+	ackPayload := codec.BuildAckPayload(0xDEADBEEF)
+	pkt := makeDirectPacket(codec.PayloadTypeAck, []byte{0xCC, 0xDD}, ackPayload)
+
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+
+	// We resolve the ACK even though we are not the next hop...
+	if !appCalled {
+		t.Error("overheard direct ACK should still be dispatched for resolution")
+	}
+	// ...but we must not forward it, since we are not the next hop.
+	if mt.sentCount() != 0 {
+		t.Errorf("overheard ACK should not be forwarded, got %d sent", mt.sentCount())
+	}
+}
+
 func TestHandlePacket_DirectAckPreservesChecksum(t *testing.T) {
 	mt := newMockTransport()
 	r := New(Config{
