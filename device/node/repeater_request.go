@@ -8,6 +8,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/device/acl"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
 const (
@@ -51,6 +52,9 @@ func (n *RepeaterNode) handleRequest(evt *event.RequestReceived) {
 	case codec.ReqTypeGetNeighbors:
 		// Any authenticated client may query neighbors (firmware allows guests).
 		n.sendNeighbors(evt.Reply, evt.From, evt.Tag, evt.RequestData)
+	case codec.ReqTypeGetTelemetry:
+		// Any authenticated client may read telemetry; guests get base only.
+		n.sendTelemetry(evt.Reply, evt.From, evt.Tag, evt.RequestData, client)
 	default:
 		n.log.Debug("unhandled repeater request", "type", evt.RequestType, "peer", evt.From.String())
 	}
@@ -81,6 +85,21 @@ func (n *RepeaterNode) buildStats() RepeaterStats {
 		NFloodDups:      uint16(c.FloodDups),
 		NDirectDups:     uint16(c.DirectDups),
 		TotalUpTimeSecs: uint32(time.Since(n.startTime).Seconds()),
+	}
+}
+
+// sendTelemetry replies to REQ_TYPE_GET_TELEMETRY with a tag-prefixed CayenneLPP
+// buffer from the configured provider. Guests are limited to base telemetry.
+func (n *RepeaterNode) sendTelemetry(reply event.ReplyContext, to core.MeshCoreID, tag uint32, reqData []byte, client *acl.Client) {
+	if n.cfg.Telemetry == nil {
+		return
+	}
+	body := telemetry.Encode(n.cfg.Telemetry, reqData, client.Permissions)
+	resp := make([]byte, 4+len(body))
+	binary.LittleEndian.PutUint32(resp[0:4], tag)
+	copy(resp[4:], body)
+	if err := n.base.SendReply(reply, to, codec.PayloadTypeResponse, resp); err != nil {
+		n.log.Warn("failed to send telemetry", "error", err)
 	}
 }
 

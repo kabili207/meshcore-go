@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	cayennelpp "github.com/TheThingsNetwork/go-cayenne-lib"
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/clock"
 	"github.com/kabili207/meshcore-go/core/codec"
@@ -17,6 +18,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
+	"github.com/kabili207/meshcore-go/device/telemetry"
 	"github.com/kabili207/meshcore-go/transport"
 )
 
@@ -900,12 +902,11 @@ func (m *mockStatsProvider) GetStats() ServerStats { return m.stats }
 
 type mockTelemetryProvider struct {
 	lastPermMask uint8
-	data         []byte
 }
 
-func (m *mockTelemetryProvider) GetTelemetry(permMask uint8) []byte {
+func (m *mockTelemetryProvider) QuerySensors(permMask uint8, enc cayennelpp.Encoder) {
 	m.lastPermMask = permMask
-	return m.data
+	enc.AddTemperature(telemetry.ChannelSelf, 21.0)
 }
 
 // decryptResponse decrypts a RESPONSE packet sent by the server back to the client.
@@ -1040,9 +1041,7 @@ func TestRequest_GetStatus_NoProvider(t *testing.T) {
 func TestRequest_GetTelemetry(t *testing.T) {
 	h := newTestHarness(t)
 
-	tp := &mockTelemetryProvider{
-		data: []byte{0x01, 0x74, 0x01, 0x70}, // fake CayenneLPP
-	}
+	tp := &mockTelemetryProvider{}
 	h.server.cfg.Telemetry = tp
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)
@@ -1078,18 +1077,19 @@ func TestRequest_GetTelemetry(t *testing.T) {
 		t.Errorf("expected tag=400, got %d", tag)
 	}
 
-	// Verify telemetry data was included
-	if plaintext[4] != 0x01 || plaintext[5] != 0x74 {
-		t.Errorf("expected telemetry data, got %v", plaintext[4:])
+	// The body is the provider's CayenneLPP output (zero-padded to a block).
+	exp := cayennelpp.NewEncoder()
+	exp.AddTemperature(telemetry.ChannelSelf, 21.0)
+	want := exp.Bytes()
+	if !bytes.Equal(plaintext[4:4+len(want)], want) {
+		t.Errorf("telemetry body = %v, want prefix %v", plaintext[4:], want)
 	}
 }
 
 func TestRequest_GetTelemetry_GuestRestricted(t *testing.T) {
 	h := newTestHarness(t)
 
-	tp := &mockTelemetryProvider{
-		data: []byte{0x01, 0x74, 0x01, 0x70},
-	}
+	tp := &mockTelemetryProvider{}
 	h.server.cfg.Telemetry = tp
 
 	clientKey, clientID := h.makeClientKeyAndContact(t)

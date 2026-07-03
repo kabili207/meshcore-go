@@ -15,6 +15,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
 // RepeaterConfig configures a RepeaterNode.
@@ -44,6 +45,10 @@ type RepeaterConfig struct {
 	// ACLPersistence, if set, makes the admin client list durable across restarts
 	// (firmware persists admins to flash). See acl.NewFileStore.
 	ACLPersistence acl.Persistence
+
+	// Telemetry, if set, answers GET_TELEMETRY requests by populating a CayenneLPP
+	// encoder. Without it, telemetry requests are ignored.
+	Telemetry telemetry.Provider
 
 	// Version is reported by the CLI "ver" command. Default: "meshcore-go".
 	Version string

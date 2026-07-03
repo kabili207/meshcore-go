@@ -10,6 +10,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/acl"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
 // HandleLogin processes a login attempt from a decrypted AnonRequestReceived
@@ -304,20 +305,10 @@ func (s *Server) handleGetTelemetryEvent(reply event.ReplyContext, tag uint32, c
 		return
 	}
 
-	var permMask uint8
-	if len(requestData) > 0 {
-		permMask = ^requestData[0]
-	}
-
-	if client.IsGuest() {
-		permMask = 0x00
-	}
-
-	telemetryData := s.cfg.Telemetry.GetTelemetry(permMask)
-
-	resp := make([]byte, 4+len(telemetryData))
+	body := telemetry.Encode(s.cfg.Telemetry, requestData, client.Permissions)
+	resp := make([]byte, 4+len(body))
 	binary.LittleEndian.PutUint32(resp[0:4], tag)
-	copy(resp[4:], telemetryData)
+	copy(resp[4:], body)
 
 	if s.sender != nil {
 		s.sender.SendReply(reply, senderID, codec.PayloadTypeResponse, resp)

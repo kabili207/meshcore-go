@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	filippo.io/edwards25519 v1.2.0
+	github.com/TheThingsNetwork/go-cayenne-lib v1.2.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	go.bug.st/serial v1.6.4
 	golang.org/x/crypto v0.50.0

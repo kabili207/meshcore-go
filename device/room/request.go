@@ -5,6 +5,7 @@ import (
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
 const (
@@ -45,24 +46,12 @@ func (s *Server) handleGetTelemetry(origPkt *codec.Packet, tag uint32, client *C
 		return
 	}
 
-	// Permission mask from request: payload[1] is the inverted mask.
-	// Firmware: perm_mask = ~(payload[1])
-	var permMask uint8
-	if len(requestData) > 0 {
-		permMask = ^requestData[0]
-	}
-
-	// Guests only get base telemetry (firmware zeroes the mask).
-	if client.IsGuest() {
-		permMask = 0x00
-	}
-
-	telemetryData := s.cfg.Telemetry.GetTelemetry(permMask)
+	body := telemetry.Encode(s.cfg.Telemetry, requestData, client.Permissions)
 
 	// Response: tag(4) + CayenneLPP data(variable)
-	resp := make([]byte, 4+len(telemetryData))
+	resp := make([]byte, 4+len(body))
 	binary.LittleEndian.PutUint32(resp[0:4], tag)
-	copy(resp[4:], telemetryData)
+	copy(resp[4:], body)
 
 	s.sendEncryptedResponse(origPkt, senderID, secret, codec.PayloadTypeResponse, resp)
 }

@@ -70,16 +70,6 @@ type StatsProvider interface {
 	GetStats() ServerStats
 }
 
-// TelemetryProvider supplies CayenneLPP-encoded telemetry for GET_TELEMETRY responses.
-// The permMask controls which sensor categories to include (firmware uses
-// TELEM_PERM_BASE=0x01, TELEM_PERM_LOCATION=0x02, TELEM_PERM_ENVIRONMENT=0x04).
-type TelemetryProvider interface {
-	// GetTelemetry returns CayenneLPP-encoded telemetry data.
-	// permMask is a bitmask of which sensor categories to query.
-	// At minimum, battery voltage (channel 1) should always be included.
-	GetTelemetry(permMask uint8) []byte
-}
-
 // PostCounter is an optional interface for tracking room-level post statistics.
 // DefaultStatsProvider implements this. Wire it into ServerConfig.PostCounter
 // so the server can increment counters when posts are stored or pushed.

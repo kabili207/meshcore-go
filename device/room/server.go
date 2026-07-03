@@ -20,6 +20,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/router"
+	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
 // ServerConfig configures a room Server.
@@ -56,7 +57,7 @@ type ServerConfig struct {
 	// request type returns no response (same as firmware when hardware
 	// is unavailable).
 	Stats     StatsProvider
-	Telemetry TelemetryProvider
+	Telemetry telemetry.Provider
 
 	// PostCounter is an optional counter for room-level post statistics.
 	// DefaultStatsProvider implements this interface.
