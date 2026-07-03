@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
@@ -62,6 +63,7 @@ type RepeaterNode struct {
 	advertSched *advert.Scheduler
 	acl         *acl.MemoryStore
 	auth        acl.Authenticator
+	startTime   time.Time
 	log         *slog.Logger
 }
 
@@ -138,7 +140,8 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 			GuestPassword: cfg.GuestPassword,
 			GuestPerms:    codec.PermACLGuest,
 		},
-		log: logger.WithGroup("repeater"),
+		startTime: time.Now(),
+		log:       logger.WithGroup("repeater"),
 	}
 
 	// Wire admin/ACL event handling (login, and later CLI/requests).

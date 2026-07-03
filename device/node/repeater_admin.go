@@ -22,6 +22,8 @@ func (n *RepeaterNode) dispatchEvents(evt any) {
 	switch e := evt.(type) {
 	case *event.AnonRequestReceived:
 		n.handleLogin(e)
+	case *event.RequestReceived:
+		n.handleRequest(e)
 	}
 }
 
