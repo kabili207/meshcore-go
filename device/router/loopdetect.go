@@ -1,5 +1,7 @@
 package router
 
+import "strings"
+
 // Loop detection levels for flood forwarding. When enabled, the router counts
 // how many times its own hash appears in a packet's path and drops packets
 // that exceed the threshold for the current hash size and detection level.
@@ -9,6 +11,39 @@ const (
 	LoopDetectModerate = 2
 	LoopDetectStrict   = 3
 )
+
+// LoopDetectName returns the display name for a loop-detection level.
+func LoopDetectName(level int) string {
+	switch level {
+	case LoopDetectOff:
+		return "off"
+	case LoopDetectMinimal:
+		return "minimal"
+	case LoopDetectModerate:
+		return "moderate"
+	case LoopDetectStrict:
+		return "strict"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseLoopDetectLevel parses a loop-detection level from a name or number,
+// returning the level and whether it was recognized.
+func ParseLoopDetectLevel(s string) (int, bool) {
+	switch strings.ToLower(s) {
+	case "off", "0":
+		return LoopDetectOff, true
+	case "minimal", "1":
+		return LoopDetectMinimal, true
+	case "moderate", "2":
+		return LoopDetectModerate, true
+	case "strict", "3":
+		return LoopDetectStrict, true
+	default:
+		return 0, false
+	}
+}
 
 // loopThresholds[level][hashSize-1] gives the maximum allowed self-hash
 // occurrences before a packet is considered looped. Level 0 (off) is unused.

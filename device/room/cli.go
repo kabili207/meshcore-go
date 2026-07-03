@@ -16,36 +16,6 @@ import (
 
 const defaultVersion = "meshcore-go"
 
-func loopDetectName(level int) string {
-	switch level {
-	case router.LoopDetectOff:
-		return "off"
-	case router.LoopDetectMinimal:
-		return "minimal"
-	case router.LoopDetectModerate:
-		return "moderate"
-	case router.LoopDetectStrict:
-		return "strict"
-	default:
-		return fmt.Sprintf("unknown(%d)", level)
-	}
-}
-
-func parseLoopDetectLevel(s string) (int, bool) {
-	switch strings.ToLower(s) {
-	case "off", "0":
-		return router.LoopDetectOff, true
-	case "minimal", "1":
-		return router.LoopDetectMinimal, true
-	case "moderate", "2":
-		return router.LoopDetectModerate, true
-	case "strict", "3":
-		return router.LoopDetectStrict, true
-	default:
-		return 0, false
-	}
-}
-
 // handleCLICommand processes a CLI command from an admin client and sends the
 // reply as an encrypted TXT_MSG with TxtTypeCLI. The firmware does NOT send
 // an ACK for CLI commands — only the text reply.
@@ -191,9 +161,9 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 		},
 	})
 	d.Key("loop.detect", cli.ConfigKey{
-		Get: func() string { return loopDetectName(s.cfg.Router.GetLoopDetect()) },
+		Get: func() string { return router.LoopDetectName(s.cfg.Router.GetLoopDetect()) },
 		Set: func(v string) error {
-			level, ok := parseLoopDetectLevel(v)
+			level, ok := router.ParseLoopDetectLevel(v)
 			if !ok {
 				return errors.New("expected off/minimal/moderate/strict")
 			}

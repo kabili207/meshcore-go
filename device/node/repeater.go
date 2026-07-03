@@ -12,6 +12,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/device/acl"
 	"github.com/kabili207/meshcore-go/device/advert"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 )
@@ -39,6 +40,15 @@ type RepeaterConfig struct {
 
 	// MaxNeighbors caps the directly-heard neighbor table. Default: 32.
 	MaxNeighbors int
+
+	// Version is reported by the CLI "ver" command. Default: "meshcore-go".
+	Version string
+
+	// OnRegionsChanged, if set, persists the RegionMap after a "region" CLI edit.
+	OnRegionsChanged func(data []byte) error
+
+	// OnSettingChanged, if set, is called after a successful CLI "set".
+	OnSettingChanged func(key, value string)
 
 	// Advertisement
 	Name string   // Node name broadcast in adverts.
@@ -69,6 +79,9 @@ type RepeaterNode struct {
 	auth            acl.Authenticator
 	neighbors       *neighborTable
 	discoverLimiter *rateLimiter
+	cli             *cli.Dispatcher
+	appData         *codec.AdvertAppData
+	cfg             RepeaterConfig
 	startTime       time.Time
 	log             *slog.Logger
 
@@ -110,18 +123,20 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 		return nil, fmt.Errorf("create base node: %w", err)
 	}
 
-	// Build advert scheduler
+	// Build advert scheduler. Keep the AppData pointer so CLI "set name/lat/lon"
+	// takes effect on subsequent adverts.
 	clk := base.Clock()
+	appData := &codec.AdvertAppData{
+		Name:     cfg.Name,
+		NodeType: codec.NodeTypeRepeater,
+		Lat:      cfg.Lat,
+		Lon:      cfg.Lon,
+	}
 	advertBuilder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
 		PrivateKey: cfg.PrivateKey,
 		PublicKey:  base.PublicKey(),
 		Clock:      clk,
-		AppData: &codec.AdvertAppData{
-			Name:     cfg.Name,
-			NodeType: codec.NodeTypeRepeater,
-			Lat:      cfg.Lat,
-			Lon:      cfg.Lon,
-		},
+		AppData:    appData,
 	})
 
 	localInterval := cfg.AdvertLocalInterval
@@ -153,11 +168,14 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 		neighbors: newNeighborTable(cfg.MaxNeighbors),
 		// Firmware discover_limiter: max 4 responses every 2 minutes.
 		discoverLimiter: newRateLimiter(4, 120),
+		appData:         appData,
+		cfg:             cfg,
 		startTime:       time.Now(),
 		log:             logger.WithGroup("repeater"),
 	}
+	n.cli = n.buildCLI()
 
-	// Wire admin/ACL event handling (login, and later CLI/requests).
+	// Wire admin/ACL event handling (login, requests, CLI).
 	base.OnEvent(n.dispatchEvents)
 
 	return n, nil

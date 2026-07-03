@@ -297,6 +297,25 @@ func (r *Router) SetLoopDetect(level int) {
 	r.cfg.LoopDetect = level
 }
 
+// GetMaxFloodHops returns the maximum flood hop count before packets are dropped.
+func (r *Router) GetMaxFloodHops() int {
+	return r.cfg.MaxFloodHops
+}
+
+// SetMaxFloodHops updates the maximum flood hop count. A value <= 0 restores the
+// default.
+func (r *Router) SetMaxFloodHops(n int) {
+	if n <= 0 {
+		n = DefaultMaxFloodHops
+	}
+	r.cfg.MaxFloodHops = n
+}
+
+// GetForwardPackets reports whether packet forwarding is enabled.
+func (r *Router) GetForwardPackets() bool {
+	return r.cfg.ForwardPackets
+}
+
 // SetForwardPackets enables or disables packet forwarding.
 func (r *Router) SetForwardPackets(enabled bool) {
 	r.cfg.ForwardPackets = enabled
