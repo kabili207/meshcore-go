@@ -2,6 +2,7 @@ package room
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/router"
 )
 
@@ -73,42 +75,163 @@ func (s *Server) handleCLICommand(pkt *codec.Packet, senderID core.MeshCoreID, s
 // executeCLI dispatches a CLI command string and returns the reply text.
 // Returns "" for no reply.
 func (s *Server) executeCLI(cmd string) string {
-	cmd = strings.TrimLeft(cmd, " ")
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return ""
-	}
+	// Config get/set access is serialized under s.mu (the command handlers use
+	// their own thread-safe stores, so the broader lock is harmless).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cli.Execute(cmd)
+}
 
-	switch parts[0] {
-	case "clock":
-		return s.cliClock(parts[1:])
-	case "ver":
-		return s.cliVer()
-	case "get":
-		if len(parts) < 2 {
-			return "??: (missing key)"
+// buildCLI constructs the room server's shared CLI dispatcher: config keys plus
+// role-specific commands. Called once from NewServer.
+func (s *Server) buildCLI() *cli.Dispatcher {
+	d := cli.New()
+
+	// --- Config keys ---
+	d.Key("name", cli.ConfigKey{
+		Get: func() string { return s.cfg.Name },
+		Set: func(v string) error {
+			s.cfg.Name = v
+			if s.cfg.AppData != nil {
+				s.cfg.AppData.Name = v
+			}
+			return nil
+		},
+	})
+	d.Key("lat", cli.ConfigKey{
+		Get: func() string {
+			if s.cfg.Lat != nil {
+				return fmt.Sprintf("%f", *s.cfg.Lat)
+			}
+			return "0.000000"
+		},
+		Set: func(v string) error {
+			f, err := strconv.ParseFloat(normalizeNumber(v), 64)
+			if err != nil {
+				return errors.New("bad latitude")
+			}
+			s.cfg.Lat = &f
+			if s.cfg.AppData != nil {
+				s.cfg.AppData.Lat = &f
+			}
+			return nil
+		},
+	})
+	d.Key("lon", cli.ConfigKey{
+		Get: func() string {
+			if s.cfg.Lon != nil {
+				return fmt.Sprintf("%f", *s.cfg.Lon)
+			}
+			return "0.000000"
+		},
+		Set: func(v string) error {
+			f, err := strconv.ParseFloat(normalizeNumber(v), 64)
+			if err != nil {
+				return errors.New("bad longitude")
+			}
+			s.cfg.Lon = &f
+			if s.cfg.AppData != nil {
+				s.cfg.AppData.Lon = &f
+			}
+			return nil
+		},
+	})
+	d.Key("freq", cli.ConfigKey{
+		Get: func() string { return s.cfg.RadioFreq },
+		Set: func(v string) error { s.cfg.RadioFreq = v; return nil },
+	})
+	d.Key("bw", cli.ConfigKey{
+		Get: func() string { return s.cfg.RadioBW },
+		Set: func(v string) error { s.cfg.RadioBW = v; return nil },
+	})
+	d.Key("sf", cli.ConfigKey{
+		Get: func() string { return s.cfg.RadioSF },
+		Set: func(v string) error { s.cfg.RadioSF = v; return nil },
+	})
+	d.Key("cr", cli.ConfigKey{
+		Get: func() string { return s.cfg.RadioCR },
+		Set: func(v string) error { s.cfg.RadioCR = v; return nil },
+	})
+	d.Key("radio", cli.ConfigKey{
+		Get: func() string { return s.cfg.RadioModel },
+		Set: func(v string) error { s.cfg.RadioModel = v; return nil },
+	})
+	d.Key("guest.password", cli.ConfigKey{
+		Get: func() string { return s.cfg.GuestPassword },
+		Set: func(v string) error { s.cfg.GuestPassword = v; return nil },
+	})
+	d.Key("allow.read.only", cli.ConfigKey{
+		Get: func() string {
+			if s.cfg.AllowReadOnly {
+				return "on"
+			}
+			return "off"
+		},
+		Set: func(v string) error {
+			switch v {
+			case "on":
+				s.cfg.AllowReadOnly = true
+			case "off":
+				s.cfg.AllowReadOnly = false
+			default:
+				return errors.New("expected on/off")
+			}
+			return nil
+		},
+	})
+	d.Key("path.hash.mode", cli.ConfigKey{
+		Get: func() string { return fmt.Sprintf("%d", s.cfg.Router.GetPathHashMode()) },
+		Set: func(v string) error {
+			mode, err := strconv.ParseUint(v, 10, 8)
+			if err != nil || mode > 2 {
+				return errors.New("expected 0, 1, or 2")
+			}
+			s.cfg.Router.SetPathHashMode(uint8(mode))
+			return nil
+		},
+	})
+	d.Key("loop.detect", cli.ConfigKey{
+		Get: func() string { return loopDetectName(s.cfg.Router.GetLoopDetect()) },
+		Set: func(v string) error {
+			level, ok := parseLoopDetectLevel(v)
+			if !ok {
+				return errors.New("expected off/minimal/moderate/strict")
+			}
+			s.cfg.Router.SetLoopDetect(level)
+			return nil
+		},
+	})
+
+	// --- Read-only keys ---
+	d.Key("public.key", cli.ConfigKey{Get: func() string { return hex.EncodeToString(s.cfg.PublicKey[:]) }})
+	d.Key("role", cli.ConfigKey{Get: func() string { return "room_server" }})
+	d.Key("bootloader.ver", cli.ConfigKey{Get: func() string {
+		if s.cfg.BootloaderVersion != "" {
+			return s.cfg.BootloaderVersion
 		}
-		return s.cliGet(parts[1])
-	case "set":
-		if len(parts) < 3 {
-			return "Error: missing value"
-		}
-		return s.cliSet(parts[1], strings.Join(parts[2:], " "))
-	case "setperm":
-		return s.cliSetPerm(parts[1:])
-	case "clear":
-		if len(parts) >= 2 && parts[1] == "stats" {
+		return "ERROR: unsupported"
+	}})
+
+	// --- Commands ---
+	d.Command("clock", func(args []string) string { return s.cliClock(args) })
+	d.Command("ver", func([]string) string { return s.cliVer() })
+	d.Command("setperm", func(args []string) string { return s.cliSetPerm(args) })
+	d.Command("region", func(args []string) string { return s.cliRegion(args) })
+	d.Command("clear", func(args []string) string {
+		if len(args) >= 1 && args[0] == "stats" {
 			return s.cliClearStats()
 		}
 		return "Unknown command"
-	case "region":
-		return s.cliRegion(parts[1:])
-	default:
-		if s.cfg.CLIHandler != nil {
-			return s.cfg.CLIHandler(cmd)
-		}
-		return "Unknown command"
+	})
+
+	if s.cfg.OnSettingChanged != nil {
+		d.AfterSet(s.cfg.OnSettingChanged)
 	}
+	if s.cfg.CLIHandler != nil {
+		d.Fallback(s.cfg.CLIHandler)
+	}
+
+	return d
 }
 
 // sendCLIReply sends a CLI reply text message to the client.
@@ -157,129 +280,6 @@ func (s *Server) cliVer() string {
 		return s.cfg.Version
 	}
 	return defaultVersion
-}
-
-func (s *Server) cliGet(key string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	switch key {
-	case "name":
-		return s.cfg.Name
-	case "lat":
-		if s.cfg.Lat != nil {
-			return fmt.Sprintf("%f", *s.cfg.Lat)
-		}
-		return "0.000000"
-	case "lon":
-		if s.cfg.Lon != nil {
-			return fmt.Sprintf("%f", *s.cfg.Lon)
-		}
-		return "0.000000"
-	case "freq":
-		return s.cfg.RadioFreq
-	case "bw":
-		return s.cfg.RadioBW
-	case "sf":
-		return s.cfg.RadioSF
-	case "cr":
-		return s.cfg.RadioCR
-	case "radio":
-		return s.cfg.RadioModel
-	case "guest.password":
-		return s.cfg.GuestPassword
-	case "allow.read.only":
-		if s.cfg.AllowReadOnly {
-			return "on"
-		}
-		return "off"
-	case "public.key":
-		return hex.EncodeToString(s.cfg.PublicKey[:])
-	case "role":
-		return "room_server"
-	case "path.hash.mode":
-		return fmt.Sprintf("%d", s.cfg.Router.GetPathHashMode())
-	case "loop.detect":
-		return loopDetectName(s.cfg.Router.GetLoopDetect())
-	case "bootloader.ver":
-		if s.cfg.BootloaderVersion != "" {
-			return s.cfg.BootloaderVersion
-		}
-		return "ERROR: unsupported"
-	default:
-		return "??: " + key
-	}
-}
-
-func (s *Server) cliSet(key, value string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	switch key {
-	case "name":
-		s.cfg.Name = value
-		if s.cfg.AppData != nil {
-			s.cfg.AppData.Name = value
-		}
-	case "lat":
-		v, err := strconv.ParseFloat(normalizeNumber(value), 64)
-		if err != nil {
-			return "Error: bad latitude"
-		}
-		s.cfg.Lat = &v
-		if s.cfg.AppData != nil {
-			s.cfg.AppData.Lat = &v
-		}
-	case "lon":
-		v, err := strconv.ParseFloat(normalizeNumber(value), 64)
-		if err != nil {
-			return "Error: bad longitude"
-		}
-		s.cfg.Lon = &v
-		if s.cfg.AppData != nil {
-			s.cfg.AppData.Lon = &v
-		}
-	case "freq":
-		s.cfg.RadioFreq = value
-	case "bw":
-		s.cfg.RadioBW = value
-	case "sf":
-		s.cfg.RadioSF = value
-	case "cr":
-		s.cfg.RadioCR = value
-	case "radio":
-		s.cfg.RadioModel = value
-	case "guest.password":
-		s.cfg.GuestPassword = value
-	case "allow.read.only":
-		switch value {
-		case "on":
-			s.cfg.AllowReadOnly = true
-		case "off":
-			s.cfg.AllowReadOnly = false
-		default:
-			return "Error: expected on/off"
-		}
-	case "path.hash.mode":
-		mode, err := strconv.ParseUint(value, 10, 8)
-		if err != nil || mode > 2 {
-			return "Error: expected 0, 1, or 2"
-		}
-		s.cfg.Router.SetPathHashMode(uint8(mode))
-	case "loop.detect":
-		level, ok := parseLoopDetectLevel(value)
-		if !ok {
-			return "Error: expected off/minimal/moderate/strict"
-		}
-		s.cfg.Router.SetLoopDetect(level)
-	default:
-		return "??: " + key
-	}
-
-	if s.cfg.OnSettingChanged != nil {
-		s.cfg.OnSettingChanged(key, value)
-	}
-	return "OK"
 }
 
 func (s *Server) cliSetPerm(args []string) string {

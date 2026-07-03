@@ -17,6 +17,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/clock"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/device/ack"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/router"
 )
@@ -116,6 +117,7 @@ type Server struct {
 	log    *slog.Logger
 	mu     sync.Mutex
 	cancel context.CancelFunc
+	cli    *cli.Dispatcher
 
 	// sender is the event-based response sender. When set, the event-based
 	// handler methods (HandleLogin, HandleTextMessage, etc.) use this for
@@ -150,10 +152,12 @@ func NewServer(cfg ServerConfig) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{
+	s := &Server{
 		cfg: cfg,
 		log: logger.WithGroup("room"),
 	}
+	s.cli = s.buildCLI()
+	return s
 }
 
 // Start begins the server's background loops (post sync). Blocks until
