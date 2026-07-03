@@ -56,12 +56,12 @@ type ManagerConfig struct {
 
 // Manager tracks connected peers and detects timeouts.
 type Manager struct {
-	cfg     ManagerConfig
-	log     *slog.Logger
-	mu      sync.Mutex
-	peers   map[core.MeshCoreID]*PeerState
+	cfg          ManagerConfig
+	log          *slog.Logger
+	mu           sync.Mutex
+	peers        map[core.MeshCoreID]*PeerState
 	onDisconnect func(id core.MeshCoreID)
-	cancel  context.CancelFunc
+	cancel       context.CancelFunc
 
 	// nowFn allows overriding time.Now() for testing.
 	nowFn func() time.Time
@@ -137,6 +137,17 @@ func (m *Manager) ConnectedCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.peers)
+}
+
+// Peers returns the IDs of all currently tracked peers.
+func (m *Manager) Peers() []core.MeshCoreID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]core.MeshCoreID, 0, len(m.peers))
+	for id := range m.peers {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // CheckTimeouts checks all tracked peers for keep-alive timeout and removes

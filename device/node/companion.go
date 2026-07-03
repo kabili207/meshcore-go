@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -13,6 +14,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/device/advert"
+	"github.com/kabili207/meshcore-go/device/connection"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
@@ -49,6 +51,10 @@ type CompanionConfig struct {
 	// MaxRetries is how many times to resend before giving up. Default: 3.
 	MaxRetries int
 
+	// KeepAliveInterval is how often to send keep-alives to logged-in servers.
+	// Default: 2 minutes.
+	KeepAliveInterval time.Duration
+
 	// ForwardPackets enables packet relaying. Default: false.
 	ForwardPackets bool
 
@@ -68,8 +74,14 @@ type CompanionNode struct {
 	base        *BaseNode
 	ackTracker  *ack.Tracker
 	advertSched *advert.Scheduler
+	connections *connection.Manager
 	clk         *clock.Clock
 	log         *slog.Logger
+
+	keepAliveEvery time.Duration
+
+	pendingMu     sync.Mutex
+	pendingLogins map[core.MeshCoreID]uint32 // server -> login send time
 }
 
 // NewCompanion creates a CompanionNode from the given configuration.
@@ -156,13 +168,29 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 		Logger:              logger,
 	})
 
-	return &CompanionNode{
+	keepAlive := cfg.KeepAliveInterval
+	if keepAlive == 0 {
+		keepAlive = 2 * time.Minute
+	}
+
+	n := &CompanionNode{
 		base:        base,
 		ackTracker:  tracker,
 		advertSched: scheduler,
-		clk:         clk,
-		log:         logger.WithGroup("companion"),
-	}, nil
+		connections: connection.NewManager(connection.ManagerConfig{
+			KeepAliveInterval: keepAlive,
+			Logger:            logger,
+		}),
+		clk:            clk,
+		log:            logger.WithGroup("companion"),
+		keepAliveEvery: keepAlive,
+		pendingLogins:  make(map[core.MeshCoreID]uint32),
+	}
+
+	// Watch responses for login-OK correlation and connection liveness.
+	base.OnEvent(n.onInternalEvent)
+
+	return n, nil
 }
 
 // Run starts all components and blocks until ctx is cancelled.
@@ -178,6 +206,10 @@ func (n *CompanionNode) Run(ctx context.Context) error {
 
 	// Start ACK tracker
 	go n.ackTracker.Start(ctx)
+
+	// Start connection timeout tracking and the keep-alive sender.
+	go n.connections.Start(ctx)
+	go n.keepAliveLoop(ctx)
 
 	// Send initial advert
 	n.advertSched.SendNow(true)

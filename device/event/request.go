@@ -54,3 +54,14 @@ type ResponseReceived struct {
 	// on the original request type.
 	Content []byte
 }
+
+// LoginResponse fires when a server accepts a login (RESP_SERVER_LOGIN_OK)
+// following a SendLogin. The embedded Event's From field is the server that
+// accepted the login.
+type LoginResponse struct {
+	Event
+
+	// Permissions is the ACL permission byte the server granted (see
+	// codec.PermACL* constants).
+	Permissions uint8
+}
