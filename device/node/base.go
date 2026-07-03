@@ -111,7 +111,10 @@ type BaseNode struct {
 
 	// Group channels: channel hash -> shared key, for GRP_TXT/GRP_DATA decryption.
 	channelMu sync.RWMutex
-	channels  map[uint8][]byte
+	// channels maps a 1-byte channel hash to every key registered under it.
+	// A hash can collide across channels, so decode tries each key and lets MAC
+	// verification pick the right one (matching firmware's searchChannelsByHash).
+	channels map[uint8][][]byte
 
 	log *slog.Logger
 }

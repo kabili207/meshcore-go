@@ -354,6 +354,20 @@ func (b *BaseNode) handlePath(pkt *codec.Packet, src transport.PacketSource) {
 	})
 }
 
+// decryptGroup tries every key registered under the channel hash and returns
+// the first plaintext whose MAC verifies. This mirrors firmware's
+// searchChannelsByHash + try-each-decrypt loop: a 1-byte hash can collide across
+// channels, so MAC verification is what actually selects the right key.
+func (b *BaseNode) decryptGroup(hash uint8, mac uint16, ciphertext []byte) ([]byte, bool) {
+	for _, key := range b.channelKeys(hash) {
+		plaintext, err := crypto.DecryptGroupMessage(codec.PrependMAC(mac, ciphertext), key)
+		if err == nil {
+			return plaintext, true
+		}
+	}
+	return nil, false
+}
+
 // handleGrpTxt processes a group text message.
 func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 	grp, err := codec.ParseGroupPayload(pkt.Payload)
@@ -362,14 +376,9 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 		return
 	}
 
-	key := b.channelKey(grp.ChannelHash)
-	if key == nil {
-		return // no key registered for this channel — cannot decrypt
-	}
-	plaintext, err := crypto.DecryptGroupMessage(codec.PrependMAC(grp.MAC, grp.Ciphertext), key)
-	if err != nil {
-		b.log.Debug("failed to decrypt group text", "channel", grp.ChannelHash, "error", err)
-		return
+	plaintext, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
+	if !ok {
+		return // no registered key for this hash decrypted (MAC failed on all)
 	}
 	_, _, message, err := crypto.ParseGrpTxtPlaintext(plaintext)
 	if err != nil {
@@ -392,14 +401,9 @@ func (b *BaseNode) handleGrpData(pkt *codec.Packet, src transport.PacketSource) 
 		return
 	}
 
-	key := b.channelKey(grp.ChannelHash)
-	if key == nil {
-		return // no key registered for this channel — cannot decrypt
-	}
-	plaintext, err := crypto.DecryptGroupMessage(codec.PrependMAC(grp.MAC, grp.Ciphertext), key)
-	if err != nil {
-		b.log.Debug("failed to decrypt group data", "channel", grp.ChannelHash, "error", err)
-		return
+	plaintext, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
+	if !ok {
+		return // no registered key for this hash decrypted (MAC failed on all)
 	}
 	content, err := crypto.ParseGrpDataContent(plaintext)
 	if err != nil {

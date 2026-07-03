@@ -267,9 +267,10 @@ func (n *CompanionNode) AddChannel(key []byte) uint8 {
 	return n.base.AddChannel(key)
 }
 
-// SendChannelText sends a plain group text message on a registered channel.
-func (n *CompanionNode) SendChannelText(channelHash uint8, text string) error {
-	return n.base.SendChannelText(channelHash, text)
+// SendChannelText sends a plain group text message on the channel identified by
+// key.
+func (n *CompanionNode) SendChannelText(key []byte, text string) error {
+	return n.base.SendChannelText(key, text)
 }
 
 // ACKTracker returns the ACK tracker for manual tracking if needed.
