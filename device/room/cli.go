@@ -181,10 +181,15 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 		}
 		return "ERROR: unsupported"
 	}})
+	// "get acl" dumps the client table.
+	d.Key("acl", cli.ConfigKey{Get: func() string { return s.cliACL() }})
 
 	// --- Commands ---
 	d.Command("clock", func(args []string) string { return s.cliClock(args) })
+	d.Command("time", func(args []string) string { return cli.SetClock(s.cfg.OnSetClock, args) })
+	d.Command("reboot", func([]string) string { return cli.Reboot(s.cfg.OnReboot) })
 	d.Command("ver", func([]string) string { return s.cliVer() })
+	d.Command("password", func(args []string) string { return s.cliPassword(args) })
 	d.Command("setperm", func(args []string) string { return s.cliSetPerm(args) })
 	d.Command("region", func(args []string) string { return s.cliRegion(args) })
 	d.Command("clear", func(args []string) string {
@@ -213,13 +218,10 @@ func (s *Server) sendCLIReply(origPkt *codec.Packet, recipientID core.MeshCoreID
 
 // --- Individual command implementations ---
 
-func (s *Server) cliClock(args []string) string {
-	if len(args) > 0 && args[0] == "sync" {
-		// Clock sync is handled by the caller if needed; here we just
-		// report the time after any sync.
-		return "OK"
-	}
-	// Return current time as "HH:MM - DD/MM/YYYY UTC"
+func (s *Server) cliClock([]string) string {
+	// "clock" and "clock sync" both just report the current time. We never let a
+	// remote client override our clock here (the host clock is authoritative);
+	// setting is opt-in via the "time <epoch>" command and OnSetClock.
 	t := time.Unix(int64(s.cfg.Clock.GetCurrentTime()), 0).UTC()
 	return fmt.Sprintf("%02d:%02d - %02d/%02d/%04d UTC",
 		t.Hour(), t.Minute(), t.Day(), t.Month(), t.Year())
@@ -250,6 +252,29 @@ func (s *Server) cliVer() string {
 		return s.cfg.Version
 	}
 	return defaultVersion
+}
+
+// cliACL dumps the client table, one client per line as "<id> perms=<n>".
+func (s *Server) cliACL() string {
+	var b strings.Builder
+	s.cfg.Clients.ForEach(func(c *ClientInfo) bool {
+		fmt.Fprintf(&b, "%s perms=%d\n", c.ID.String()[:12], c.Permissions)
+		return true
+	})
+	if b.Len() == 0 {
+		return "(no clients)"
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// cliPassword changes the admin password. Firmware's "password" command sets the
+// admin password used for subsequent logins.
+func (s *Server) cliPassword(args []string) string {
+	if len(args) < 1 {
+		return "Error: usage: password <new>"
+	}
+	s.cfg.AdminPassword = args[0]
+	return "OK"
 }
 
 func (s *Server) cliSetPerm(args []string) string {

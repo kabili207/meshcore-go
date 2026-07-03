@@ -4,7 +4,10 @@
 // command line. This corresponds to the firmware's CommonCLI shared command set.
 package cli
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // ConfigKey is a get/set-able configuration value.
 type ConfigKey struct {
@@ -103,6 +106,38 @@ func (d *Dispatcher) Execute(cmd string) string {
 		return d.fallback(cmd)
 	}
 	return "Unknown command"
+}
+
+// SetClock implements a "time <epoch>" command: it parses an epoch-seconds
+// argument and forwards it to cb. A transport-attached node normally has a
+// better clock than a remote client, so cb is opt-in; when nil, the command
+// reports "unsupported".
+func SetClock(cb func(epoch uint32) error, args []string) string {
+	if cb == nil {
+		return "unsupported"
+	}
+	if len(args) < 1 {
+		return "Error: usage: time <epoch>"
+	}
+	epoch, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		return "Error: bad epoch"
+	}
+	if err := cb(uint32(epoch)); err != nil {
+		return "Error: " + err.Error()
+	}
+	return "OK"
+}
+
+// Reboot implements a "reboot" command. cb runs in its own goroutine so the CLI
+// reply is sent before the app acts on it. When cb is nil the command reports
+// "unsupported".
+func Reboot(cb func()) string {
+	if cb == nil {
+		return "unsupported"
+	}
+	go cb()
+	return "OK"
 }
 
 func (d *Dispatcher) get(key string) string {

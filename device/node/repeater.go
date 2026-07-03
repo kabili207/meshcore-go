@@ -54,6 +54,17 @@ type RepeaterConfig struct {
 	// OnSettingChanged, if set, is called after a successful CLI "set".
 	OnSettingChanged func(key, value string)
 
+	// OnReboot, if set, is invoked by the "reboot" CLI command. The library never
+	// restarts the process itself; the app decides what to do (restart, exit,
+	// reconnect). Without it, "reboot" reports that it is unsupported.
+	OnReboot func()
+
+	// OnSetClock, if set, is invoked by the "time <epoch>" CLI command with the
+	// requested epoch seconds. A transport-attached node usually carries a better
+	// (host) clock than a remote client, so accepting a client's time is opt-in.
+	// Return an error to report failure. Without it, "time" reports unsupported.
+	OnSetClock func(epoch uint32) error
+
 	// Advertisement
 	Name string   // Node name broadcast in adverts.
 	Lat  *float64 // Optional GPS latitude.

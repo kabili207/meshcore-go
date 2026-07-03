@@ -101,6 +101,24 @@ func (t *neighborTable) count() int {
 	return len(t.list)
 }
 
+// remove drops every neighbor whose ID begins with prefix, returning how many
+// were removed.
+func (t *neighborTable) remove(prefix []byte) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	kept := t.list[:0]
+	removed := 0
+	for _, n := range t.list {
+		if matchesPrefix(n.id[:], prefix) {
+			removed++
+			continue
+		}
+		kept = append(kept, n)
+	}
+	t.list = kept
+	return removed
+}
+
 // recordNeighbor adds a directly-heard repeater advert to the neighbor table.
 // Firmware records only zero-hop, non-share adverts from repeater nodes.
 func (n *RepeaterNode) recordNeighbor(evt *event.AdvertReceived) {

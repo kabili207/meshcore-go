@@ -2,7 +2,9 @@ package room
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestRoomCLI_GetSetName(t *testing.T) {
@@ -100,5 +102,71 @@ func TestRoomCLI_AfterSetHook(t *testing.T) {
 	h.server.executeCLI("set name Hall")
 	if gotKey != "name" || gotVal != "Hall" {
 		t.Errorf("OnSettingChanged(%q,%q), want (name, Hall)", gotKey, gotVal)
+	}
+}
+
+func TestRoomCLI_ClockReports(t *testing.T) {
+	h := newTestHarness(t)
+	// "clock" and "clock sync" both report the time; neither returns "OK" (we
+	// never let a client override the server clock).
+	for _, cmd := range []string{"clock", "clock sync"} {
+		got := h.server.executeCLI(cmd)
+		if got == "OK" || !strings.Contains(got, "UTC") {
+			t.Errorf("%q = %q, want a UTC time string", cmd, got)
+		}
+	}
+}
+
+func TestRoomCLI_TimeRebootUnsupported(t *testing.T) {
+	h := newTestHarness(t)
+	if got := h.server.executeCLI("time 1000"); got != "unsupported" {
+		t.Errorf("time without callback = %q, want unsupported", got)
+	}
+	if got := h.server.executeCLI("reboot"); got != "unsupported" {
+		t.Errorf("reboot without callback = %q, want unsupported", got)
+	}
+}
+
+func TestRoomCLI_Callbacks(t *testing.T) {
+	h := newTestHarness(t)
+	var gotEpoch uint32
+	rebooted := make(chan struct{}, 1)
+	h.server.cfg.OnSetClock = func(e uint32) error { gotEpoch = e; return nil }
+	h.server.cfg.OnReboot = func() { rebooted <- struct{}{} }
+	h.server.cli = h.server.buildCLI()
+
+	if got := h.server.executeCLI("time 777"); got != "OK" {
+		t.Errorf("time = %q, want OK", got)
+	}
+	if gotEpoch != 777 {
+		t.Errorf("OnSetClock epoch = %d, want 777", gotEpoch)
+	}
+	if got := h.server.executeCLI("reboot"); got != "OK" {
+		t.Errorf("reboot = %q, want OK", got)
+	}
+	select {
+	case <-rebooted:
+	case <-time.After(time.Second):
+		t.Fatal("OnReboot was not called")
+	}
+}
+
+func TestRoomCLI_Password(t *testing.T) {
+	h := newTestHarness(t)
+	if got := h.server.executeCLI("password hunter2"); got != "OK" {
+		t.Errorf("password = %q, want OK", got)
+	}
+	if h.server.cfg.AdminPassword != "hunter2" {
+		t.Errorf("AdminPassword = %q, want hunter2", h.server.cfg.AdminPassword)
+	}
+	if got := h.server.executeCLI("password"); !strings.HasPrefix(got, "Error:") {
+		t.Errorf("password (no arg) = %q, want an error", got)
+	}
+}
+
+func TestRoomCLI_GetACL(t *testing.T) {
+	h := newTestHarness(t)
+	if got := h.server.executeCLI("get acl"); got != "(no clients)" {
+		t.Errorf("empty acl = %q, want (no clients)", got)
 	}
 }

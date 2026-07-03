@@ -122,6 +122,8 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 		return hex.EncodeToString(pk[:])
 	}})
 	d.Key("role", cli.ConfigKey{Get: func() string { return "repeater" }})
+	// "get acl" dumps the admin/guest client table.
+	d.Key("acl", cli.ConfigKey{Get: func() string { return n.cliACL() }})
 
 	// --- Commands ---
 	d.Command("ver", func([]string) string {
@@ -135,9 +137,13 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 		return fmt.Sprintf("%02d:%02d - %02d/%02d/%04d UTC",
 			t.Hour(), t.Minute(), t.Day(), t.Month(), t.Year())
 	})
+	d.Command("time", func(args []string) string { return cli.SetClock(n.cfg.OnSetClock, args) })
+	d.Command("reboot", func([]string) string { return cli.Reboot(n.cfg.OnReboot) })
 	d.Command("advert", func([]string) string { n.advertSched.SendNow(true); return "OK" })
 	d.Command("advert.zerohop", func([]string) string { n.advertSched.SendNow(false); return "OK" })
 	d.Command("neighbors", func([]string) string { return n.cliNeighbors() })
+	d.Command("neighbor.remove", func(args []string) string { return n.cliNeighborRemove(args) })
+	d.Command("discover.neighbors", func([]string) string { n.SendNodeDiscover(); return "OK" })
 	d.Command("password", func(args []string) string {
 		if len(args) < 1 {
 			return "Error: usage: password <new>"
@@ -165,6 +171,35 @@ func (n *RepeaterNode) cliNeighbors() string {
 		fmt.Fprintf(&b, "%s snr=%.2f\n", e.id.String()[:12], float32(e.snr)/4.0)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// cliACL dumps the ACL client table, one client per line as "<id> perms=<n>".
+func (n *RepeaterNode) cliACL() string {
+	var b strings.Builder
+	n.acl.ForEach(func(c *acl.Client) bool {
+		fmt.Fprintf(&b, "%s perms=%d\n", c.ID.String()[:12], c.Permissions)
+		return true
+	})
+	if b.Len() == 0 {
+		return "(no clients)"
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// cliNeighborRemove drops neighbors matching a public-key prefix.
+func (n *RepeaterNode) cliNeighborRemove(args []string) string {
+	if len(args) < 1 {
+		return "Error: usage: neighbor.remove <pubkey-hex>"
+	}
+	prefix, err := hex.DecodeString(args[0])
+	if err != nil || len(prefix) == 0 {
+		return "ERR: bad pubkey"
+	}
+	removed := n.neighbors.remove(prefix)
+	if removed == 0 {
+		return "ERR: neighbor not found"
+	}
+	return "OK"
 }
 
 // cliSetPerm sets a client's permissions by public-key prefix.

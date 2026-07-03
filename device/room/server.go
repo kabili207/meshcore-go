@@ -101,6 +101,17 @@ type ServerConfig struct {
 	// (not running on NRF52 hardware), this is typically "ERROR: unsupported".
 	BootloaderVersion string
 
+	// OnReboot, if set, is invoked by the "reboot" CLI command. The library never
+	// restarts the process itself; the app decides what to do. Without it,
+	// "reboot" reports that it is unsupported.
+	OnReboot func()
+
+	// OnSetClock, if set, is invoked by the "time <epoch>" CLI command with the
+	// requested epoch seconds. A transport-attached server usually has a better
+	// (host) clock than a remote client, so accepting a client's time is opt-in.
+	// Without it, "time" reports unsupported. "clock"/"clock sync" only report.
+	OnSetClock func(epoch uint32) error
+
 	// CLIHandler is an optional callback for custom CLI commands.
 	// Called when no built-in command matches. Return "" for no reply,
 	// or "Unknown command" to indicate unrecognized input.
