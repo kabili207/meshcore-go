@@ -8,6 +8,7 @@ import (
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/device/acl"
 	"github.com/kabili207/meshcore-go/device/advert"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
@@ -25,10 +26,19 @@ type RepeaterConfig struct {
 	// ContactManager is created.
 	Contacts contact.ContactStore
 
+	// AdminPassword grants admin access on login. Empty disables admin login.
+	AdminPassword string
+
+	// GuestPassword grants guest access on login. Empty disables guest login.
+	GuestPassword string
+
+	// MaxClients caps the ACL client table. Default: acl.DefaultMaxClients (20).
+	MaxClients int
+
 	// Advertisement
-	Name     string   // Node name broadcast in adverts.
-	Lat      *float64 // Optional GPS latitude.
-	Lon      *float64 // Optional GPS longitude.
+	Name string   // Node name broadcast in adverts.
+	Lat  *float64 // Optional GPS latitude.
+	Lon  *float64 // Optional GPS longitude.
 
 	// AdvertLocalInterval is the local (zero-hop) advert interval in firmware
 	// units (value * 2 minutes). Default: 1 (2 minutes).
@@ -44,12 +54,14 @@ type RepeaterConfig struct {
 	Logger *slog.Logger
 }
 
-// RepeaterNode is a minimal node for packet relaying. It forwards all
-// packets, advertises its presence, and tracks neighbors via advert
-// processing. No text message handling, ACK tracking, or keep-alive.
+// RepeaterNode is a node for packet relaying with a remote admin surface. It
+// forwards all packets, advertises its presence, tracks neighbors via advert
+// processing, and authenticates admin/guest clients (ACL) for login.
 type RepeaterNode struct {
 	base        *BaseNode
 	advertSched *advert.Scheduler
+	acl         *acl.MemoryStore
+	auth        acl.Authenticator
 	log         *slog.Logger
 }
 
@@ -63,9 +75,19 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 	// Repeaters don't need auto-ACK
 	autoACK := false
 
+	// Default contact store: needed for neighbor tracking and ACL login (a nil
+	// store would panic on first use).
+	contacts := cfg.Contacts
+	if contacts == nil {
+		contacts = contact.NewManager(cfg.PrivateKey, contact.ManagerConfig{
+			MaxContacts:       256,
+			OverwriteWhenFull: true,
+		})
+	}
+
 	base, err := NewBase(BaseConfig{
 		PrivateKey:     cfg.PrivateKey,
-		Contacts:       cfg.Contacts,
+		Contacts:       contacts,
 		Transports:     cfg.Transports,
 		ForwardPackets: true, // always forward
 		AutoACK:        &autoACK,
@@ -105,11 +127,24 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 		Logger:              logger,
 	})
 
-	return &RepeaterNode{
+	n := &RepeaterNode{
 		base:        base,
 		advertSched: scheduler,
-		log:         logger.WithGroup("repeater"),
-	}, nil
+		acl:         acl.NewMemoryStore(cfg.MaxClients),
+		auth: acl.Authenticator{
+			// Repeater mapping: admin/guest passwords only, no open access.
+			// A correct guest password grants GUEST (read-only-style access).
+			AdminPassword: cfg.AdminPassword,
+			GuestPassword: cfg.GuestPassword,
+			GuestPerms:    codec.PermACLGuest,
+		},
+		log: logger.WithGroup("repeater"),
+	}
+
+	// Wire admin/ACL event handling (login, and later CLI/requests).
+	base.OnEvent(n.dispatchEvents)
+
+	return n, nil
 }
 
 // Run starts all components and blocks until ctx is cancelled.
@@ -141,4 +176,9 @@ func (n *RepeaterNode) ID() core.MeshCoreID { return n.base.ID() }
 // AdvertScheduler returns the advert scheduler for manual control.
 func (n *RepeaterNode) AdvertScheduler() *advert.Scheduler {
 	return n.advertSched
+}
+
+// ACL returns the repeater's client access-control store.
+func (n *RepeaterNode) ACL() *acl.MemoryStore {
+	return n.acl
 }
