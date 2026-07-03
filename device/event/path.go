@@ -23,3 +23,23 @@ type PathReceived struct {
 	// already been processed and the corresponding event emitted instead.
 	InnerData []byte
 }
+
+// TraceReceived fires when a TRACE packet completes its route and returns to
+// this node (the trace initiator). It carries the per-hop signal quality
+// collected along the traced path.
+type TraceReceived struct {
+	Event
+
+	// Tag is the trace's unique identifier, matching the SendTrace tag.
+	Tag uint32
+
+	// Flags is the trace flags byte (lower 2 bits encode the relay hash size).
+	Flags uint8
+
+	// SNRs are the per-hop signal-to-noise values (raw, multiply by 0.25 for
+	// dB), in route order.
+	SNRs []int8
+
+	// PathHashes are the relay hashes of the traced route.
+	PathHashes []byte
+}

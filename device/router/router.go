@@ -662,6 +662,22 @@ func (r *Router) SendFlood(pkt *codec.Packet) {
 	r.enqueue(pkt, PriorityFloodData, 0, 0, true)
 }
 
+// SendTrace broadcasts a TRACE packet. TRACE routing is driven by the relay
+// hashes embedded in the payload, and PathLen is a raw hop counter (0 at the
+// origin) rather than a wire path byte — so unlike other sends the wire path is
+// left empty and the counter is zeroed.
+func (r *Router) SendTrace(pkt *codec.Packet) {
+	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeDirect
+	pkt.PathLen = 0
+	pkt.PathHashSize = r.cfg.PathHashMode + 1
+	pkt.Path = nil
+
+	r.dedup.HasSeen(pkt)
+
+	r.counters.SentDirect.Add(1)
+	r.enqueue(pkt, PriorityTrace, 0, 0, true)
+}
+
 // SetSendScope sets the region send scope used by SendFloodScoped and
 // SendFloodPathScoped. Pass a key from TransportKeyFromRegion. A null key
 // disables scoping (equivalent to ClearSendScope).

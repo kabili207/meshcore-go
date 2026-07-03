@@ -33,6 +33,8 @@ func (b *BaseNode) processPacket(pkt *codec.Packet, src transport.PacketSource) 
 		b.handleGrpTxt(pkt, src)
 	case codec.PayloadTypeGrpData:
 		b.handleGrpData(pkt, src)
+	case codec.PayloadTypeTrace:
+		b.handleTraceComplete(pkt, src)
 	default:
 		b.emitEvent(&event.PacketReceived{
 			Event: b.baseEvent(pkt, src, core.MeshCoreID{}),
@@ -396,6 +398,29 @@ func (b *BaseNode) handleGrpData(pkt *codec.Packet, src transport.PacketSource) 
 		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
 		ChannelHash: grp.ChannelHash,
 		Data:        content.Data,
+	})
+}
+
+// handleTraceComplete processes a TRACE packet that has returned to the
+// initiator (delivered by the router once the route is fully traversed) and
+// emits a TraceReceived event with the per-hop SNRs. For a completed trace the
+// packet's Path[] holds the collected SNR bytes and PathLen is the hop count.
+func (b *BaseNode) handleTraceComplete(pkt *codec.Packet, src transport.PacketSource) {
+	trace, err := codec.ParseTracePayload(pkt.Payload)
+	if err != nil {
+		b.log.Debug("failed to parse trace", "error", err)
+		return
+	}
+	snrs := make([]int8, 0, pkt.PathLen)
+	for i := 0; i < int(pkt.PathLen) && i < len(pkt.Path); i++ {
+		snrs = append(snrs, int8(pkt.Path[i]))
+	}
+	b.emitEvent(&event.TraceReceived{
+		Event:      b.baseEvent(pkt, src, core.MeshCoreID{}),
+		Tag:        trace.Tag,
+		Flags:      trace.Flags,
+		SNRs:       snrs,
+		PathHashes: trace.PathHashes,
 	})
 }
 
