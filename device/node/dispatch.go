@@ -120,6 +120,8 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 	// Update contact path from flood route
 	b.updateContactPathFromFlood(pkt, ct)
 
+	reply := b.buildReplyContext(pkt, ct, secret)
+
 	// Auto-ACK before emitting event (matches firmware behavior).
 	if b.autoACK {
 		switch content.TxtType {
@@ -128,7 +130,20 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 			// (hash + tail attempt byte + random), keyed by the sender's pubkey.
 			ackData := codec.TrimTxtMsgContent(plaintext, content)
 			ackHash := crypto.ComputeAckHash(ackData, ct.ID[:])
-			b.sendAckPayload(ct.ID, codec.BuildPlainTextAck(ackHash, plaintext, ackData))
+			ackPayload := codec.BuildPlainTextAck(ackHash, plaintext, ackData)
+
+			if reply.HasFloodPath() {
+				// Flood-received: send one packet that both tells the sender the
+				// return path and carries the ACK (firmware createPathReturn with
+				// an embedded PAYLOAD_TYPE_ACK). Without this the sender never
+				// learns the direct path and keeps flooding.
+				if err := b.sendPathReturn(reply, ct.ID, codec.PayloadTypeAck, ackPayload); err != nil {
+					b.log.Debug("failed to send path-return ack", "error", err)
+				}
+			} else {
+				b.sendAckPayload(ct.ID, ackPayload)
+				b.sendExtraAcks(ct, ackPayload)
+			}
 		case codec.TxtTypeSigned:
 			// Signed messages (e.g. a room server pushing a post) are ACKed with
 			// a 4-byte hash keyed by the receiver's own pubkey, over the signed
@@ -138,8 +153,6 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 			b.sendAckPayload(ct.ID, codec.BuildAckPayload(ackHash))
 		}
 	}
-
-	reply := b.buildReplyContext(pkt, ct, secret)
 
 	b.emitEvent(&event.TextMessageReceived{
 		Event:              b.baseEvent(pkt, src, ct.ID),

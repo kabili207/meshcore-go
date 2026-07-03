@@ -58,6 +58,10 @@ type CompanionConfig struct {
 	// ForwardPackets enables packet relaying. Default: false.
 	ForwardPackets bool
 
+	// ExtraAckTransmits sends redundant multipart ACK copies over a direct path
+	// (firmware multi_acks). Default: 0 (off).
+	ExtraAckTransmits int
+
 	// EventHandlers registered during construction.
 	EventHandlers []event.Handler
 
@@ -125,14 +129,15 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 	}
 
 	base, err := NewBase(BaseConfig{
-		PrivateKey:     cfg.PrivateKey,
-		Contacts:       contacts,
-		Clock:          clk,
-		ACKTracker:     tracker,
-		Transports:     cfg.Transports,
-		ForwardPackets: cfg.ForwardPackets,
-		EventHandlers:  cfg.EventHandlers,
-		Logger:         logger,
+		PrivateKey:        cfg.PrivateKey,
+		Contacts:          contacts,
+		Clock:             clk,
+		ACKTracker:        tracker,
+		Transports:        cfg.Transports,
+		ForwardPackets:    cfg.ForwardPackets,
+		ExtraAckTransmits: cfg.ExtraAckTransmits,
+		EventHandlers:     cfg.EventHandlers,
+		Logger:            logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create base node: %w", err)

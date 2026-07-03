@@ -70,6 +70,11 @@ type BaseConfig struct {
 	// the contact store from valid ADVERTs. Default: true.
 	AutoUpdateContacts *bool
 
+	// ExtraAckTransmits sends this many redundant multipart ACK copies over a
+	// known direct path when auto-ACKing a direct message (firmware multi_acks).
+	// Default: 0 (off) — appropriate for reliable transports.
+	ExtraAckTransmits int
+
 	// EventHandlers are registered during construction (before Run).
 	EventHandlers []event.Handler
 
@@ -95,6 +100,7 @@ type BaseNode struct {
 	// Configuration
 	autoACK            bool
 	autoUpdateContacts bool
+	extraAckTransmits  int
 
 	// Transports registered at construction time.
 	transports []TransportOption
@@ -162,6 +168,7 @@ func NewBase(cfg BaseConfig) (*BaseNode, error) {
 		transports:         cfg.Transports,
 		autoACK:            autoACK,
 		autoUpdateContacts: autoUpdate,
+		extraAckTransmits:  cfg.ExtraAckTransmits,
 		log:                logger.WithGroup("node"),
 	}
 
@@ -297,6 +304,22 @@ func (b *BaseNode) SendACK(to core.MeshCoreID, ackHash uint32) {
 // direct when a path to the recipient is known, else floods.
 func (b *BaseNode) SendACKPayload(to core.MeshCoreID, payload []byte) {
 	b.sendAckPayload(to, payload)
+}
+
+// sendExtraAcks sends redundant multipart ACK copies over a known direct path,
+// implementing the firmware's multi_acks feature. Each copy is a MULTIPART
+// packet wrapping the same ACK; the receiver deduplicates so only one resolves.
+// No-op when ExtraAckTransmits is 0 or no direct path is known.
+func (b *BaseNode) sendExtraAcks(ct *contact.ContactInfo, ackPayload []byte) {
+	if b.extraAckTransmits <= 0 || ct == nil || !ct.HasDirectPath() {
+		return
+	}
+	for i := 0; i < b.extraAckTransmits; i++ {
+		remaining := uint8(b.extraAckTransmits - i)
+		mp := codec.BuildMultipartPayload(remaining, codec.PayloadTypeAck, ackPayload)
+		pkt := codec.NewPacket(codec.PayloadTypeMultipart, codec.RouteTypeDirect, mp)
+		b.Router.SendDirect(pkt, ct.OutPath)
+	}
 }
 
 // sendAckPayload sends an ACK with a caller-supplied wire payload: 4 bytes for
