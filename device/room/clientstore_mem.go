@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/kabili207/meshcore-go/core"
+	"github.com/kabili207/meshcore-go/device/acl"
 )
 
 const (
@@ -17,21 +18,54 @@ var _ ClientStore = (*MemoryClientStore)(nil)
 
 // MemoryClientStore is an in-memory implementation of ClientStore.
 type MemoryClientStore struct {
-	mu         sync.RWMutex
-	clients    []*ClientInfo
-	maxClients int
+	mu          sync.RWMutex
+	clients     []*ClientInfo
+	maxClients  int
+	persistence acl.Persistence
+}
+
+// Option configures a MemoryClientStore.
+type Option func(*MemoryClientStore)
+
+// WithPersistence makes the store durable. Admin clients are mirrored to p and
+// the store is seeded from p.Load at construction, so admins survive a restart
+// without re-authenticating. Only the durable acl.Client fields are persisted;
+// the transient sync state (SyncSince, PushFailures) resets on restart and the
+// client re-establishes it on its next login/keepalive. Non-admin clients are
+// never persisted, matching the repeater ACL and firmware's admin-only list.
+func WithPersistence(p acl.Persistence) Option {
+	return func(s *MemoryClientStore) { s.persistence = p }
 }
 
 // NewMemoryClientStore creates an in-memory client store with the given capacity.
 // If maxClients is 0, DefaultMaxClients is used.
-func NewMemoryClientStore(maxClients int) *MemoryClientStore {
+func NewMemoryClientStore(maxClients int, opts ...Option) *MemoryClientStore {
 	if maxClients <= 0 {
 		maxClients = DefaultMaxClients
 	}
-	return &MemoryClientStore{
+	s := &MemoryClientStore{
 		clients:    make([]*ClientInfo, 0, maxClients),
 		maxClients: maxClients,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+
+	// Seed from persistence. Temporarily clear the backend so seeded clients are
+	// not re-saved, then restore it.
+	if s.persistence != nil {
+		p := s.persistence
+		s.persistence = nil
+		if loaded, err := p.Load(); err == nil {
+			for _, c := range loaded {
+				if _, err := s.AddClient(&ClientInfo{Client: *c}); err != nil {
+					break // store full
+				}
+			}
+		}
+		s.persistence = p
+	}
+	return s
 }
 
 // AddClient adds a client or updates an existing one. If the store is full,
@@ -45,6 +79,7 @@ func (s *MemoryClientStore) AddClient(c *ClientInfo) (*ClientInfo, error) {
 	for _, existing := range s.clients {
 		if existing.ID == c.ID {
 			copyClientFields(existing, c)
+			s.persist(existing)
 			return existing, nil
 		}
 	}
@@ -56,6 +91,7 @@ func (s *MemoryClientStore) AddClient(c *ClientInfo) (*ClientInfo, error) {
 	}
 	copyClientFields(slot, c)
 	slot.ID = c.ID
+	s.persist(slot)
 	return slot, nil
 }
 
@@ -69,6 +105,9 @@ func (s *MemoryClientStore) RemoveClient(id core.MeshCoreID) error {
 			copy(s.clients[i:], s.clients[i+1:])
 			s.clients[len(s.clients)-1] = nil
 			s.clients = s.clients[:len(s.clients)-1]
+			if s.persistence != nil {
+				_ = s.persistence.Delete(id)
+			}
 			return nil
 		}
 	}
@@ -96,10 +135,25 @@ func (s *MemoryClientStore) UpdateClient(c *ClientInfo) error {
 	for _, existing := range s.clients {
 		if existing.ID == c.ID {
 			copyClientFields(existing, c)
+			s.persist(existing)
 			return nil
 		}
 	}
 	return ErrClientNotFound
+}
+
+// persist mirrors a client to the persistence backend, if configured. Only admin
+// clients are persisted; a non-admin is deleted in case it was previously an
+// admin (demotion). Called with s.mu held, so the backend must not block.
+func (s *MemoryClientStore) persist(c *ClientInfo) {
+	if s.persistence == nil {
+		return
+	}
+	if c.IsAdmin() {
+		_ = s.persistence.Save(&c.Client)
+	} else {
+		_ = s.persistence.Delete(c.ID)
+	}
 }
 
 // Count returns the number of stored clients.
