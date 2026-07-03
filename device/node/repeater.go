@@ -41,6 +41,10 @@ type RepeaterConfig struct {
 	// MaxNeighbors caps the directly-heard neighbor table. Default: 32.
 	MaxNeighbors int
 
+	// ACLPersistence, if set, makes the admin client list durable across restarts
+	// (firmware persists admins to flash). See acl.NewFileStore.
+	ACLPersistence acl.Persistence
+
 	// Version is reported by the CLI "ver" command. Default: "meshcore-go".
 	Version string
 
@@ -157,7 +161,7 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 	n := &RepeaterNode{
 		base:        base,
 		advertSched: scheduler,
-		acl:         acl.NewMemoryStore(cfg.MaxClients),
+		acl:         acl.NewMemoryStore(cfg.MaxClients, acl.WithPersistence(cfg.ACLPersistence)),
 		auth: acl.Authenticator{
 			// Repeater mapping: admin/guest passwords only, no open access.
 			// A correct guest password grants GUEST (read-only-style access).

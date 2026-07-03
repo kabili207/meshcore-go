@@ -40,3 +40,20 @@ type Store interface {
 	// ForEach calls fn for each client. Return false from fn to stop iteration.
 	ForEach(fn func(c *Client) bool)
 }
+
+// Persistence is an optional durable backend for a MemoryStore. When configured
+// (WithPersistence), the store seeds itself from Load at construction and mirrors
+// admin clients to Save/Delete on mutation. Following firmware, only admin
+// clients are persisted; guests are transient. Save and Delete are called while
+// the store holds its lock, so implementations must return quickly (queue/debounce
+// I/O). See FileStore for a JSON-file implementation.
+type Persistence interface {
+	// Load returns the persisted (admin) clients, used to seed on startup.
+	Load() ([]*Client, error)
+
+	// Save persists a client (insert or update).
+	Save(c *Client) error
+
+	// Delete removes a persisted client by public key.
+	Delete(id core.MeshCoreID) error
+}

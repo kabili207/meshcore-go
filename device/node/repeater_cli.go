@@ -193,6 +193,8 @@ func (n *RepeaterNode) cliSetPerm(args []string) string {
 		return "ERR: client not found"
 	}
 	matched.Permissions = uint8(perm)
+	// Persist the permission change (UpdateClient mirrors to the backend).
+	_ = n.acl.UpdateClient(matched)
 	return "OK"
 }
 

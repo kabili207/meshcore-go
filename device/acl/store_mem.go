@@ -14,21 +14,50 @@ var _ Store = (*MemoryStore)(nil)
 // MemoryStore is an in-memory Store. When full, it evicts the least-recently
 // active non-admin client, matching the firmware's ClientACL behavior.
 type MemoryStore struct {
-	mu         sync.RWMutex
-	clients    []*Client
-	maxClients int
+	mu          sync.RWMutex
+	clients     []*Client
+	maxClients  int
+	persistence Persistence
+}
+
+// Option configures a MemoryStore.
+type Option func(*MemoryStore)
+
+// WithPersistence makes the store durable: it is seeded from p.Load at
+// construction and mirrors admin-client mutations to p.Save/Delete.
+func WithPersistence(p Persistence) Option {
+	return func(s *MemoryStore) { s.persistence = p }
 }
 
 // NewMemoryStore creates an in-memory store with the given capacity.
 // If maxClients is 0, DefaultMaxClients is used.
-func NewMemoryStore(maxClients int) *MemoryStore {
+func NewMemoryStore(maxClients int, opts ...Option) *MemoryStore {
 	if maxClients <= 0 {
 		maxClients = DefaultMaxClients
 	}
-	return &MemoryStore{
+	s := &MemoryStore{
 		clients:    make([]*Client, 0, maxClients),
 		maxClients: maxClients,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+
+	// Seed from persistence. Temporarily clear the backend so seeded clients are
+	// not re-saved, then restore it.
+	if s.persistence != nil {
+		p := s.persistence
+		s.persistence = nil
+		if loaded, err := p.Load(); err == nil {
+			for _, c := range loaded {
+				if _, err := s.AddClient(c); err != nil {
+					break // store full
+				}
+			}
+		}
+		s.persistence = p
+	}
+	return s
 }
 
 // AddClient adds a client or updates an existing one. If the store is full, the
@@ -41,6 +70,7 @@ func (s *MemoryStore) AddClient(c *Client) (*Client, error) {
 	for _, existing := range s.clients {
 		if existing.ID == c.ID {
 			copyClientFields(existing, c)
+			s.persist(existing)
 			return existing, nil
 		}
 	}
@@ -51,6 +81,7 @@ func (s *MemoryStore) AddClient(c *Client) (*Client, error) {
 	}
 	copyClientFields(slot, c)
 	slot.ID = c.ID
+	s.persist(slot)
 	return slot, nil
 }
 
@@ -64,10 +95,28 @@ func (s *MemoryStore) RemoveClient(id core.MeshCoreID) error {
 			copy(s.clients[i:], s.clients[i+1:])
 			s.clients[len(s.clients)-1] = nil
 			s.clients = s.clients[:len(s.clients)-1]
+			if s.persistence != nil {
+				_ = s.persistence.Delete(id)
+			}
 			return nil
 		}
 	}
 	return ErrClientNotFound
+}
+
+// persist mirrors a client to the persistence backend, if configured. Only admin
+// clients are persisted (firmware persists just the admin list); a non-admin is
+// removed from persistence in case it was previously an admin. Called with s.mu
+// held, so the backend must not block.
+func (s *MemoryStore) persist(c *Client) {
+	if s.persistence == nil {
+		return
+	}
+	if c.IsAdmin() {
+		_ = s.persistence.Save(c)
+	} else {
+		_ = s.persistence.Delete(c.ID)
+	}
 }
 
 // GetClient returns the client with the given public key, or nil.
@@ -91,6 +140,7 @@ func (s *MemoryStore) UpdateClient(c *Client) error {
 	for _, existing := range s.clients {
 		if existing.ID == c.ID {
 			copyClientFields(existing, c)
+			s.persist(existing)
 			return nil
 		}
 	}
