@@ -380,9 +380,14 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 	if !ok {
 		return // no registered key for this hash decrypted (MAC failed on all)
 	}
-	_, _, message, err := crypto.ParseGrpTxtPlaintext(plaintext)
+	_, txtType, message, err := crypto.ParseGrpTxtPlaintext(plaintext)
 	if err != nil {
 		b.log.Debug("failed to parse group text plaintext", "error", err)
+		return
+	}
+	// Group channels only carry plain text; firmware drops any other type.
+	if txtType != codec.TxtTypePlain {
+		b.log.Debug("dropping unsupported group text type", "type", txtType)
 		return
 	}
 
@@ -414,6 +419,7 @@ func (b *BaseNode) handleGrpData(pkt *codec.Packet, src transport.PacketSource) 
 	b.emitEvent(&event.GroupDataReceived{
 		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
 		ChannelHash: grp.ChannelHash,
+		DataType:    content.DataType,
 		Data:        content.Data,
 	})
 }

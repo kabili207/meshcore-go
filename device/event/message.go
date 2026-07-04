@@ -52,6 +52,10 @@ type GroupDataReceived struct {
 	// shared key, identifying which group channel this data belongs to.
 	ChannelHash uint8
 
+	// DataType identifies the kind of payload (firmware GRP_DATA data_type),
+	// letting consumers dispatch on the format of Data.
+	DataType uint16
+
 	// Data is the decrypted binary payload.
 	Data []byte
 }

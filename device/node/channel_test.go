@@ -71,6 +71,30 @@ func TestBaseNode_GroupTextUnknownChannelIgnored(t *testing.T) {
 	}
 }
 
+// TestBaseNode_GroupTextNonPlainDropped verifies that group text with a non-plain
+// type is dropped, matching firmware (group channels only carry plain text).
+func TestBaseNode_GroupTextNonPlainDropped(t *testing.T) {
+	node, collector := testNode(t)
+	key := crypto.DefaultChannelKey
+	node.AddChannel(key)
+
+	// Hand-build a GRP_TXT whose type byte is TxtTypeCLI (non-plain).
+	plaintext := crypto.BuildGrpTxtPlaintext(1234, "cli-ish")
+	plaintext[4] = codec.TxtTypeCLI << 2
+	encrypted, err := crypto.EncryptGroupMessage(plaintext, key)
+	if err != nil {
+		t.Fatalf("encrypt group: %v", err)
+	}
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	payload := codec.BuildGroupPayload(crypto.ComputeChannelHash(key), mac, ciphertext)
+	pkt := codec.NewPacket(codec.PayloadTypeGrpTxt, codec.RouteTypeFlood, payload)
+
+	node.processPacket(pkt, transport.PacketSourceMQTT)
+	if len(collector.get()) != 0 {
+		t.Error("non-plain group text should be dropped")
+	}
+}
+
 func TestBaseNode_SendChannelText(t *testing.T) {
 	node, _ := testNode(t)
 	ct := &captureTransport{}
@@ -109,6 +133,43 @@ func TestBaseNode_SendChannelText(t *testing.T) {
 	}
 	if msg != "broadcast!" {
 		t.Errorf("sent message = %q, want %q", msg, "broadcast!")
+	}
+}
+
+// TestBaseNode_GroupDataReceive verifies a group datagram surfaces both its
+// binary payload and its data type.
+func TestBaseNode_GroupDataReceive(t *testing.T) {
+	node, collector := testNode(t)
+	key := crypto.DefaultChannelKey
+	hash := node.AddChannel(key)
+
+	plaintext := crypto.BuildGrpDataPlaintext(0x1234, []byte{0xDE, 0xAD, 0xBE, 0xEF})
+	encrypted, err := crypto.EncryptGroupMessage(plaintext, key)
+	if err != nil {
+		t.Fatalf("encrypt group: %v", err)
+	}
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	payload := codec.BuildGroupPayload(crypto.ComputeChannelHash(key), mac, ciphertext)
+	pkt := codec.NewPacket(codec.PayloadTypeGrpData, codec.RouteTypeFlood, payload)
+
+	node.processPacket(pkt, transport.PacketSourceMQTT)
+
+	events := collector.get()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	gd, ok := events[0].(*event.GroupDataReceived)
+	if !ok {
+		t.Fatalf("expected GroupDataReceived, got %T", events[0])
+	}
+	if gd.ChannelHash != hash {
+		t.Errorf("channel hash = %02x, want %02x", gd.ChannelHash, hash)
+	}
+	if gd.DataType != 0x1234 {
+		t.Errorf("data type = %#x, want 0x1234", gd.DataType)
+	}
+	if !bytes.Equal(gd.Data, []byte{0xDE, 0xAD, 0xBE, 0xEF}) {
+		t.Errorf("data = %x, want deadbeef", gd.Data)
 	}
 }
 
