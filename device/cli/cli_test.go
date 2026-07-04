@@ -108,3 +108,68 @@ func TestDispatcher_Fallback(t *testing.T) {
 		t.Errorf("no fallback = %q", got)
 	}
 }
+
+func TestDispatcher_ProgrammaticSetLoadGet(t *testing.T) {
+	value := "Alice"
+	afterCalls := 0
+	d := New().
+		Key("name", ConfigKey{
+			Get: func() string { return value },
+			Set: func(v string) error { value = v; return nil },
+		}).
+		AfterSet(func(k, v string) { afterCalls++ })
+
+	// Get.
+	if v, ok := d.Get("name"); !ok || v != "Alice" {
+		t.Errorf("Get(name) = (%q, %v), want (Alice, true)", v, ok)
+	}
+
+	// Set fires AfterSet.
+	if err := d.Set("name", "Bob"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if value != "Bob" || afterCalls != 1 {
+		t.Errorf("after Set: value=%q afterCalls=%d, want Bob/1", value, afterCalls)
+	}
+
+	// Load applies but does NOT fire AfterSet.
+	if err := d.Load("name", "Carol"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if value != "Carol" || afterCalls != 1 {
+		t.Errorf("after Load: value=%q afterCalls=%d, want Carol/1", value, afterCalls)
+	}
+}
+
+func TestDispatcher_SetLoadErrors(t *testing.T) {
+	d := New().
+		Key("name", ConfigKey{
+			Set: func(v string) error {
+				if v == "" {
+					return errors.New("empty")
+				}
+				return nil
+			},
+		}).
+		Key("role", ConfigKey{Get: func() string { return "repeater" }}) // read-only
+
+	// Unknown key.
+	if err := d.Set("nope", "x"); !errors.Is(err, ErrUnknownKey) {
+		t.Errorf("Set(unknown) = %v, want ErrUnknownKey", err)
+	}
+	if err := d.Load("nope", "x"); !errors.Is(err, ErrUnknownKey) {
+		t.Errorf("Load(unknown) = %v, want ErrUnknownKey", err)
+	}
+	// Read-only key (no Set).
+	if err := d.Set("role", "x"); !errors.Is(err, ErrUnknownKey) {
+		t.Errorf("Set(read-only) = %v, want ErrUnknownKey", err)
+	}
+	// Validation error propagates verbatim.
+	if err := d.Set("name", ""); err == nil || errors.Is(err, ErrUnknownKey) {
+		t.Errorf("Set(name, '') = %v, want validation error", err)
+	}
+	// Write-only key Get.
+	if _, ok := d.Get("name"); ok {
+		t.Error("Get(write-only) ok = true, want false")
+	}
+}

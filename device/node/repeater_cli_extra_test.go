@@ -2,12 +2,14 @@ package node
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/cli"
 )
 
 // Without the opt-in callbacks, clock-setting and reboot report unsupported.
@@ -151,6 +153,51 @@ func TestRepeaterCLI_MultiAcks(t *testing.T) {
 	}
 	if got := n.cli.Execute("get multi.acks"); got != "2" {
 		t.Errorf("get multi.acks = %q, want 2", got)
+	}
+}
+
+func TestRepeaterCLI_ProgrammaticConfig(t *testing.T) {
+	kp, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := map[string]string{}
+	n, err := NewRepeater(RepeaterConfig{
+		PrivateKey:       ed25519.PrivateKey(kp.PrivateKey),
+		AdminPassword:    "adminpw",
+		OnSettingChanged: func(k, v string) { changed[k] = v },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// LoadConfig applies without firing OnSettingChanged (restoring persisted state).
+	if err := n.LoadConfig("name", "Hub"); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if n.appData.Name != "Hub" {
+		t.Errorf("name = %q, want Hub", n.appData.Name)
+	}
+	if len(changed) != 0 {
+		t.Errorf("LoadConfig fired OnSettingChanged: %v", changed)
+	}
+
+	// GetConfig reads it back.
+	if v, ok := n.GetConfig("name"); !ok || v != "Hub" {
+		t.Errorf("GetConfig(name) = (%q, %v), want (Hub, true)", v, ok)
+	}
+
+	// SetConfig applies and fires OnSettingChanged.
+	if err := n.SetConfig("name", "Relay"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+	if n.appData.Name != "Relay" || changed["name"] != "Relay" {
+		t.Errorf("after SetConfig: name=%q changed=%v", n.appData.Name, changed)
+	}
+
+	// Unknown key surfaces cli.ErrUnknownKey.
+	if err := n.LoadConfig("bogus", "x"); !errors.Is(err, cli.ErrUnknownKey) {
+		t.Errorf("LoadConfig(bogus) = %v, want ErrUnknownKey", err)
 	}
 }
 

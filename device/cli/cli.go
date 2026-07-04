@@ -5,9 +5,14 @@
 package cli
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 )
+
+// ErrUnknownKey is returned by Set, Load, and Get for a key that is not
+// registered, or (for Set/Load) is read-only.
+var ErrUnknownKey = errors.New("unknown or read-only config key")
 
 // ConfigKey is a get/set-able configuration value.
 type ConfigKey struct {
@@ -91,12 +96,22 @@ func (d *Dispatcher) Execute(cmd string) string {
 		if len(parts) < 2 {
 			return "??: (missing key)"
 		}
-		return d.get(parts[1])
+		if v, ok := d.Get(parts[1]); ok {
+			return v
+		}
+		return "??: " + parts[1]
 	case "set":
 		if len(parts) < 3 {
 			return "Error: missing value"
 		}
-		return d.set(parts[1], strings.Join(parts[2:], " "))
+		key := parts[1]
+		if err := d.Set(key, strings.Join(parts[2:], " ")); err != nil {
+			if errors.Is(err, ErrUnknownKey) {
+				return "??: " + key
+			}
+			return "Error: " + err.Error()
+		}
+		return "OK"
 	}
 
 	if fn, ok := d.commands[parts[0]]; ok {
@@ -140,24 +155,41 @@ func Reboot(cb func()) string {
 	return "OK"
 }
 
-func (d *Dispatcher) get(key string) string {
-	k, ok := d.keys[key]
-	if !ok || k.Get == nil {
-		return "??: " + key
+// Get returns the current display value of a config key. ok is false if the key
+// is not registered or is write-only.
+func (d *Dispatcher) Get(key string) (value string, ok bool) {
+	k, present := d.keys[key]
+	if !present || k.Get == nil {
+		return "", false
 	}
-	return k.Get()
+	return k.Get(), true
 }
 
-func (d *Dispatcher) set(key, value string) string {
+// Set applies value to a config key and fires the AfterSet hook, exactly like a
+// CLI "set". Use it for programmatic changes that should be persisted the same
+// way CLI-driven changes are. Returns ErrUnknownKey for an unknown or read-only
+// key, or the key's own validation error.
+func (d *Dispatcher) Set(key, value string) error {
+	return d.applySet(key, value, true)
+}
+
+// Load applies value to a config key WITHOUT firing the AfterSet hook. Use it to
+// restore persisted settings at startup so they are not written straight back to
+// the store they came from.
+func (d *Dispatcher) Load(key, value string) error {
+	return d.applySet(key, value, false)
+}
+
+func (d *Dispatcher) applySet(key, value string, fireAfterSet bool) error {
 	k, ok := d.keys[key]
 	if !ok || k.Set == nil {
-		return "??: " + key
+		return ErrUnknownKey
 	}
 	if err := k.Set(value); err != nil {
-		return "Error: " + err.Error()
+		return err
 	}
-	if d.afterSet != nil {
+	if fireAfterSet && d.afterSet != nil {
 		d.afterSet(key, value)
 	}
-	return "OK"
+	return nil
 }

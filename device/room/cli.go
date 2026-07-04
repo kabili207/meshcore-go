@@ -52,6 +52,30 @@ func (s *Server) executeCLI(cmd string) string {
 	return s.cli.Execute(cmd)
 }
 
+// SetConfig applies a CLI config key programmatically, firing OnSettingChanged
+// (like a remote admin "set key value"). Returns cli.ErrUnknownKey for an
+// unknown or read-only key, or the key's validation error.
+func (s *Server) SetConfig(key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cli.Set(key, value)
+}
+
+// LoadConfig applies a persisted config key WITHOUT firing OnSettingChanged. Use
+// it at startup to restore settings loaded from your own store.
+func (s *Server) LoadConfig(key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cli.Load(key, value)
+}
+
+// GetConfig returns the current value of a CLI config key.
+func (s *Server) GetConfig(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cli.Get(key)
+}
+
 // buildCLI constructs the room server's shared CLI dispatcher: config keys plus
 // role-specific commands. Called once from NewServer.
 func (s *Server) buildCLI() *cli.Dispatcher {

@@ -243,3 +243,22 @@ func (n *RepeaterNode) AdvertScheduler() *advert.Scheduler {
 func (n *RepeaterNode) ACL() *acl.MemoryStore {
 	return n.acl
 }
+
+// SetConfig applies a CLI config key programmatically, firing OnSettingChanged
+// (like a remote admin "set key value"). Returns cli.ErrUnknownKey for an
+// unknown or read-only key, or the key's validation error.
+func (n *RepeaterNode) SetConfig(key, value string) error {
+	return n.cli.Set(key, value)
+}
+
+// LoadConfig applies a persisted config key WITHOUT firing OnSettingChanged. Use
+// it at startup to restore settings loaded from your own store. Apply these
+// before Run for guaranteed thread-safety.
+func (n *RepeaterNode) LoadConfig(key, value string) error {
+	return n.cli.Load(key, value)
+}
+
+// GetConfig returns the current value of a CLI config key.
+func (n *RepeaterNode) GetConfig(key string) (string, bool) {
+	return n.cli.Get(key)
+}
