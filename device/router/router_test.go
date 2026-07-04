@@ -147,6 +147,62 @@ func TestSendFloodScoped_WithScope(t *testing.T) {
 	}
 }
 
+func TestSendFloodAsRelay_SeedsSelfHop(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{SelfID: selfID(0xAA)})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	pkt := makeFloodPacket(codec.PayloadTypeGrpTxt, []byte{0x01, 0x02, 0x03})
+	r.SendFloodAsRelay(pkt)
+
+	sent := mt.lastSent()
+	if sent == nil {
+		t.Fatal("expected a packet to be sent")
+	}
+	if sent.RouteType() != codec.RouteTypeFlood {
+		t.Errorf("route type = %d, want RouteTypeFlood", sent.RouteType())
+	}
+	// The packet must look like it was relayed once by this node: hop count 1
+	// with our own hash seeded as the first (and only) hop.
+	if got := sent.HopCount(); got != 1 {
+		t.Fatalf("hop count = %d, want 1", got)
+	}
+	if len(sent.Path) != 1 || sent.Path[0] != 0xAA {
+		t.Errorf("path = %x, want [aa]", sent.Path)
+	}
+}
+
+func TestSendFloodAsRelay_Scoped(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{SelfID: selfID(0xAA)})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	key := TransportKeyFromRegion("#us")
+	r.SetSendScope(key)
+
+	pkt := makeFloodPacket(codec.PayloadTypeGrpTxt, []byte{0x01, 0x02, 0x03})
+	r.SendFloodAsRelay(pkt)
+
+	sent := mt.lastSent()
+	if sent == nil {
+		t.Fatal("expected a packet to be sent")
+	}
+	if sent.RouteType() != codec.RouteTypeTransportFlood {
+		t.Fatalf("route type = %d, want RouteTypeTransportFlood", sent.RouteType())
+	}
+	if sent.HopCount() != 1 {
+		t.Errorf("hop count = %d, want 1", sent.HopCount())
+	}
+	// Seeding the path must not change the transport code (it hashes only the
+	// payload), so a repeater with the same region key still accepts it.
+	if got := sent.TransportCodes[0]; got != key.CalcTransportCode(sent) {
+		t.Errorf("transport_codes[0] = %d, want %d", got, key.CalcTransportCode(sent))
+	}
+	if !NewTransportCodeValidator([]TransportKey{key})(sent) {
+		t.Error("a validator with the same region key should accept the scoped relay packet")
+	}
+}
+
 func TestHandlePacket_FloodForward(t *testing.T) {
 	mt := newMockTransport()
 	r := New(Config{

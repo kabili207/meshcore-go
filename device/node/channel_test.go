@@ -136,6 +136,60 @@ func TestBaseNode_SendChannelText(t *testing.T) {
 	}
 }
 
+// TestBaseNode_SendChannelTextAsRelay verifies the relay-origin send emits a
+// GRP_TXT flood seeded with the node's own hash as hop 1, while still carrying
+// the correct decrypted text on the channel.
+func TestBaseNode_SendChannelTextAsRelay(t *testing.T) {
+	node, _ := testNode(t)
+	ct := &captureTransport{}
+	node.Router.AddTransport(ct, transport.PacketSourceMQTT)
+
+	key := crypto.DefaultChannelKey
+	hash := node.AddChannel(key)
+
+	if err := node.SendChannelTextAsRelay(key, "from meshtastic"); err != nil {
+		t.Fatalf("SendChannelTextAsRelay: %v", err)
+	}
+
+	var sent *codec.Packet
+	for _, p := range ct.sent {
+		if p.PayloadType() == codec.PayloadTypeGrpTxt {
+			sent = p
+		}
+	}
+	if sent == nil {
+		t.Fatal("expected a GRP_TXT packet to be sent")
+	}
+	// The bridge's own hash must appear as the single hop, so downstream nodes
+	// see the message as relayed through this repeater rather than originated.
+	if sent.HopCount() != 1 {
+		t.Fatalf("hop count = %d, want 1", sent.HopCount())
+	}
+	pub := node.PublicKey()
+	if len(sent.Path) != 1 || sent.Path[0] != pub[0] {
+		t.Errorf("path = %x, want [%02x]", sent.Path, pub[0])
+	}
+
+	grp, err := codec.ParseGroupPayload(sent.Payload)
+	if err != nil {
+		t.Fatalf("parse group payload: %v", err)
+	}
+	if grp.ChannelHash != hash {
+		t.Errorf("channel hash = %02x, want %02x", grp.ChannelHash, hash)
+	}
+	plaintext, err := crypto.DecryptGroupMessage(codec.PrependMAC(grp.MAC, grp.Ciphertext), key)
+	if err != nil {
+		t.Fatalf("decrypt sent message: %v", err)
+	}
+	_, _, msg, err := crypto.ParseGrpTxtPlaintext(plaintext)
+	if err != nil {
+		t.Fatalf("parse plaintext: %v", err)
+	}
+	if msg != "from meshtastic" {
+		t.Errorf("sent message = %q, want %q", msg, "from meshtastic")
+	}
+}
+
 // TestBaseNode_GroupDataReceive verifies a group datagram surfaces both its
 // binary payload and its data type.
 func TestBaseNode_GroupDataReceive(t *testing.T) {

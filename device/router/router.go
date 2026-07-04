@@ -789,6 +789,47 @@ func (r *Router) sendScopedFlood(pkt *codec.Packet, priority uint8, delay time.D
 	r.enqueue(pkt, priority, delay, 0, true)
 }
 
+// SendFloodAsRelay floods a packet as though this node had already relayed it
+// once: the origin path is seeded with this node's own hash and the hop count
+// starts at 1, instead of the empty zero-hop path a normal origin produces.
+//
+// Downstream nodes then see the packet as having passed through this repeater,
+// with subsequent relays appending their hashes as usual. Loop detection keys on
+// the self-hash exactly as it would for a genuinely-forwarded packet, so a copy
+// that loops back is dropped. Region scoping is applied like SendFloodScoped;
+// the transport code hashes only the payload, so seeding the path does not
+// change it.
+//
+// This suits a bridge injecting traffic from another network: the packet did
+// pass through this node, so presenting it as a one-hop relay reflects reality
+// better than a zero-hop origin (which implies an endpoint device authored it).
+func (r *Router) SendFloodAsRelay(pkt *codec.Packet) {
+	scope := r.cfg.SendScope
+	scoped := !scope.IsNull()
+
+	routeType := uint8(codec.RouteTypeFlood)
+	if scoped {
+		routeType = codec.RouteTypeTransportFlood
+	}
+	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | routeType
+
+	hashSize := r.cfg.PathHashMode + 1
+	pkt.PathHashSize = hashSize
+	pkt.Path = r.cfg.SelfID.HashN(int(hashSize))
+	pkt.PathLen = codec.PathInfo{HashSize: hashSize, HopCount: 1}.ToWireByte()
+
+	if scoped {
+		pkt.TransportCodes[0] = scope.CalcTransportCode(pkt)
+		pkt.TransportCodes[1] = 0
+	}
+
+	// Mark as seen so we don't process it again if it loops back.
+	r.dedup.HasSeen(pkt)
+
+	r.counters.SentFlood.Add(1)
+	r.enqueue(pkt, PriorityFloodData, 0, 0, true)
+}
+
 // SendDirect prepares and sends a packet in direct routing mode.
 // The path is set to the provided route, and the packet is marked as seen.
 func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {

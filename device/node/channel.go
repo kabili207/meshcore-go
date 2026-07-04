@@ -70,6 +70,17 @@ func (b *BaseNode) SendChannelText(key []byte, text string) error {
 	return b.sendGroup(codec.PayloadTypeGrpTxt, hash, key, plaintext)
 }
 
+// SendChannelTextAsRelay sends a plain group text like SendChannelText, but
+// floods it as though this node had already relayed it once (see
+// Router.SendFloodAsRelay). Downstream nodes see the message as having passed
+// through this repeater. Intended for bridges injecting traffic from another
+// network onto a channel.
+func (b *BaseNode) SendChannelTextAsRelay(key []byte, text string) error {
+	hash := crypto.ComputeChannelHash(key)
+	plaintext := crypto.BuildGrpTxtPlaintext(b.clock.GetCurrentTime(), text)
+	return b.sendGroupWith(codec.PayloadTypeGrpTxt, hash, key, plaintext, b.Router.SendFloodAsRelay)
+}
+
 // SendChannelData sends a binary group datagram on the channel identified by key.
 // The channel need not be registered.
 func (b *BaseNode) SendChannelData(key []byte, dataType uint16, data []byte) error {
@@ -80,6 +91,12 @@ func (b *BaseNode) SendChannelData(key []byte, dataType uint16, data []byte) err
 
 // sendGroup encrypts a group plaintext with the channel key and floods it.
 func (b *BaseNode) sendGroup(payloadType, channelHash uint8, key, plaintext []byte) error {
+	return b.sendGroupWith(payloadType, channelHash, key, plaintext, b.Router.SendFloodScoped)
+}
+
+// sendGroupWith encrypts a group plaintext and hands the packet to send, letting
+// the caller pick the flood variant (ordinary origin vs. relay-origin).
+func (b *BaseNode) sendGroupWith(payloadType, channelHash uint8, key, plaintext []byte, send func(*codec.Packet)) error {
 	encrypted, err := crypto.EncryptGroupMessage(plaintext, key)
 	if err != nil {
 		return fmt.Errorf("encrypt group message: %w", err)
@@ -87,6 +104,6 @@ func (b *BaseNode) sendGroup(payloadType, channelHash uint8, key, plaintext []by
 	mac, ciphertext := codec.SplitMAC(encrypted)
 	payload := codec.BuildGroupPayload(channelHash, mac, ciphertext)
 	pkt := codec.NewPacket(payloadType, codec.RouteTypeFlood, payload)
-	b.Router.SendFloodScoped(pkt)
+	send(pkt)
 	return nil
 }
