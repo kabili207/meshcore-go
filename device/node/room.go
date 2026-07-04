@@ -137,6 +137,7 @@ func NewRoom(cfg RoomConfig) (*RoomNode, error) {
 	roomCfg.Clock = clk
 	roomCfg.Contacts = cfg.Contacts
 	roomCfg.ACKTracker = tracker
+	roomCfg.Router = base.Router
 	if roomCfg.Logger == nil {
 		roomCfg.Logger = logger
 	}
