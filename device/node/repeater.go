@@ -50,8 +50,16 @@ type RepeaterConfig struct {
 	// encoder. Without it, telemetry requests are ignored.
 	Telemetry telemetry.Provider
 
-	// Version is reported by the CLI "ver" command. Default: "meshcore-go".
+	// Version overrides the entire "ver" CLI reply verbatim. Leave it empty to
+	// use the firmware-format reply built from cli.FirmwareVersion and
+	// FirmwareBuildDate, which is what the phone apps expect.
 	Version string
+
+	// FirmwareBuildDate is the build date reported in the "ver" CLI reply, in the
+	// firmware's "6 Jun 2026" style (day, abbreviated month, year). Combined with
+	// cli.FirmwareVersion into "<version> (Build: <date>)". Ignored when Version
+	// is set. Empty reports "unknown" as the build date.
+	FirmwareBuildDate string
 
 	// OnRegionsChanged, if set, persists the RegionMap after a "region" CLI edit.
 	OnRegionsChanged func(data []byte) error

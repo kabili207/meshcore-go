@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kabili207/meshcore-go/device/cli"
 )
 
 func TestRoomCLI_GetSetName(t *testing.T) {
@@ -87,8 +89,35 @@ func TestRoomCLI_Unknown(t *testing.T) {
 	if got := h.server.executeCLI("frobnicate"); got != "Unknown command" {
 		t.Errorf("unknown command = %q", got)
 	}
-	if got := h.server.executeCLI("ver"); got != "meshcore-go" {
-		t.Errorf("ver = %q, want meshcore-go", got)
+}
+
+func TestRoomCLI_Version(t *testing.T) {
+	h := newTestHarness(t)
+
+	// With no build date, the reply still carries the firmware version and a
+	// "(Build: ...)" portion the phone apps parse.
+	want := cli.FirmwareVersion + " (Build: unknown)"
+	if got := h.server.executeCLI("ver"); got != want {
+		t.Errorf("ver = %q, want %q", got, want)
+	}
+	// "version" is an alias for "ver".
+	if got := h.server.executeCLI("version"); got != want {
+		t.Errorf("version = %q, want %q", got, want)
+	}
+
+	// A caller-supplied build date is formatted the firmware way.
+	h.server.cfg.FirmwareBuildDate = "6 Jun 2026"
+	h.server.cli = h.server.buildCLI()
+	want = cli.FirmwareVersion + " (Build: 6 Jun 2026)"
+	if got := h.server.executeCLI("ver"); got != want {
+		t.Errorf("ver = %q, want %q", got, want)
+	}
+
+	// An explicit Version override wins verbatim.
+	h.server.cfg.Version = "custom-build"
+	h.server.cli = h.server.buildCLI()
+	if got := h.server.executeCLI("ver"); got != "custom-build" {
+		t.Errorf("ver override = %q, want custom-build", got)
 	}
 }
 

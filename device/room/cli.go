@@ -14,8 +14,6 @@ import (
 	"github.com/kabili207/meshcore-go/device/router"
 )
 
-const defaultVersion = "meshcore-go"
-
 // handleCLICommand processes a CLI command from an admin client and sends the
 // reply as an encrypted TXT_MSG with TxtTypeCLI. The firmware does NOT send
 // an ACK for CLI commands — only the text reply.
@@ -228,7 +226,11 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 	d.Command("clock", func(args []string) string { return s.cliClock(args) })
 	d.Command("time", func(args []string) string { return cli.SetClock(s.cfg.OnSetClock, args) })
 	d.Command("reboot", func([]string) string { return cli.Reboot(s.cfg.OnReboot) })
+	// Firmware matches "ver" as a 3-char prefix, so "ver" and "version" both hit
+	// the same handler. Register both explicitly since our dispatcher matches the
+	// full command word.
 	d.Command("ver", func([]string) string { return s.cliVer() })
+	d.Command("version", func([]string) string { return s.cliVer() })
 	d.Command("password", func(args []string) string { return s.cliPassword(args) })
 	d.Command("setperm", func(args []string) string { return s.cliSetPerm(args) })
 	d.Command("region", func(args []string) string { return s.cliRegion(args) })
@@ -294,7 +296,7 @@ func (s *Server) cliVer() string {
 	if s.cfg.Version != "" {
 		return s.cfg.Version
 	}
-	return defaultVersion
+	return cli.FormatVersion("", s.cfg.FirmwareBuildDate)
 }
 
 // cliStatsCore reports node-level counters: table sizes.

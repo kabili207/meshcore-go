@@ -66,9 +66,16 @@ type ServerConfig struct {
 	// Name is the server's display name, returned by the "get name" CLI command.
 	Name string
 
-	// Version is the version string returned by the "ver" CLI command.
-	// If empty, defaults to "meshcore-go".
+	// Version overrides the entire "ver" CLI reply verbatim. Leave it empty to
+	// use the firmware-format reply built from cli.FirmwareVersion and
+	// FirmwareBuildDate, which is what the phone apps expect.
 	Version string
+
+	// FirmwareBuildDate is the build date reported in the "ver" CLI reply, in the
+	// firmware's "6 Jun 2026" style (day, abbreviated month, year). Combined with
+	// cli.FirmwareVersion into "<version> (Build: <date>)". Ignored when Version
+	// is set. Empty reports "unknown" as the build date.
+	FirmwareBuildDate string
 
 	// Location (decimal degrees). Nil means not set.
 	Lat *float64

@@ -14,6 +14,27 @@ import (
 // registered, or (for Set/Load) is read-only.
 var ErrUnknownKey = errors.New("unknown or read-only config key")
 
+// FirmwareVersion is the MeshCore firmware version this library targets, reported
+// by the "ver" CLI command when a role doesn't override it. It includes the
+// leading "v" like the firmware's FIRMWARE_VERSION macro, because the phone apps
+// parse this exact shape to gate which settings they let you edit.
+const FirmwareVersion = "v1.16.0"
+
+// FormatVersion builds the firmware-style "ver" reply: "<version> (Build: <date>)".
+// This matches the firmware's `sprintf(reply, "%s (Build: %s)", ...)` so the apps
+// can parse it. version falls back to FirmwareVersion when empty; buildDate falls
+// back to "unknown" so the "(Build: ...)" portion the apps look for is always
+// present.
+func FormatVersion(version, buildDate string) string {
+	if version == "" {
+		version = FirmwareVersion
+	}
+	if buildDate == "" {
+		buildDate = "unknown"
+	}
+	return version + " (Build: " + buildDate + ")"
+}
+
 // ConfigKey is a get/set-able configuration value.
 type ConfigKey struct {
 	// Get returns the current value as a display string.

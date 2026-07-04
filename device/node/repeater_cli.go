@@ -15,8 +15,6 @@ import (
 	"github.com/kabili207/meshcore-go/device/router"
 )
 
-const repeaterDefaultVersion = "meshcore-go"
-
 // handleCLIMessage runs an admin CLI command received as a TXT_TYPE_CLI message
 // and replies with the result. Non-admin senders and non-CLI text are ignored
 // (firmware only accepts CLI from admin clients and sends no ACK).
@@ -171,12 +169,11 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 	d.Key("acl", cli.ConfigKey{Get: func() string { return n.cliACL() }})
 
 	// --- Commands ---
-	d.Command("ver", func([]string) string {
-		if n.cfg.Version != "" {
-			return n.cfg.Version
-		}
-		return repeaterDefaultVersion
-	})
+	// Firmware matches "ver" as a 3-char prefix, so "ver" and "version" both hit
+	// the same handler. Register both explicitly since our dispatcher matches the
+	// full command word.
+	d.Command("ver", func([]string) string { return n.cliVer() })
+	d.Command("version", func([]string) string { return n.cliVer() })
 	d.Command("clock", func([]string) string {
 		t := time.Unix(int64(n.base.Clock().GetCurrentTime()), 0).UTC()
 		return fmt.Sprintf("%02d:%02d - %02d/%02d/%04d UTC",
@@ -209,6 +206,13 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 }
 
 // cliNeighbors lists the repeater's directly-heard neighbors newest-first.
+func (n *RepeaterNode) cliVer() string {
+	if n.cfg.Version != "" {
+		return n.cfg.Version
+	}
+	return cli.FormatVersion("", n.cfg.FirmwareBuildDate)
+}
+
 func (n *RepeaterNode) cliNeighbors() string {
 	nb := n.neighbors.snapshot(neighborOrderNewest)
 	if len(nb) == 0 {
