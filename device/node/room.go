@@ -245,6 +245,16 @@ func (n *RoomNode) ID() core.MeshCoreID { return n.base.ID() }
 // (e.g., setting CLI handlers, wiring persistence callbacks).
 func (n *RoomNode) Server() *room.Server { return n.server }
 
+// ExecuteCLI runs a raw CLI command line against the room server's dispatcher
+// and returns the reply, like a remote admin "get/set/..." but without the ACL
+// check or the companion "NN|" prefix. It drives the same command set the
+// console adapter in device/console bridges to MeshMonitor. Calls are
+// serialized under the room server lock, so it is safe to use alongside the
+// node's over-the-air CLI.
+func (n *RoomNode) ExecuteCLI(cmd string) string {
+	return n.server.ExecuteCLI(cmd)
+}
+
 // SetSendScope scopes this node's outbound flood traffic (responses, ACKs, path
 // returns) to a region. Derive the key with router.TransportKeyFromRegion.
 // Adverts and direct sends stay unscoped. Call ClearSendScope to revert.

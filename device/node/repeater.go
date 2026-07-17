@@ -270,3 +270,17 @@ func (n *RepeaterNode) LoadConfig(key, value string) error {
 func (n *RepeaterNode) GetConfig(key string) (string, bool) {
 	return n.cli.Get(key)
 }
+
+// ExecuteCLI runs a raw CLI command line against the repeater's dispatcher and
+// returns the reply text, exactly as a remote admin command would, but without
+// the ACL check or the companion "NN|" correlation prefix. It lets a local
+// console/serial bridge drive the full command set (neighbors, stats-core,
+// get/set, ...) that remote admins reach over the air.
+//
+// It is not synchronized against concurrent over-the-air CLI, which runs on the
+// node's event goroutine. Use it as the node's sole local admin surface, or
+// serialize your own calls; the console adapter in device/console does the
+// latter by running one command at a time.
+func (n *RepeaterNode) ExecuteCLI(cmd string) string {
+	return n.cli.Execute(cmd)
+}

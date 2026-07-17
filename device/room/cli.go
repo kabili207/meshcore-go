@@ -50,6 +50,16 @@ func (s *Server) executeCLI(cmd string) string {
 	return s.cli.Execute(cmd)
 }
 
+// ExecuteCLI runs a raw CLI command line against the room server's dispatcher
+// and returns the reply text, exactly as a remote admin command would, but
+// without the ACL check or the companion "NN|" correlation prefix. Unlike the
+// repeater's equivalent, it is serialized under the server lock (like the
+// over-the-air path), so a local console bridge may drive it concurrently with
+// remote admin CLI. Returns "" for commands that produce no reply.
+func (s *Server) ExecuteCLI(cmd string) string {
+	return s.executeCLI(cmd)
+}
+
 // SetConfig applies a CLI config key programmatically, firing OnSettingChanged
 // (like a remote admin "set key value"). Returns cli.ErrUnknownKey for an
 // unknown or read-only key, or the key's validation error.
