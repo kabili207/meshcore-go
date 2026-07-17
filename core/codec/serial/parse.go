@@ -50,3 +50,20 @@ func ParseSetDeviceTime(payload []byte) (epochSecs uint32, err error) {
 	}
 	return binary.LittleEndian.Uint32(payload[1:5]), nil
 }
+
+// ParseGetChannel reads the channel index from a CMD_GET_CHANNEL frame.
+func ParseGetChannel(payload []byte) (index uint8, err error) {
+	if len(payload) < 2 || payload[0] != CmdGetChannel {
+		return 0, ErrShortFrame
+	}
+	return payload[1], nil
+}
+
+// ParseSetAdvertName reads the new node name from a CMD_SET_ADVERT_NAME frame.
+// The name is the remainder of the frame (not NUL-terminated on the wire).
+func ParseSetAdvertName(payload []byte) (name string, err error) {
+	if len(payload) < 2 || payload[0] != CmdSetAdvertName {
+		return "", ErrShortFrame
+	}
+	return string(payload[1:]), nil
+}

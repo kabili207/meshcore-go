@@ -66,21 +66,24 @@ func TestDeviceInfoEncode(t *testing.T) {
 	}
 	b := d.Encode()
 
+	if len(b) != 82 {
+		t.Fatalf("length = %d, want 82 (fixed layout)", len(b))
+	}
 	if b[0] != RespCodeDeviceInfo || b[1] != 13 || b[2] != 128 || b[3] != 8 {
 		t.Errorf("header = %x", b[:4])
 	}
-	// Build date occupies a fixed 12-byte NUL-terminated field at [8:20].
-	name := b[8:20]
-	if string(name[:len("6 Jun 2026")]) != "6 Jun 2026" {
-		t.Errorf("build date = %q", name)
+	// Build date: fixed 12-byte NUL-terminated field at [8:20].
+	if string(b[8:8+len("6 Jun 2026")]) != "6 Jun 2026" || b[19] != 0 {
+		t.Errorf("build date field = %q", b[8:20])
 	}
-	if name[11] != 0 {
-		t.Error("build date field not NUL-terminated")
+	// Manufacturer: fixed 40-byte field at [20:60]; the official app reads
+	// firmware version from offset 60, so these offsets are load-bearing.
+	if string(b[20:20+len("meshcore-go")]) != "meshcore-go" || b[59] != 0 {
+		t.Errorf("manufacturer field = %q", b[20:60])
 	}
-	// Tail is "<manufacturer>\0<version>".
-	tail := b[20:]
-	if string(tail) != "meshcore-go\x00v1.16.0" {
-		t.Errorf("tail = %q", tail)
+	// FirmwareVersion: fixed 20-byte field at [60:80].
+	if string(b[60:60+len("v1.16.0")]) != "v1.16.0" || b[79] != 0 {
+		t.Errorf("firmware version field = %q", b[60:80])
 	}
 }
 

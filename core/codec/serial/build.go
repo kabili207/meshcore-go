@@ -2,6 +2,21 @@ package serial
 
 import "encoding/binary"
 
+// Advertised node/adv types reported in SELF_INFO and Contact frames. These
+// mirror the firmware ADV_TYPE_* values (and codec.NodeType*).
+const (
+	AdvTypeNone     = 0
+	AdvTypeChat     = 1
+	AdvTypeRepeater = 2
+	AdvTypeRoom     = 3
+	AdvTypeSensor   = 4
+)
+
+// CompanionFirmwareVerCode is the FIRMWARE_VER_CODE the device reports as byte 1
+// of DEVICE_INFO. 13 corresponds to firmware v1.16.0 and gates which features
+// the phone apps enable.
+const CompanionFirmwareVerCode = 13
+
 // Response payload builders for the companion protocol (device -> app). Each
 // returns a payload whose first byte is the response code; wrap it with
 // EncodeFrame(FrameNodeToApp, ...) before writing to the stream. Byte layouts
@@ -90,7 +105,14 @@ func (s *SelfInfo) Encode() []byte {
 	return buf
 }
 
+// deviceInfoSize is the fixed RESP_CODE_DEVICE_INFO payload length (MyMesh.cpp):
+// code + ver + max_contacts/2 + max_channels + ble_pin(4) + build_date(12) +
+// manufacturer(40) + firmware_version(20) + client_repeat + path_hash_mode.
+const deviceInfoSize = 1 + 1 + 1 + 1 + 4 + 12 + 40 + 20 + 1 + 1 // 82
+
 // DeviceInfo is the RESP_CODE_DEVICE_INFO payload, the reply to CMD_DEVICE_QUERY.
+// The layout is fixed-width: the official app reads FirmwareVersion at offset 60,
+// so all fields must sit at their firmware offsets (a compact form is rejected).
 type DeviceInfo struct {
 	// FirmwareVerCode is the protocol/firmware version code (13 for v1.16.0).
 	FirmwareVerCode uint8
@@ -98,30 +120,30 @@ type DeviceInfo struct {
 	MaxContactsDiv2  uint8
 	MaxGroupChannels uint8
 	BLEPin           uint32
-	// BuildDate is the firmware build date ("6 Jun 2026"), written into a fixed
-	// 12-byte NUL-terminated field.
+	// BuildDate ("6 Jun 2026") goes in a fixed 12-byte NUL-terminated field.
 	BuildDate string
-	// Manufacturer and FirmwareVersion are appended at offset 20 as
-	// "<Manufacturer>\0<FirmwareVersion>"; the client splits on the NUL.
-	Manufacturer    string
+	// Manufacturer/model goes in a fixed 40-byte field at offset 20.
+	Manufacturer string
+	// FirmwareVersion ("v1.16.0") goes in a fixed 20-byte field at offset 60.
 	FirmwareVersion string
+	// ClientRepeat (v9+) and PathHashMode (v10+) are the two trailing bytes.
+	ClientRepeat uint8
+	PathHashMode uint8
 }
 
-// Encode serializes the device-info payload (response code byte first).
+// Encode serializes the device-info payload (response code byte first), 82 bytes.
 func (d *DeviceInfo) Encode() []byte {
-	tail := []byte(d.Manufacturer)
-	if d.FirmwareVersion != "" {
-		tail = append(tail, 0)
-		tail = append(tail, d.FirmwareVersion...)
-	}
-	buf := make([]byte, 20+len(tail))
+	buf := make([]byte, deviceInfoSize)
 	buf[0] = RespCodeDeviceInfo
 	buf[1] = d.FirmwareVerCode
 	buf[2] = d.MaxContactsDiv2
 	buf[3] = d.MaxGroupChannels
 	binary.LittleEndian.PutUint32(buf[4:8], d.BLEPin)
 	writeCString(buf[8:20], d.BuildDate)
-	copy(buf[20:], tail)
+	writeCString(buf[20:60], d.Manufacturer)
+	writeCString(buf[60:80], d.FirmwareVersion)
+	buf[80] = d.ClientRepeat
+	buf[81] = d.PathHashMode
 	return buf
 }
 
@@ -166,6 +188,56 @@ func (c *Contact) Encode() []byte {
 	binary.LittleEndian.PutUint32(buf[140:144], uint32(c.GPSLon))
 	binary.LittleEndian.PutUint32(buf[144:148], c.LastMod)
 	return buf
+}
+
+// EncodeNoMoreMessages builds a RESP_CODE_NO_MORE_MESSAGES payload (single
+// byte), the reply to CMD_SYNC_NEXT_MESSAGE when the offline queue is empty.
+func EncodeNoMoreMessages() []byte { return []byte{RespCodeNoMoreMessages} }
+
+// EncodeBattAndStorage builds a RESP_CODE_BATT_AND_STORAGE payload (reply to
+// CMD_GET_BATT_AND_STORAGE): [code][battery_mV u16][used_KB u32][total_KB u32].
+// Storage values are in kilobytes.
+func EncodeBattAndStorage(batteryMilliVolts uint16, storageUsedKB, storageTotalKB uint32) []byte {
+	b := make([]byte, 11)
+	b[0] = RespCodeBattAndStorage
+	binary.LittleEndian.PutUint16(b[1:3], batteryMilliVolts)
+	binary.LittleEndian.PutUint32(b[3:7], storageUsedKB)
+	binary.LittleEndian.PutUint32(b[7:11], storageTotalKB)
+	return b
+}
+
+// EncodeDefaultFloodScope builds a RESP_CODE_DEFAULT_FLOOD_SCOPE payload (reply
+// to CMD_GET_DEFAULT_FLOOD_SCOPE). An empty name means no scope is configured
+// and the payload is just [code]; otherwise it is [code][name 31-byte
+// C-string][key 16 bytes].
+func EncodeDefaultFloodScope(name string, key []byte) []byte {
+	if name == "" {
+		return []byte{RespCodeDefaultFloodScope}
+	}
+	b := make([]byte, 1+31+16)
+	b[0] = RespCodeDefaultFloodScope
+	writeCString(b[1:32], name)
+	copy(b[32:48], key)
+	return b
+}
+
+// ChannelInfo is the RESP_CODE_CHANNEL_INFO payload (reply to CMD_GET_CHANNEL):
+// [code][index][name 32-byte C-string][secret 16 bytes]. Only 128-bit (16-byte)
+// channel secrets are supported.
+type ChannelInfo struct {
+	Index  uint8
+	Name   string
+	Secret []byte // truncated/zero-padded to 16 bytes
+}
+
+// Encode serializes the channel-info payload (response code byte first), 50 bytes.
+func (c *ChannelInfo) Encode() []byte {
+	b := make([]byte, 1+1+32+16)
+	b[0] = RespCodeChannelInfo
+	b[1] = c.Index
+	writeCString(b[2:34], c.Name)
+	copy(b[34:50], c.Secret)
+	return b
 }
 
 // writeCString writes s into dst as a fixed-width, NUL-terminated C string. It

@@ -113,14 +113,16 @@ const (
 	StatsTypePackets = 2 // Packet statistics
 )
 
-// Error codes for RespCodeErr.
+// Error codes carried in a RespCodeErr frame ([RespCodeErr][code]). Values match
+// the firmware ERR_CODE_* macros (companion_radio/MyMesh.cpp), which is what the
+// host apps decode; do not renumber them.
 const (
-	ErrCodeNone         = 0
-	ErrCodeInvalidCmd   = 1
-	ErrCodeInvalidArg   = 2
-	ErrCodeNotFound     = 3
-	ErrCodeNotSupported = 4
-	ErrCodeInternal     = 5
+	ErrCodeUnsupportedCmd = 1
+	ErrCodeNotFound       = 2
+	ErrCodeTableFull      = 3
+	ErrCodeBadState       = 4
+	ErrCodeFileIOError    = 5
+	ErrCodeIllegalArg     = 6
 )
 
 // Path hash modes for CmdSetPathHashMode.
