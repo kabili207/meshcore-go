@@ -101,9 +101,26 @@ const (
 	RespCodeDefaultFloodScope = 28 // Default flood scope info (v1.15.0+)
 )
 
-// Push codes sent asynchronously from radio to host.
+// Push codes sent asynchronously from device to host (firmware PUSH_CODE_*).
+// All are >= 0x80.
 const (
-	PushCodeMsgWaiting = 0x01 // Message waiting notification
+	PushCodeAdvert                = 0x80 // Known contact re-heard: [code][pubkey 32]
+	PushCodePathUpdated           = 0x81 // [code][pubkey 32]
+	PushCodeSendConfirmed         = 0x82 // [code][ack_crc u32][round_trip_ms u32]
+	PushCodeMsgWaiting            = 0x83 // Message waiting: single byte tickle
+	PushCodeRawData               = 0x84
+	PushCodeLoginSuccess          = 0x85
+	PushCodeLoginFail             = 0x86
+	PushCodeStatusResponse        = 0x87
+	PushCodeLogRxData             = 0x88
+	PushCodeTraceData             = 0x89
+	PushCodeNewAdvert             = 0x8A
+	PushCodeTelemetryResponse     = 0x8B
+	PushCodeBinaryResponse        = 0x8C
+	PushCodePathDiscoveryResponse = 0x8D
+	PushCodeControlData           = 0x8E
+	PushCodeContactDeleted        = 0x8F
+	PushCodeContactsFull          = 0x90
 )
 
 // Statistics sub-types for CmdGetStats.

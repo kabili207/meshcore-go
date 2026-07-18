@@ -29,6 +29,8 @@ import (
 
 	sloghelper "github.com/kabili207/slog-helper"
 
+	"github.com/kabili207/meshcore-go/core"
+	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/companion"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/node"
@@ -108,6 +110,20 @@ func run() error {
 			RadioBWkHz:   *bw,
 			RadioSF:      uint8(*sf),
 			RadioCR:      uint8(*cr),
+		},
+		Events: func(h func(evt any)) { comp.OnEvent(h) },
+		SendDM: func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error) {
+			ct := comp.Base().Contacts().GetByPubKey(to)
+			flood := ct == nil || !ct.HasDirectPath()
+			err := comp.SendText(ctx, to, text,
+				node.WithTxtType(txtType), node.WithAttempt(attempt), node.WithOnACK(onAck))
+			return flood, err
+		},
+		SendChannel: func(_ context.Context, channelIdx uint8, text string) error {
+			if channelIdx != 0 {
+				return fmt.Errorf("unknown channel index %d", channelIdx)
+			}
+			return comp.SendChannelText(crypto.DefaultChannelKey, text)
 		},
 		Logger: slog.Default(),
 	})

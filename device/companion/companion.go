@@ -10,13 +10,18 @@
 // serial and TCP, so ListenAndServe (TCP) and Serve (any stream, e.g. a pty)
 // share one dispatch path.
 //
-// Phase 1 implements the connect milestone: APP_START -> SELF_INFO,
-// DEVICE_QUERY -> DEVICE_INFO, GET_CONTACTS streaming, and device time.
-// Unimplemented commands return RESP_CODE_ERR so the app degrades gracefully.
-// Messaging and channels arrive in later phases.
+// Implemented so far: the connect handshake (APP_START -> SELF_INFO,
+// DEVICE_QUERY -> DEVICE_INFO), GET_CONTACTS streaming, device time,
+// battery/storage, channel reads, flood-scope and advert-name config, and
+// messaging: direct (SEND_TXT_MSG with SENT/SEND_CONFIRMED) and channel
+// (SEND_CHANNEL_TXT_MSG), plus incoming DMs and group messages via the
+// MSG_WAITING -> SYNC_NEXT_MESSAGE queue. The remote repeater login/CLI gateway
+// is not yet wired. Unimplemented commands return RESP_CODE_ERR so the app
+// degrades gracefully.
 package companion
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -24,11 +29,15 @@ import (
 	"math"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/clock"
 	"github.com/kabili207/meshcore-go/core/codec/serial"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/contact"
+	"github.com/kabili207/meshcore-go/device/event"
 )
 
 // Node is the subset of a meshcore-go node the companion server reads. A
@@ -75,18 +84,58 @@ type Config struct {
 	Node Node
 	// Identity describes the device to report to the app.
 	Identity Identity
+
+	// Events, if set, is invoked once during NewServer with the server's event
+	// handler; wire it to the node's OnEvent so incoming messages are delivered
+	// to connected apps. Without it, no incoming messages are queued.
+	Events func(handler func(evt any))
+
+	// SendDM, if set, sends a direct text message to a contact. It returns
+	// whether the message went via flood (no known direct path) and invokes
+	// onAck when the recipient acknowledges. Without it, CMD_SEND_TXT_MSG
+	// returns an error.
+	SendDM func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (flood bool, err error)
+
+	// SendChannel, if set, sends a text message to a group channel by index
+	// (index 0 is the built-in Public channel). Without it,
+	// CMD_SEND_CHANNEL_TXT_MSG returns an error.
+	SendChannel func(ctx context.Context, channelIdx uint8, text string) error
+
 	// Logger for connection events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
 
 // Server serves the companion protocol for one Node over accepted connections.
 type Server struct {
-	node Node
-	id   Identity
-	log  *slog.Logger
+	node        Node
+	id          Identity
+	sendDM      func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error)
+	sendChannel func(ctx context.Context, channelIdx uint8, text string) error
+	pubChanHash uint8 // channel hash of the built-in Public channel
+	log         *slog.Logger
 
 	mu   sync.RWMutex // guards mutable identity fields
 	name string       // current advertised name; SET_ADVERT_NAME updates it
+
+	ackCounter atomic.Uint32 // per-send correlation token for SENT/SEND_CONFIRMED
+
+	msgMu    sync.Mutex            // guards queue and sessions
+	queue    []queuedMessage       // offline incoming-message queue
+	sessions map[*session]struct{} // currently connected apps
+}
+
+// queuedMessage is an incoming message awaiting CMD_SYNC_NEXT_MESSAGE drain. It
+// is either a direct message (senderPrefix set) or a channel message (isChannel
+// with channelIdx set).
+type queuedMessage struct {
+	isChannel    bool
+	senderPrefix [6]byte
+	channelIdx   uint8
+	pathLen      uint8
+	txtType      uint8
+	senderTS     uint32
+	snr          int8
+	text         string
 }
 
 // NewServer builds a Server, filling in Identity defaults. It panics if
@@ -124,7 +173,20 @@ func NewServer(cfg Config) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{node: cfg.Node, id: id, log: log.WithGroup("companion"), name: id.Name}
+	s := &Server{
+		node:        cfg.Node,
+		id:          id,
+		sendDM:      cfg.SendDM,
+		sendChannel: cfg.SendChannel,
+		pubChanHash: crypto.ComputeChannelHash(crypto.DefaultChannelKey),
+		log:         log.WithGroup("companion"),
+		name:        id.Name,
+		sessions:    make(map[*session]struct{}),
+	}
+	if cfg.Events != nil {
+		cfg.Events(s.handleEvent)
+	}
+	return s
 }
 
 // ListenAndServe accepts TCP connections on addr and serves each. MeshMonitor's
@@ -170,7 +232,10 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 // Serve runs the companion protocol over rw until the stream closes or ctx is
 // cancelled. Use it directly to serve a pty (the serial path) instead of TCP.
 func (s *Server) Serve(ctx context.Context, rw io.ReadWriter) error {
-	sess := &session{srv: s, w: rw}
+	sess := &session{srv: s, w: rw, ctx: ctx}
+	s.addSession(sess)
+	defer s.removeSession(sess)
+
 	fr := serial.NewFrameReader(rw)
 	for {
 		marker, payload, err := fr.ReadFrame()
@@ -196,11 +261,12 @@ func (s *Server) Serve(ctx context.Context, rw io.ReadWriter) error {
 }
 
 // session is the per-connection state. appTargetVer is negotiated by
-// DEVICE_QUERY and selects the incoming-message layout in later phases.
+// DEVICE_QUERY and selects the incoming-message layout (V3 vs pre-V3).
 type session struct {
 	srv          *Server
 	w            io.Writer
-	mu           sync.Mutex // serializes frame writes (loop replies and, later, pushes)
+	ctx          context.Context
+	mu           sync.Mutex // serializes frame writes (loop replies and async pushes)
 	appTargetVer uint8
 }
 
@@ -234,8 +300,14 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 	case serial.CmdGetContacts:
 		return s.sendContacts(ss, payload)
 
+	case serial.CmdSendTxtMsg:
+		return s.sendTextMsg(ss, payload)
+
+	case serial.CmdSendChannelTxtMsg:
+		return s.sendChannelMsg(ss, payload)
+
 	case serial.CmdGetChannel:
-		return s.sendChannel(ss, payload)
+		return s.getChannel(ss, payload)
 
 	case serial.CmdGetDeviceTime:
 		return ss.send(serial.EncodeCurrTime(s.node.Clock().GetCurrentTime()))
@@ -254,8 +326,7 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 		return ss.send(serial.EncodeDefaultFloodScope("", nil))
 
 	case serial.CmdSyncNextMessage:
-		// No offline message queue yet (phase 2); report the queue empty.
-		return ss.send(serial.EncodeNoMoreMessages())
+		return s.sendNextMessage(ss)
 
 	case serial.CmdSetAdvertName:
 		if name, err := serial.ParseSetAdvertName(payload); err == nil {
@@ -315,10 +386,10 @@ func (s *Server) setName(name string) {
 	s.name = name
 }
 
-// sendChannel answers CMD_GET_CHANNEL. Index 0 is the built-in Public channel;
+// getChannel answers CMD_GET_CHANNEL. Index 0 is the built-in Public channel;
 // other in-range indices report as empty (unconfigured); out-of-range indices
 // return NotFound, matching the firmware.
-func (s *Server) sendChannel(ss *session, payload []byte) error {
+func (s *Server) getChannel(ss *session, payload []byte) error {
 	idx, err := serial.ParseGetChannel(payload)
 	if err != nil {
 		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
@@ -332,6 +403,170 @@ func (s *Server) sendChannel(ss *session, payload []byte) error {
 		ci.Secret = crypto.DefaultChannelKey
 	}
 	return ss.send(ci.Encode())
+}
+
+// sendTextMsg handles CMD_SEND_TXT_MSG: resolve the recipient, send the message
+// through the node, reply RESP_CODE_SENT, and push PUSH_CODE_SEND_CONFIRMED when
+// the recipient acknowledges.
+func (s *Server) sendTextMsg(ss *session, payload []byte) error {
+	if s.sendDM == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	req, err := serial.ParseSendTxtMsg(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	ct := s.resolveContact(req.DestPrefix)
+	if ct == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+
+	// The app correlates its RESP_CODE_SENT.expected_ack with the later
+	// PUSH_CODE_SEND_CONFIRMED.ack_code; a server-side token keeps that pairing
+	// unique regardless of the on-air ACK CRC.
+	token := s.ackCounter.Add(1)
+	start := time.Now()
+	flood, err := s.sendDM(ss.ctx, ct.ID, req.Text, req.TxtType, req.Attempt, func() {
+		rtt := uint32(time.Since(start).Milliseconds())
+		_ = ss.send(serial.EncodeSendConfirmed(token, rtt))
+	})
+	if err != nil {
+		s.log.Warn("send failed", "to", ct.ID.String(), "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+
+	sentType := uint8(serial.SentTypeDirect)
+	estTimeout := uint32(4000)
+	if flood {
+		sentType = serial.SentTypeFlood
+		estTimeout = 8000
+	}
+	return ss.send(serial.EncodeSent(sentType, token, estTimeout))
+}
+
+// sendChannelMsg handles CMD_SEND_CHANNEL_TXT_MSG. Unlike a direct message, the
+// firmware replies with RESP_CODE_OK (not RESP_CODE_SENT) and there is no
+// delivery confirmation: group messages are unacknowledged broadcasts.
+func (s *Server) sendChannelMsg(ss *session, payload []byte) error {
+	if s.sendChannel == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	req, err := serial.ParseSendChannelTxtMsg(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	if req.TxtType != 0 { // firmware only accepts TXT_TYPE_PLAIN on a channel
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	if err := s.sendChannel(ss.ctx, req.ChannelIdx, req.Text); err != nil {
+		s.log.Warn("channel send failed", "channel", req.ChannelIdx, "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	return ss.send(serial.EncodeOK())
+}
+
+// resolveContact finds the stored contact whose public key starts with prefix
+// (the 6-byte prefix the app sends), or nil if none match.
+func (s *Server) resolveContact(prefix []byte) *contact.ContactInfo {
+	var found *contact.ContactInfo
+	s.node.Contacts().ForEach(func(c *contact.ContactInfo) bool {
+		if bytes.HasPrefix(c.ID[:], prefix) {
+			found = c
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// sendNextMessage drains one queued incoming message, encoded for the session's
+// negotiated protocol version, or reports the queue empty.
+func (s *Server) sendNextMessage(ss *session) error {
+	s.msgMu.Lock()
+	if len(s.queue) == 0 {
+		s.msgMu.Unlock()
+		return ss.send(serial.EncodeNoMoreMessages())
+	}
+	qm := s.queue[0]
+	s.queue = s.queue[1:]
+	s.msgMu.Unlock()
+
+	v3 := ss.appTargetVer >= 3
+	var frame []byte
+	if qm.isChannel {
+		frame = serial.EncodeChannelMsgRecv(v3, qm.snr, qm.channelIdx, qm.pathLen, qm.txtType, qm.senderTS, qm.text)
+	} else {
+		frame = serial.EncodeContactMsgRecv(v3, qm.snr, qm.senderPrefix[:], qm.pathLen, qm.txtType, qm.senderTS, qm.text)
+	}
+	return ss.send(frame)
+}
+
+// handleEvent receives node events and queues incoming messages for delivery.
+func (s *Server) handleEvent(evt any) {
+	switch e := evt.(type) {
+	case *event.TextMessageReceived:
+		s.enqueueDM(e)
+	case *event.GroupTextReceived:
+		s.enqueueChannel(e)
+	}
+}
+
+// enqueueDM queues an incoming direct message and tickles connected apps.
+func (s *Server) enqueueDM(e *event.TextMessageReceived) {
+	qm := queuedMessage{
+		pathLen:  serial.PathLenUnknown, // direct/unknown; refined when packet path is exposed
+		txtType:  e.TxtType,
+		senderTS: e.Timestamp,
+		text:     e.Message,
+	}
+	copy(qm.senderPrefix[:], e.From[:])
+	s.enqueue(qm)
+}
+
+// enqueueChannel queues an incoming group message. Only channels the server can
+// map to an index (currently the built-in Public channel) are delivered.
+func (s *Server) enqueueChannel(e *event.GroupTextReceived) {
+	if e.ChannelHash != s.pubChanHash {
+		s.log.Debug("dropping message for unknown channel", "hash", e.ChannelHash)
+		return
+	}
+	s.enqueue(queuedMessage{
+		isChannel:  true,
+		channelIdx: 0, // Public
+		pathLen:    serial.PathLenUnknown,
+		txtType:    0, // plain
+		senderTS:   s.node.Clock().GetCurrentTime(),
+		text:       e.Message,
+	})
+}
+
+// enqueue appends a message to the offline queue and tickles connected apps.
+func (s *Server) enqueue(qm queuedMessage) {
+	s.msgMu.Lock()
+	s.queue = append(s.queue, qm)
+	sessions := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.msgMu.Unlock()
+
+	for _, sess := range sessions {
+		if err := sess.send(serial.EncodeMsgWaiting()); err != nil {
+			s.log.Debug("msg-waiting push failed", "error", err)
+		}
+	}
+}
+
+func (s *Server) addSession(sess *session) {
+	s.msgMu.Lock()
+	s.sessions[sess] = struct{}{}
+	s.msgMu.Unlock()
+}
+
+func (s *Server) removeSession(sess *session) {
+	s.msgMu.Lock()
+	delete(s.sessions, sess)
+	s.msgMu.Unlock()
 }
 
 // deviceInfo builds the DEVICE_INFO reply.

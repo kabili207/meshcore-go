@@ -194,6 +194,104 @@ func (c *Contact) Encode() []byte {
 // byte), the reply to CMD_SYNC_NEXT_MESSAGE when the offline queue is empty.
 func EncodeNoMoreMessages() []byte { return []byte{RespCodeNoMoreMessages} }
 
+// sent_type values for the RESP_CODE_SENT reply.
+const (
+	SentTypeDirect = 0
+	SentTypeFlood  = 1
+)
+
+// EncodeSent builds a RESP_CODE_SENT payload: [code][sent_type][expected_ack
+// u32][est_timeout_ms u32]. The app later matches a PUSH_CODE_SEND_CONFIRMED
+// whose ack_code equals expectedAck.
+//
+// Reply RESP_CODE_SENT ONLY for the "send to a remote node and await an ACK"
+// commands: SEND_TXT_MSG, SEND_LOGIN, SEND_ANON_REQ, SEND_STATUS_REQ,
+// SEND_PATH_DISCOVERY_REQ, SEND_TELEMETRY_REQ (to a contact), SEND_BINARY_REQ,
+// and SEND_TRACE_PATH. Broadcast/raw sends and every config write instead reply
+// with a bare RESP_CODE_OK (EncodeOK) and produce no confirmation, e.g.
+// SEND_CHANNEL_TXT_MSG, SEND_CHANNEL_DATA, SEND_SELF_ADVERT, SEND_RAW_DATA,
+// SEND_CONTROL_DATA, SEND_RAW_PACKET, and the SET_* commands. This distinction
+// is firmware-exact: the official app ignores a send it does not see
+// acknowledged with the reply type it expects (a SENT frame for a channel send
+// leaves the message unaccepted until the app reloads).
+func EncodeSent(sentType uint8, expectedAck, estTimeoutMs uint32) []byte {
+	b := make([]byte, 10)
+	b[0] = RespCodeSent
+	b[1] = sentType
+	binary.LittleEndian.PutUint32(b[2:6], expectedAck)
+	binary.LittleEndian.PutUint32(b[6:10], estTimeoutMs)
+	return b
+}
+
+// EncodeMsgWaiting builds a PUSH_CODE_MSG_WAITING payload (single byte). It
+// tells the app to drain the queue with CMD_SYNC_NEXT_MESSAGE.
+func EncodeMsgWaiting() []byte { return []byte{PushCodeMsgWaiting} }
+
+// EncodeSendConfirmed builds a PUSH_CODE_SEND_CONFIRMED payload:
+// [code][ack_code u32][round_trip_ms u32]. ackCode must equal the expectedAck
+// reported in the matching RESP_CODE_SENT.
+func EncodeSendConfirmed(ackCode, roundTripMs uint32) []byte {
+	b := make([]byte, 9)
+	b[0] = PushCodeSendConfirmed
+	binary.LittleEndian.PutUint32(b[1:5], ackCode)
+	binary.LittleEndian.PutUint32(b[5:9], roundTripMs)
+	return b
+}
+
+// EncodeContactMsgRecv builds an incoming direct-message frame drained by
+// CMD_SYNC_NEXT_MESSAGE. When v3 is true it uses RESP_CODE_CONTACT_MSG_RECV_V3
+// (adds an SNR byte and two reserved bytes); otherwise RESP_CODE_CONTACT_MSG_RECV.
+// senderPrefix is the first 6 bytes of the sender's public key; pathLen is the
+// hop count (0xFF for a direct delivery).
+func EncodeContactMsgRecv(v3 bool, snr int8, senderPrefix []byte, pathLen, txtType uint8, senderTS uint32, text string) []byte {
+	if v3 {
+		b := make([]byte, 16+len(text))
+		b[0] = RespCodeContactMsgRecvV3
+		b[1] = byte(snr)
+		// b[2], b[3] reserved (0)
+		copy(b[4:10], senderPrefix)
+		b[10] = pathLen
+		b[11] = txtType
+		binary.LittleEndian.PutUint32(b[12:16], senderTS)
+		copy(b[16:], text)
+		return b
+	}
+	b := make([]byte, 13+len(text))
+	b[0] = RespCodeContactMsgRecv
+	copy(b[1:7], senderPrefix)
+	b[7] = pathLen
+	b[8] = txtType
+	binary.LittleEndian.PutUint32(b[9:13], senderTS)
+	copy(b[13:], text)
+	return b
+}
+
+// EncodeChannelMsgRecv builds an incoming group-message frame drained by
+// CMD_SYNC_NEXT_MESSAGE. When v3 is true it uses RESP_CODE_CHANNEL_MSG_RECV_V3
+// (adds an SNR byte and two reserved bytes); otherwise RESP_CODE_CHANNEL_MSG_RECV.
+func EncodeChannelMsgRecv(v3 bool, snr int8, channelIdx, pathLen, txtType uint8, senderTS uint32, text string) []byte {
+	if v3 {
+		b := make([]byte, 11+len(text))
+		b[0] = RespCodeChannelMsgRecvV3
+		b[1] = byte(snr)
+		// b[2], b[3] reserved (0)
+		b[4] = channelIdx
+		b[5] = pathLen
+		b[6] = txtType
+		binary.LittleEndian.PutUint32(b[7:11], senderTS)
+		copy(b[11:], text)
+		return b
+	}
+	b := make([]byte, 8+len(text))
+	b[0] = RespCodeChannelMsgRecv
+	b[1] = channelIdx
+	b[2] = pathLen
+	b[3] = txtType
+	binary.LittleEndian.PutUint32(b[4:8], senderTS)
+	copy(b[8:], text)
+	return b
+}
+
 // EncodeBattAndStorage builds a RESP_CODE_BATT_AND_STORAGE payload (reply to
 // CMD_GET_BATT_AND_STORAGE): [code][battery_mV u16][used_KB u32][total_KB u32].
 // Storage values are in kilobytes.

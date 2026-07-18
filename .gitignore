@@ -1,1 +1,24 @@
+# Extensionless binaries
+companion
+
+# Re-allow directories
+!*/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+__debug_bin*
+
+# Go build artifacts
+*.exe
+*.test
+*.out
+
+# Config and data (user-specific)
+config.yml
+*.db
+*.db-wal
+*.db-shm
 *.key
