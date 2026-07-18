@@ -501,14 +501,49 @@ func (s *Server) sendNextMessage(ss *session) error {
 	return ss.send(frame)
 }
 
-// handleEvent receives node events and queues incoming messages for delivery.
+// handleEvent receives node events, queuing incoming messages and pushing live
+// contact updates to connected apps.
 func (s *Server) handleEvent(evt any) {
 	switch e := evt.(type) {
 	case *event.TextMessageReceived:
 		s.enqueueDM(e)
 	case *event.GroupTextReceived:
 		s.enqueueChannel(e)
+	case *event.AdvertReceived:
+		s.pushAdvert(e)
 	}
+}
+
+// pushAdvert emits NEW_ADVERT for a first-seen contact (the full contact frame)
+// or ADVERT for a re-heard one (pubkey only), so the app's contact list updates
+// live without a manual refresh.
+func (s *Server) pushAdvert(e *event.AdvertReceived) {
+	if e.Contact == nil {
+		return
+	}
+	if e.IsNew {
+		s.pushToSessions(contactToWire(e.Contact).EncodeWithCode(serial.PushCodeNewAdvert))
+	} else {
+		s.pushToSessions(serial.EncodeAdvert([32]byte(e.Contact.ID)))
+	}
+}
+
+// NotifyContactDeleted emits PUSH_CODE_CONTACT_DELETED. Wire it to the contact
+// store's overwrite/removal callback (e.g. ContactManager.SetOnContactOverwrite).
+func (s *Server) NotifyContactDeleted(id core.MeshCoreID) {
+	s.pushToSessions(serial.EncodeContactDeleted([32]byte(id)))
+}
+
+// NotifyPathUpdated emits PUSH_CODE_PATH_UPDATED for a contact whose route
+// changed. meshcore-go has no dedicated path-changed signal, so wire this from
+// your own if you have one.
+func (s *Server) NotifyPathUpdated(id core.MeshCoreID) {
+	s.pushToSessions(serial.EncodePathUpdated([32]byte(id)))
+}
+
+// NotifyContactsFull emits PUSH_CODE_CONTACTS_FULL when the contact table is full.
+func (s *Server) NotifyContactsFull() {
+	s.pushToSessions(serial.EncodeContactsFull())
 }
 
 // enqueueDM queues an incoming direct message and tickles connected apps.
@@ -544,6 +579,14 @@ func (s *Server) enqueueChannel(e *event.GroupTextReceived) {
 func (s *Server) enqueue(qm queuedMessage) {
 	s.msgMu.Lock()
 	s.queue = append(s.queue, qm)
+	s.msgMu.Unlock()
+	s.pushToSessions(serial.EncodeMsgWaiting())
+}
+
+// pushToSessions writes an unsolicited push frame to every connected app. Apps
+// that are not connected simply miss it, matching the firmware.
+func (s *Server) pushToSessions(payload []byte) {
+	s.msgMu.Lock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
 		sessions = append(sessions, sess)
@@ -551,8 +594,8 @@ func (s *Server) enqueue(qm queuedMessage) {
 	s.msgMu.Unlock()
 
 	for _, sess := range sessions {
-		if err := sess.send(serial.EncodeMsgWaiting()); err != nil {
-			s.log.Debug("msg-waiting push failed", "error", err)
+		if err := sess.send(payload); err != nil {
+			s.log.Debug("push failed", "error", err)
 		}
 	}
 }

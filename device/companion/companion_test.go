@@ -455,3 +455,68 @@ func TestIncomingChannelUnknownDropped(t *testing.T) {
 		t.Errorf("unknown-channel message should be dropped, got %v", resp[0])
 	}
 }
+
+func TestNewAdvertPush(t *testing.T) {
+	var handler func(any)
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
+
+	var out bytes.Buffer
+	sess := &session{srv: s, w: &out, ctx: context.Background()}
+	s.addSession(sess)
+
+	var id core.MeshCoreID
+	id[0], id[31] = 0x11, 0x22
+	handler(&event.AdvertReceived{Contact: &contact.ContactInfo{ID: id, Name: "New", OutPathLen: 0xFF}, IsNew: true})
+
+	frames := decodeFrames(&out)
+	if len(frames) != 1 || frames[0][0] != serial.PushCodeNewAdvert || len(frames[0]) != 148 {
+		t.Fatalf("expected 148-byte NewAdvert push, got %v", frames)
+	}
+	if !bytes.Equal(frames[0][1:33], id[:]) {
+		t.Error("NewAdvert pubkey mismatch")
+	}
+}
+
+func TestReheardAdvertPush(t *testing.T) {
+	var handler func(any)
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
+
+	var out bytes.Buffer
+	sess := &session{srv: s, w: &out, ctx: context.Background()}
+	s.addSession(sess)
+
+	var id core.MeshCoreID
+	id[0] = 0xAB
+	handler(&event.AdvertReceived{Contact: &contact.ContactInfo{ID: id, OutPathLen: 0xFF}, IsNew: false})
+
+	frames := decodeFrames(&out)
+	if len(frames) != 1 || frames[0][0] != serial.PushCodeAdvert || len(frames[0]) != 33 {
+		t.Fatalf("expected 33-byte Advert push, got %v", frames)
+	}
+	if !bytes.Equal(frames[0][1:33], id[:]) {
+		t.Error("Advert pubkey mismatch")
+	}
+}
+
+func TestNotifyContactDeleted(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+
+	var out bytes.Buffer
+	sess := &session{srv: s, w: &out, ctx: context.Background()}
+	s.addSession(sess)
+
+	var id core.MeshCoreID
+	id[0] = 0x99
+	s.NotifyContactDeleted(id)
+
+	frames := decodeFrames(&out)
+	if len(frames) != 1 || frames[0][0] != serial.PushCodeContactDeleted {
+		t.Fatalf("expected ContactDeleted push, got %v", frames)
+	}
+	if !bytes.Equal(frames[0][1:33], id[:]) {
+		t.Error("ContactDeleted pubkey mismatch")
+	}
+}

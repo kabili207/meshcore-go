@@ -173,10 +173,14 @@ type Contact struct {
 	LastMod    uint32
 }
 
-// Encode serializes the contact payload (response code byte first), 148 bytes.
-func (c *Contact) Encode() []byte {
+// Encode serializes the contact payload as a RESP_CODE_CONTACT frame (148 bytes).
+func (c *Contact) Encode() []byte { return c.EncodeWithCode(RespCodeContact) }
+
+// EncodeWithCode serializes the contact payload with an explicit leading code.
+// PUSH_CODE_NEW_ADVERT reuses this exact 148-byte layout.
+func (c *Contact) EncodeWithCode(code uint8) []byte {
 	buf := make([]byte, contactFrameSize)
-	buf[0] = RespCodeContact
+	buf[0] = code
 	copy(buf[1:33], c.PublicKey[:])
 	buf[33] = c.Type
 	buf[34] = c.Flags
@@ -337,6 +341,29 @@ func (c *ChannelInfo) Encode() []byte {
 	copy(b[34:50], c.Secret)
 	return b
 }
+
+// EncodeAdvert builds a PUSH_CODE_ADVERT payload ([code][pubkey 32]): a known
+// contact was re-heard. A first-seen contact instead uses the full contact
+// frame via (*Contact).EncodeWithCode(PushCodeNewAdvert).
+func EncodeAdvert(pubKey [32]byte) []byte { return pubKeyPush(PushCodeAdvert, pubKey) }
+
+// EncodePathUpdated builds a PUSH_CODE_PATH_UPDATED payload: a contact's routing
+// path changed.
+func EncodePathUpdated(pubKey [32]byte) []byte { return pubKeyPush(PushCodePathUpdated, pubKey) }
+
+// EncodeContactDeleted builds a PUSH_CODE_CONTACT_DELETED payload: a contact was
+// evicted from a full table.
+func EncodeContactDeleted(pubKey [32]byte) []byte { return pubKeyPush(PushCodeContactDeleted, pubKey) }
+
+func pubKeyPush(code byte, pubKey [32]byte) []byte {
+	b := make([]byte, 1+32)
+	b[0] = code
+	copy(b[1:], pubKey[:])
+	return b
+}
+
+// EncodeContactsFull builds a PUSH_CODE_CONTACTS_FULL payload (single byte).
+func EncodeContactsFull() []byte { return []byte{PushCodeContactsFull} }
 
 // writeCString writes s into dst as a fixed-width, NUL-terminated C string. It
 // copies at most len(dst)-1 bytes so the field always ends with at least one

@@ -32,6 +32,7 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/companion"
+	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/node"
 	"github.com/kabili207/meshcore-go/transport"
@@ -58,6 +59,9 @@ func run() error {
 		baud       = flag.Int("baud", 115200, "serial baud rate")
 		mqttBroker = flag.String("mqtt", "", "MQTT bridge broker URL (optional, e.g. tcp://host:1883)")
 		mqttTopic  = flag.String("mqtt-topic", "meshcore/bridge", "MQTT bridge topic")
+		mqttUser   = flag.String("mqtt-user", "", "MQTT username (optional)")
+		mqttPass   = flag.String("mqtt-pass", "", "MQTT password (optional)")
+		mqttTLS    = flag.Bool("mqtt-tls", false, "use TLS for the MQTT connection")
 
 		freq = flag.Float64("freq", 915.0, "radio frequency in MHz (reported to the app)")
 		bw   = flag.Float64("bw", 250, "radio bandwidth in kHz (reported to the app)")
@@ -74,7 +78,13 @@ func run() error {
 	pub := priv.Public().(ed25519.PublicKey)
 	nodeID := hex.EncodeToString(pub)
 
-	transports, err := buildTransports(*serialPort, *baud, *mqttBroker, *mqttTopic, nodeID)
+	transports, err := buildTransports(*serialPort, *baud, mqtttransport.Config{
+		Broker:   *mqttBroker,
+		Topic:    *mqttTopic,
+		Username: *mqttUser,
+		Password: *mqttPass,
+		UseTLS:   *mqttTLS,
+	}, nodeID)
 	if err != nil {
 		slog.Error("Failed to configure transport", "error", err)
 		return err
@@ -128,6 +138,12 @@ func run() error {
 		Logger: slog.Default(),
 	})
 
+	// Push PUSH_CODE_CONTACT_DELETED when the contact table evicts an entry, so
+	// the app's contact list stays in sync.
+	if mgr, ok := comp.Base().Contacts().(*contact.ContactManager); ok {
+		mgr.SetOnContactOverwrite(srv.NotifyContactDeleted)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -157,8 +173,9 @@ func run() error {
 
 // buildTransports assembles the mesh transports from the serial/MQTT flags. An
 // empty result is valid: the node then serves the companion protocol without a
-// live mesh connection.
-func buildTransports(serialPort string, baud int, mqttBroker, mqttTopic, nodeID string) ([]node.TransportOption, error) {
+// live mesh connection. mqttCfg is used only when its Broker is set; NodeID and
+// Logger are filled in here.
+func buildTransports(serialPort string, baud int, mqttCfg mqtttransport.Config, nodeID string) ([]node.TransportOption, error) {
 	var transports []node.TransportOption
 
 	if serialPort != "" {
@@ -174,13 +191,10 @@ func buildTransports(serialPort string, baud int, mqttBroker, mqttTopic, nodeID 
 		})
 	}
 
-	if mqttBroker != "" {
-		mt := mqtttransport.New(mqtttransport.Config{
-			Broker: mqttBroker,
-			Topic:  mqttTopic,
-			NodeID: nodeID,
-			Logger: slog.Default(),
-		})
+	if mqttCfg.Broker != "" {
+		mqttCfg.NodeID = nodeID
+		mqttCfg.Logger = slog.Default()
+		mt := mqtttransport.New(mqttCfg)
 		transports = append(transports, node.TransportOption{
 			Transport: mt,
 			Source:    transport.PacketSourceMQTT,
