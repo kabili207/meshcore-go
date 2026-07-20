@@ -250,6 +250,17 @@ func EncodeLoginSuccess(pubKeyPrefix []byte, isAdmin bool, serverTimestamp uint3
 	return b
 }
 
+// EncodeTelemetryResponse builds a PUSH_CODE_TELEMETRY_RESPONSE payload:
+// [code][reserved 1][pubkey_prefix 6][CayenneLPP data]. The data is forwarded as
+// received (empty for a self request on a node with no sensors).
+func EncodeTelemetryResponse(pubKeyPrefix, cayenneData []byte) []byte {
+	b := make([]byte, 8+len(cayenneData))
+	b[0] = PushCodeTelemetryResponse
+	copy(b[2:8], pubKeyPrefix)
+	copy(b[8:], cayenneData)
+	return b
+}
+
 // EncodeStatusResponse builds a PUSH_CODE_STATUS_RESPONSE payload:
 // [code][reserved 1][pubkey_prefix 6][status blob]. The blob is the remote
 // repeater's serialized RepeaterStats, forwarded as received.

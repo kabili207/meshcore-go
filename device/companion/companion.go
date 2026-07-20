@@ -1,8 +1,8 @@
 // Package companion serves the MeshCore companion protocol to a host app (a
 // phone app, or MeshMonitor via @liamcottle/meshcore.js) over a byte stream. It
 // makes a meshcore-go node present itself as a companion device that the app
-// connects to and drives: it answers the handshake, streams contacts, and (in
-// later phases) relays messages.
+// connects to and drives: it answers the handshake, streams contacts, relays
+// messages, and gateways remote repeater/room admin.
 //
 // The wire framing and payload codecs live in core/codec/serial. This package
 // is the stateful server: it accepts a connection, reads command frames,
@@ -10,14 +10,12 @@
 // serial and TCP, so ListenAndServe (TCP) and Serve (any stream, e.g. a pty)
 // share one dispatch path.
 //
-// Implemented so far: the connect handshake (APP_START -> SELF_INFO,
-// DEVICE_QUERY -> DEVICE_INFO), GET_CONTACTS streaming, device time,
-// battery/storage, channel reads, flood-scope and advert-name config, and
-// messaging: direct (SEND_TXT_MSG with SENT/SEND_CONFIRMED) and channel
-// (SEND_CHANNEL_TXT_MSG), plus incoming DMs and group messages via the
-// MSG_WAITING -> SYNC_NEXT_MESSAGE queue. The remote repeater login/CLI gateway
-// is not yet wired. Unimplemented commands return RESP_CODE_ERR so the app
-// degrades gracefully.
+// Implemented: the connect handshake, contacts (list/add/remove/import/export),
+// device state (time, battery, channels, radio config, stats, auto-add),
+// messaging (direct and channel, incoming and outgoing), live contact-update
+// pushes, and the remote-admin gateway (login, CLI, status, telemetry). See the
+// README for the full command list. Unimplemented commands return RESP_CODE_ERR
+// so the app degrades gracefully.
 package companion
 
 import (
@@ -117,6 +115,12 @@ type Config struct {
 	// pushes as STATUS_RESPONSE. Without it, CMD_SEND_STATUS_REQ returns an error.
 	SendStatus func(ctx context.Context, to core.MeshCoreID) error
 
+	// SendTelemetry, if set, requests telemetry from a remote node and returns
+	// the request tag (used as the SENT correlation). The reply arrives as an
+	// event.TelemetryResponse, pushed as TELEMETRY_RESPONSE. Without it, a remote
+	// CMD_SEND_TELEMETRY_REQ returns an error; a self request still gets a reply.
+	SendTelemetry func(ctx context.Context, to core.MeshCoreID) (tag uint32, err error)
+
 	// Stats, if set, provides device statistics for GET_STATS (the app polls
 	// this). Without it, GET_STATS still answers with battery and uptime, and
 	// zeroed packet/radio counters.
@@ -153,16 +157,17 @@ type Stats struct {
 
 // Server serves the companion protocol for one Node over accepted connections.
 type Server struct {
-	node        Node
-	id          Identity
-	sendDM      func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error)
-	sendChannel func(ctx context.Context, channelKey []byte, text string) error
-	sendLogin   func(ctx context.Context, to core.MeshCoreID, password string) error
-	sendStatus  func(ctx context.Context, to core.MeshCoreID) error
-	stats       func() Stats
-	exportSelf  func() []byte
-	startTime   time.Time
-	log         *slog.Logger
+	node          Node
+	id            Identity
+	sendDM        func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error)
+	sendChannel   func(ctx context.Context, channelKey []byte, text string) error
+	sendLogin     func(ctx context.Context, to core.MeshCoreID, password string) error
+	sendStatus    func(ctx context.Context, to core.MeshCoreID) error
+	sendTelemetry func(ctx context.Context, to core.MeshCoreID) (uint32, error)
+	stats         func() Stats
+	exportSelf    func() []byte
+	startTime     time.Time
+	log           *slog.Logger
 
 	mu       sync.RWMutex   // guards mutable identity fields and the channel table
 	name     string         // current advertised name; SET_ADVERT_NAME updates it
@@ -256,24 +261,25 @@ func NewServer(cfg Config) *Server {
 	channels[0] = channelEntry{name: "Public", secret: crypto.DefaultChannelKey}
 
 	s := &Server{
-		node:         cfg.Node,
-		id:           id,
-		sendDM:       cfg.SendDM,
-		sendChannel:  cfg.SendChannel,
-		sendLogin:    cfg.SendLogin,
-		sendStatus:   cfg.SendStatus,
-		stats:        cfg.Stats,
-		exportSelf:   cfg.ExportSelf,
-		startTime:    time.Now(),
-		log:          log.WithGroup("companion"),
-		name:         id.Name,
-		channels:     channels,
-		radioFreqKHz: uint32(math.Round(id.RadioFreqMHz * 1000)),
-		radioBwHz:    uint32(math.Round(id.RadioBWkHz * 1000)),
-		radioSF:      id.RadioSF,
-		radioCR:      id.RadioCR,
-		txPower:      id.TxPower,
-		sessions:     make(map[*session]struct{}),
+		node:          cfg.Node,
+		id:            id,
+		sendDM:        cfg.SendDM,
+		sendChannel:   cfg.SendChannel,
+		sendLogin:     cfg.SendLogin,
+		sendStatus:    cfg.SendStatus,
+		sendTelemetry: cfg.SendTelemetry,
+		stats:         cfg.Stats,
+		exportSelf:    cfg.ExportSelf,
+		startTime:     time.Now(),
+		log:           log.WithGroup("companion"),
+		name:          id.Name,
+		channels:      channels,
+		radioFreqKHz:  uint32(math.Round(id.RadioFreqMHz * 1000)),
+		radioBwHz:     uint32(math.Round(id.RadioBWkHz * 1000)),
+		radioSF:       id.RadioSF,
+		radioCR:       id.RadioCR,
+		txPower:       id.TxPower,
+		sessions:      make(map[*session]struct{}),
 	}
 	if cfg.Events != nil {
 		cfg.Events(s.handleEvent)
@@ -426,6 +432,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdSendStatusReq:
 		return s.sendStatusReq(ss, payload)
+
+	case serial.CmdSendTelemetryReq:
+		return s.sendTelemetryReq(ss, payload)
 
 	case serial.CmdGetChannel:
 		return s.getChannel(ss, payload)
@@ -730,6 +739,8 @@ func (s *Server) handleEvent(evt any) {
 		s.pushLoginSuccess(e)
 	case *event.StatusResponse:
 		s.pushStatusResponse(e)
+	case *event.TelemetryResponse:
+		s.pushTelemetryResponse(e)
 	}
 }
 
@@ -788,6 +799,39 @@ func (s *Server) sendStatusReq(ss *session, payload []byte) error {
 // pushStatusResponse emits PUSH_CODE_STATUS_RESPONSE from a status response event.
 func (s *Server) pushStatusResponse(e *event.StatusResponse) {
 	s.pushToSessions(serial.EncodeStatusResponse(e.From[:6], e.Data))
+}
+
+// sendTelemetryReq handles CMD_SEND_TELEMETRY_REQ. A self request (len 4) is
+// answered immediately (empty, since a software node has no sensors); a remote
+// request ([code][3 reserved][pubkey]) sends a request and replies SENT, with
+// the telemetry arriving later as a TelemetryResponse event.
+func (s *Server) sendTelemetryReq(ss *session, payload []byte) error {
+	if len(payload) <= 4 {
+		pk := s.node.PublicKey()
+		return ss.send(serial.EncodeTelemetryResponse(pk[:6], nil))
+	}
+	if s.sendTelemetry == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	if len(payload) < 4+32 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var to core.MeshCoreID
+	copy(to[:], payload[4:36])
+	if s.node.Contacts().GetByPubKey(to) == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	tag, err := s.sendTelemetry(ss.ctx, to)
+	if err != nil {
+		s.log.Warn("telemetry request failed", "to", to.String(), "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(serial.EncodeSent(serial.SentTypeFlood, tag, 12000))
+}
+
+// pushTelemetryResponse emits PUSH_CODE_TELEMETRY_RESPONSE from a telemetry event.
+func (s *Server) pushTelemetryResponse(e *event.TelemetryResponse) {
+	s.pushToSessions(serial.EncodeTelemetryResponse(e.From[:6], e.Data))
 }
 
 // pushAdvert emits NEW_ADVERT for a first-seen contact (the full contact frame)

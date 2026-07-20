@@ -1052,3 +1052,80 @@ func TestStatusResponsePush(t *testing.T) {
 		t.Errorf("prefix/blob mismatch: %x", frames[0][:8])
 	}
 }
+
+func TestSendTelemetryReqRemote(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x33
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	var gotTo core.MeshCoreID
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendTelemetry: func(_ context.Context, to core.MeshCoreID) (uint32, error) {
+			gotTo = to
+			return 4242, nil
+		},
+	})
+	// [code][3 reserved][pubkey 32]
+	payload := append([]byte{serial.CmdSendTelemetryReq, 0, 0, 0}, id[:]...)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent {
+		t.Fatalf("expected SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 4242 {
+		t.Errorf("SENT expected_ack should be the request tag 4242")
+	}
+	if gotTo != id {
+		t.Errorf("SendTelemetry got to=%x", gotTo)
+	}
+}
+
+func TestSendTelemetrySelf(t *testing.T) {
+	var pk [32]byte
+	pk[0] = 0xCC
+	s := NewServer(Config{Node: &fakeNode{pk: pk, clk: clock.New(), contacts: &stubStore{}}})
+	// Self request: [code] + 3 bytes, len 4.
+	resp := collectResponses(t, s, cmd(serial.CmdSendTelemetryReq, 0, 0, 0))
+	if resp[0][0] != serial.PushCodeTelemetryResponse || len(resp[0]) != 8 {
+		t.Fatalf("expected empty self TelemetryResponse (8 bytes), got %v", resp[0])
+	}
+	if !bytes.Equal(resp[0][2:8], pk[:6]) {
+		t.Error("self telemetry prefix should be our own pubkey")
+	}
+}
+
+func TestSendTelemetryReqUnknownContact(t *testing.T) {
+	s := NewServer(Config{
+		Node:          &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		SendTelemetry: func(context.Context, core.MeshCoreID) (uint32, error) { return 0, nil },
+	})
+	var id core.MeshCoreID
+	payload := append([]byte{serial.CmdSendTelemetryReq, 0, 0, 0}, id[:]...)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Fatalf("expected NotFound, got %v", resp[0])
+	}
+}
+
+func TestTelemetryResponsePush(t *testing.T) {
+	var handler func(any)
+	s := NewServer(Config{
+		Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		Events: func(h func(any)) { handler = h },
+	})
+	var out bytes.Buffer
+	sess := &session{srv: s, w: &out, ctx: context.Background()}
+	s.addSession(sess)
+
+	var from core.MeshCoreID
+	from[0] = 0x55
+	data := []byte{0x01, 0x02, 0x03}
+	handler(&event.TelemetryResponse{Event: event.Event{From: from}, Data: data})
+
+	frames := decodeFrames(&out)
+	if len(frames) != 1 || frames[0][0] != serial.PushCodeTelemetryResponse {
+		t.Fatalf("expected TelemetryResponse push, got %v", frames)
+	}
+	if !bytes.Equal(frames[0][2:8], from[:6]) || !bytes.Equal(frames[0][8:], data) {
+		t.Errorf("prefix/data mismatch: %x", frames[0])
+	}
+}

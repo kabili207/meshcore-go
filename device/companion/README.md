@@ -53,7 +53,10 @@ this package does not implement BLE.
   as `SEND_TXT_MSG` with the CLI type, and replies return as `CONTACT_MSG_RECV`
   of the CLI type, which the app routes as `cli_reply`. `SEND_STATUS_REQ` →
   `STATUS_RESPONSE` (via `SendStatus` and the `StatusResponse` event) forwards a
-  repeater's `RepeaterStats` blob for the app's health view.
+  repeater's `RepeaterStats` blob for the app's health view, and
+  `SEND_TELEMETRY_REQ` → `TELEMETRY_RESPONSE` forwards a remote node's
+  CayenneLPP telemetry (a self request replies immediately, empty on a node
+  without sensors).
 - **Live contact updates**: `NEW_ADVERT` (a first-seen node, sent as the full
   contact frame) and `ADVERT` (a re-heard node) are pushed automatically from the
   node's advert events, so the app's contact list updates without a manual
@@ -66,11 +69,10 @@ the app reads as an old-firmware feature gate and degrades gracefully.
 
 ## Not yet wired
 
-Telemetry (`SEND_TELEMETRY_REQ` → `TELEMETRY_RESPONSE`) and trace/path discovery
-(`SEND_TRACE_PATH` → `TRACE_DATA`). Their firmware reply shapes are known (`SENT`
-followed by the matching push), so they follow the same pattern as login and
-status. Login failure is also not surfaced: meshcore-go reports a bad-password
-login as a timeout rather than a `LOGIN_FAIL` push.
+Trace/path discovery (`SEND_TRACE_PATH` → `TRACE_DATA`). Its firmware reply shape
+is known (`SENT` followed by the push), so it follows the same pattern as
+status and telemetry. Login failure is also not surfaced: meshcore-go reports a
+bad-password login as a timeout rather than a `LOGIN_FAIL` push.
 
 ## Wiring it
 

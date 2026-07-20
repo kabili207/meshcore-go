@@ -141,6 +141,9 @@ func run() error {
 			_, err := comp.SendStatusReq(to)
 			return err
 		},
+		SendTelemetry: func(_ context.Context, to core.MeshCoreID) (uint32, error) {
+			return comp.SendTelemetryReq(to)
+		},
 		ExportSelf: func() []byte {
 			builder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
 				PrivateKey: priv,
