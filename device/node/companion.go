@@ -39,10 +39,15 @@ type CompanionConfig struct {
 	Lon      *float64 // Optional GPS longitude.
 
 	// AdvertLocalInterval is the local (zero-hop) advert interval in firmware
-	// units (value * 2 minutes). Default: 1 (2 minutes).
+	// units (value * 2 minutes). Default: 0 (disabled).
+	//
+	// The companion_radio firmware has no automatic advert timer: companions
+	// advertise only when the user triggers it. To match that, recurring adverts
+	// are off by default. Set a non-zero value to opt into periodic adverts.
 	AdvertLocalInterval uint8
 
-	// AdvertFloodInterval is the flood advert interval in hours. Default: 12.
+	// AdvertFloodInterval is the flood advert interval in hours. Default: 0
+	// (disabled), matching firmware. Set a non-zero value to opt in.
 	AdvertFloodInterval uint8
 
 	// ACKTimeout is how long to wait for an ACK before retrying. Default: 12s.
@@ -159,18 +164,12 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 		},
 	})
 
-	localInterval := cfg.AdvertLocalInterval
-	if localInterval == 0 {
-		localInterval = advert.DefaultLocalAdvertInterval
-	}
-	floodInterval := cfg.AdvertFloodInterval
-	if floodInterval == 0 {
-		floodInterval = advert.DefaultFloodAdvertInterval
-	}
-
+	// Companions default to no recurring adverts (both intervals 0), matching the
+	// companion_radio firmware. A zero here means "disabled", not "use default",
+	// so we pass the config values straight through.
 	scheduler := advert.NewScheduler(base.Router, advertBuilder, advert.SchedulerConfig{
-		LocalAdvertInterval: localInterval,
-		FloodAdvertInterval: floodInterval,
+		LocalAdvertInterval: cfg.AdvertLocalInterval,
+		FloodAdvertInterval: cfg.AdvertFloodInterval,
 		Logger:              logger,
 	})
 

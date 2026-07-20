@@ -48,7 +48,7 @@ type RoomConfig struct {
 	// units (value * 2 minutes). Default: 1 (2 minutes).
 	AdvertLocalInterval uint8
 
-	// AdvertFloodInterval is the flood advert interval in hours. Default: 12.
+	// AdvertFloodInterval is the flood advert interval in hours. Default: 47.
 	AdvertFloodInterval uint8
 
 	// ACKTimeout is how long to wait for an ACK before retrying. Default: 12s.
@@ -172,7 +172,7 @@ func NewRoom(cfg RoomConfig) (*RoomNode, error) {
 	}
 	floodInterval := cfg.AdvertFloodInterval
 	if floodInterval == 0 {
-		floodInterval = advert.DefaultFloodAdvertInterval
+		floodInterval = advert.InfraFloodAdvertInterval
 	}
 
 	scheduler := advert.NewScheduler(base.Router, advertBuilder, advert.SchedulerConfig{

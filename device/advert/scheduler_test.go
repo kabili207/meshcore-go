@@ -79,17 +79,18 @@ func makeTestBuilder(callCount *atomic.Int32) AdvertBuilder {
 	}
 }
 
-func TestScheduler_NewScheduler_Defaults(t *testing.T) {
+func TestScheduler_NewScheduler_LiteralIntervals(t *testing.T) {
 	mt := newMockTransport()
 	r := makeTestRouter(t, mt)
 
-	// Both intervals zero → use defaults
+	// The scheduler treats its intervals literally: zero means disabled, not
+	// "use defaults". Default selection is the node constructors' job.
 	s := NewScheduler(r, func() *codec.Packet { return nil }, SchedulerConfig{})
-	if s.cfg.LocalAdvertInterval != DefaultLocalAdvertInterval {
-		t.Errorf("default local interval = %d, want %d", s.cfg.LocalAdvertInterval, DefaultLocalAdvertInterval)
+	if s.cfg.LocalAdvertInterval != 0 {
+		t.Errorf("local interval = %d, want 0 (disabled)", s.cfg.LocalAdvertInterval)
 	}
-	if s.cfg.FloodAdvertInterval != DefaultFloodAdvertInterval {
-		t.Errorf("default flood interval = %d, want %d", s.cfg.FloodAdvertInterval, DefaultFloodAdvertInterval)
+	if s.cfg.FloodAdvertInterval != 0 {
+		t.Errorf("flood interval = %d, want 0 (disabled)", s.cfg.FloodAdvertInterval)
 	}
 }
 

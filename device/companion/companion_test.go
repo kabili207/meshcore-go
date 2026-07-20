@@ -3,6 +3,7 @@ package companion
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -28,8 +29,7 @@ func (f *fakeNode) PublicKey() [32]byte            { return f.pk }
 func (f *fakeNode) Contacts() contact.ContactStore { return f.contacts }
 func (f *fakeNode) Clock() *clock.Clock            { return f.clk }
 
-// stubStore is a minimal ContactStore backed by a slice; only ForEach/Count are
-// exercised by the server. The rest satisfy the interface.
+// stubStore is a small in-memory ContactStore for tests, backed by a slice.
 type stubStore struct{ list []*contact.ContactInfo }
 
 func (s *stubStore) ForEach(fn func(*contact.ContactInfo) bool) {
@@ -41,13 +41,29 @@ func (s *stubStore) ForEach(fn func(*contact.ContactInfo) bool) {
 }
 func (s *stubStore) Count() int { return len(s.list) }
 func (s *stubStore) AddContact(c *contact.ContactInfo) (*contact.ContactInfo, error) {
+	s.list = append(s.list, c)
 	return c, nil
 }
-func (s *stubStore) UpdateContact(*contact.ContactInfo) error         { return nil }
-func (s *stubStore) RemoveContact(core.MeshCoreID) error              { return nil }
-func (s *stubStore) GetByPubKey(core.MeshCoreID) *contact.ContactInfo { return nil }
-func (s *stubStore) SearchByHash(uint8) []*contact.ContactInfo        { return nil }
-func (s *stubStore) GetSharedSecret(core.MeshCoreID) ([]byte, error)  { return nil, nil }
+func (s *stubStore) UpdateContact(*contact.ContactInfo) error { return nil }
+func (s *stubStore) RemoveContact(id core.MeshCoreID) error {
+	for i, c := range s.list {
+		if c.ID == id {
+			s.list = append(s.list[:i], s.list[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+func (s *stubStore) GetByPubKey(id core.MeshCoreID) *contact.ContactInfo {
+	for _, c := range s.list {
+		if c.ID == id {
+			return c
+		}
+	}
+	return nil
+}
+func (s *stubStore) SearchByHash(uint8) []*contact.ContactInfo       { return nil }
+func (s *stubStore) GetSharedSecret(core.MeshCoreID) ([]byte, error) { return nil, nil }
 
 // rw adapts a reader and writer into an io.ReadWriter for Serve.
 type rw struct {
@@ -518,5 +534,124 @@ func TestNotifyContactDeleted(t *testing.T) {
 	}
 	if !bytes.Equal(frames[0][1:33], id[:]) {
 		t.Error("ContactDeleted pubkey mismatch")
+	}
+}
+
+func addUpdateFrame(id core.MeshCoreID, name string, outPathLen uint8) []byte {
+	c := &serial.Contact{Name: name, Type: 1, OutPathLen: outPathLen, LastAdvert: 100, LastMod: 5}
+	copy(c.PublicKey[:], id[:])
+	return c.EncodeWithCode(serial.CmdAddUpdateContact)
+}
+
+func TestAddAndGetContact(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+
+	var id core.MeshCoreID
+	id[0], id[31] = 0xDE, 0xAD
+
+	resp := collectResponses(t, s, cmd(addUpdateFrame(id, "Alice", 0xFF)...))
+	if len(resp) != 1 || resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("add contact: expected OK, got %v", resp)
+	}
+
+	// GET_CONTACT_BY_KEY returns the stored contact.
+	resp = collectResponses(t, s, cmd(append([]byte{serial.CmdGetContactByKey}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeContact || len(resp[0]) != 148 {
+		t.Fatalf("get by key: expected 148-byte Contact, got %v", resp[0][:1])
+	}
+	if !bytes.Equal(resp[0][1:33], id[:]) || string(resp[0][100:105]) != "Alice" {
+		t.Errorf("contact roundtrip mismatch: key=%x name=%q", resp[0][1:33], resp[0][100:132])
+	}
+}
+
+func TestGetContactByKeyNotFound(t *testing.T) {
+	s, _ := newTestServer()
+	var id core.MeshCoreID
+	id[0] = 0x01
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdGetContactByKey}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Fatalf("expected NotFound, got %v", resp[0])
+	}
+}
+
+func TestRemoveContact(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0xBE
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, Name: "Bob", OutPathLen: 0xFF}}}
+	s := NewServer(Config{Node: &fakeNode{clk: clock.New(), contacts: store}})
+
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdRemoveContact}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("remove: expected OK, got %v", resp[0])
+	}
+	if store.Count() != 0 {
+		t.Errorf("contact not removed; count = %d", store.Count())
+	}
+	// Removing again is NotFound.
+	resp = collectResponses(t, s, cmd(append([]byte{serial.CmdRemoveContact}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Errorf("second remove: expected NotFound, got %v", resp[0])
+	}
+}
+
+func TestResetPath(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0xCA
+	ct := &contact.ContactInfo{ID: id, Name: "C", OutPathLen: 3, OutPath: []byte{1, 2, 3}}
+	store := &stubStore{list: []*contact.ContactInfo{ct}}
+	s := NewServer(Config{Node: &fakeNode{clk: clock.New(), contacts: store}})
+
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdResetPath}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("reset path: expected OK, got %v", resp[0])
+	}
+	if ct.OutPathLen != serial.PathLenUnknown || ct.OutPath != nil {
+		t.Errorf("path not reset: len=%d path=%v", ct.OutPathLen, ct.OutPath)
+	}
+}
+
+func TestGetStatsCore(t *testing.T) {
+	s, _ := newTestServer() // battery defaults to 4200, no Stats callback
+	resp := collectResponses(t, s, cmd(serial.CmdGetStats, serial.StatsTypeCore))
+	if len(resp[0]) != 11 || resp[0][0] != serial.RespCodeStats || resp[0][1] != serial.StatsTypeCore {
+		t.Fatalf("expected 11-byte core stats, got %x", resp[0])
+	}
+	if mv := binary.LittleEndian.Uint16(resp[0][2:4]); mv != 4200 {
+		t.Errorf("battery = %d mV, want 4200", mv)
+	}
+}
+
+func TestGetStatsPackets(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{
+		Node:  node,
+		Stats: func() Stats { return Stats{PacketsRecv: 7, PacketsSent: 3, RecvFlood: 5} },
+	})
+	resp := collectResponses(t, s, cmd(serial.CmdGetStats, serial.StatsTypePackets))
+	if len(resp[0]) != 30 || resp[0][0] != serial.RespCodeStats || resp[0][1] != serial.StatsTypePackets {
+		t.Fatalf("expected 30-byte packet stats, got len %d", len(resp[0]))
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 7 {
+		t.Errorf("recv = %d, want 7", binary.LittleEndian.Uint32(resp[0][2:6]))
+	}
+	if binary.LittleEndian.Uint32(resp[0][18:22]) != 5 {
+		t.Errorf("recv_flood = %d, want 5", binary.LittleEndian.Uint32(resp[0][18:22]))
+	}
+}
+
+func TestGetStatsRadio(t *testing.T) {
+	s, _ := newTestServer()
+	resp := collectResponses(t, s, cmd(serial.CmdGetStats, serial.StatsTypeRadio))
+	if len(resp[0]) != 14 || resp[0][0] != serial.RespCodeStats || resp[0][1] != serial.StatsTypeRadio {
+		t.Fatalf("expected 14-byte radio stats, got %x", resp[0])
+	}
+}
+
+func TestGetStatsInvalidSubtype(t *testing.T) {
+	s, _ := newTestServer()
+	resp := collectResponses(t, s, cmd(serial.CmdGetStats, 99))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeIllegalArg {
+		t.Fatalf("expected IllegalArg, got %v", resp[0])
 	}
 }

@@ -91,7 +91,7 @@ type RepeaterConfig struct {
 	// units (value * 2 minutes). Default: 1 (2 minutes).
 	AdvertLocalInterval uint8
 
-	// AdvertFloodInterval is the flood advert interval in hours. Default: 12.
+	// AdvertFloodInterval is the flood advert interval in hours. Default: 47.
 	AdvertFloodInterval uint8
 
 	// EventHandlers registered during construction.
@@ -178,7 +178,7 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 	}
 	floodInterval := cfg.AdvertFloodInterval
 	if floodInterval == 0 {
-		floodInterval = advert.DefaultFloodAdvertInterval
+		floodInterval = advert.InfraFloodAdvertInterval
 	}
 
 	scheduler := advert.NewScheduler(base.Router, advertBuilder, advert.SchedulerConfig{

@@ -11,11 +11,18 @@ import (
 
 const (
 	// DefaultLocalAdvertInterval is the default local (zero-hop) advert interval
-	// in firmware units. Actual interval = value * 2 minutes.
+	// in firmware units. Actual interval = value * 2 minutes. This matches the
+	// firmware new-install default for repeaters, room servers, and sensors.
 	DefaultLocalAdvertInterval = 1 // 2 minutes
 
 	// DefaultFloodAdvertInterval is the default flood advert interval in hours.
+	// Kept for backwards compatibility; prefer the per-role defaults below.
 	DefaultFloodAdvertInterval = 12 // 12 hours
+
+	// InfraFloodAdvertInterval is the flood advert interval used by repeaters and
+	// room servers, matching the firmware new-install default. The odd number is
+	// intentional in firmware so infrastructure nodes don't flood in sync.
+	InfraFloodAdvertInterval = 47 // 47 hours
 
 	// tickInterval is the resolution of the scheduler's timer check loop.
 	tickInterval = time.Second
@@ -64,11 +71,9 @@ type Scheduler struct {
 //   - build: a function that creates a fresh ADVERT packet (see NewSelfAdvertBuilder)
 //   - cfg: scheduler configuration
 func NewScheduler(r *router.Router, build AdvertBuilder, cfg SchedulerConfig) *Scheduler {
-	if cfg.LocalAdvertInterval == 0 && cfg.FloodAdvertInterval == 0 {
-		// Both intervals zero means use defaults
-		cfg.LocalAdvertInterval = DefaultLocalAdvertInterval
-		cfg.FloodAdvertInterval = DefaultFloodAdvertInterval
-	}
+	// The scheduler treats its intervals literally: 0 means that advert kind is
+	// disabled. Callers that want defaults resolve them before constructing the
+	// scheduler (see the node constructors, which apply per-role defaults).
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
