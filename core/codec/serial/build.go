@@ -308,6 +308,51 @@ func EncodeBattAndStorage(batteryMilliVolts uint16, storageUsedKB, storageTotalK
 	return b
 }
 
+// EncodeStatsCore builds a RESP_CODE_STATS / STATS_TYPE_CORE payload:
+// [code][type][battery_mv u16][uptime_secs u32][err_flags u16][queue_len u8].
+func EncodeStatsCore(batteryMilliVolts uint16, uptimeSecs uint32, errFlags uint16, queueLen uint8) []byte {
+	b := make([]byte, 11)
+	b[0] = RespCodeStats
+	b[1] = StatsTypeCore
+	binary.LittleEndian.PutUint16(b[2:4], batteryMilliVolts)
+	binary.LittleEndian.PutUint32(b[4:8], uptimeSecs)
+	binary.LittleEndian.PutUint16(b[8:10], errFlags)
+	b[10] = queueLen
+	return b
+}
+
+// EncodeStatsRadio builds a RESP_CODE_STATS / STATS_TYPE_RADIO payload:
+// [code][type][noise_floor i16][last_rssi i8][last_snr i8][tx_air_secs u32]
+// [rx_air_secs u32]. last_snr is scaled x4 (0.25 dB units).
+func EncodeStatsRadio(noiseFloor int16, lastRSSI, lastSNR int8, txAirSecs, rxAirSecs uint32) []byte {
+	b := make([]byte, 14)
+	b[0] = RespCodeStats
+	b[1] = StatsTypeRadio
+	binary.LittleEndian.PutUint16(b[2:4], uint16(noiseFloor))
+	b[4] = byte(lastRSSI)
+	b[5] = byte(lastSNR)
+	binary.LittleEndian.PutUint32(b[6:10], txAirSecs)
+	binary.LittleEndian.PutUint32(b[10:14], rxAirSecs)
+	return b
+}
+
+// EncodeStatsPackets builds a RESP_CODE_STATS / STATS_TYPE_PACKETS payload:
+// [code][type] followed by seven uint32 counters (recv, sent, sent_flood,
+// sent_direct, recv_flood, recv_direct, recv_errors).
+func EncodeStatsPackets(recv, sent, sentFlood, sentDirect, recvFlood, recvDirect, recvErrors uint32) []byte {
+	b := make([]byte, 30)
+	b[0] = RespCodeStats
+	b[1] = StatsTypePackets
+	binary.LittleEndian.PutUint32(b[2:6], recv)
+	binary.LittleEndian.PutUint32(b[6:10], sent)
+	binary.LittleEndian.PutUint32(b[10:14], sentFlood)
+	binary.LittleEndian.PutUint32(b[14:18], sentDirect)
+	binary.LittleEndian.PutUint32(b[18:22], recvFlood)
+	binary.LittleEndian.PutUint32(b[22:26], recvDirect)
+	binary.LittleEndian.PutUint32(b[26:30], recvErrors)
+	return b
+}
+
 // EncodeDefaultFloodScope builds a RESP_CODE_DEFAULT_FLOOD_SCOPE payload (reply
 // to CMD_GET_DEFAULT_FLOOD_SCOPE). An empty name means no scope is configured
 // and the payload is just [code]; otherwise it is [code][name 31-byte

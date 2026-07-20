@@ -1,6 +1,7 @@
 package serial
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 )
@@ -96,6 +97,48 @@ func ParseSendChannelTxtMsg(payload []byte) (*ChannelTxtMsgRequest, error) {
 		SenderTS:   binary.LittleEndian.Uint32(payload[3:7]),
 		Text:       string(payload[7:]),
 	}, nil
+}
+
+// contactFixedLen is the fixed prefix of a CMD_ADD_UPDATE_CONTACT frame through
+// last_advert (code + pubkey + type + flags + out_path_len + out_path + name +
+// last_advert). GPS and lastmod are optional trailing fields.
+const contactFixedLen = 1 + 32 + 1 + 1 + 1 + 64 + 32 + 4 // 136
+
+// ParseContact parses a CMD_ADD_UPDATE_CONTACT frame into a Contact. It shares
+// the RESP_CODE_CONTACT layout. GPSLat/GPSLon (offset 136) and LastMod (offset
+// 144) are read only when present; LastMod is left 0 when absent so the caller
+// can substitute its own clock, as the firmware does.
+func ParseContact(payload []byte) (*Contact, error) {
+	if len(payload) < contactFixedLen {
+		return nil, ErrShortFrame
+	}
+	c := &Contact{
+		Type:       payload[33],
+		Flags:      payload[34],
+		OutPathLen: payload[35],
+		Name:       cString(payload[100:132]),
+		LastAdvert: binary.LittleEndian.Uint32(payload[132:136]),
+	}
+	copy(c.PublicKey[:], payload[1:33])
+	if c.OutPathLen != PathLenUnknown && int(c.OutPathLen) <= 64 {
+		c.OutPath = append([]byte(nil), payload[36:36+int(c.OutPathLen)]...)
+	}
+	if len(payload) >= contactFixedLen+8 {
+		c.GPSLat = int32(binary.LittleEndian.Uint32(payload[136:140]))
+		c.GPSLon = int32(binary.LittleEndian.Uint32(payload[140:144]))
+		if len(payload) >= contactFixedLen+12 {
+			c.LastMod = binary.LittleEndian.Uint32(payload[144:148])
+		}
+	}
+	return c, nil
+}
+
+// cString reads a NUL-terminated string from a fixed-width field.
+func cString(b []byte) string {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		return string(b[:i])
+	}
+	return string(b)
 }
 
 // ParseGetChannel reads the channel index from a CMD_GET_CHANNEL frame.

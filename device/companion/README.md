@@ -26,11 +26,13 @@ this package does not implement BLE.
 - **Handshake**: `APP_START` → `SELF_INFO`, `DEVICE_QUERY` → `DEVICE_INFO`. The
   server remembers the app's declared protocol version and uses it to pick the
   V3 vs pre-V3 layout for incoming-message frames.
-- **Contacts**: `GET_CONTACTS` streaming with the `since` filter, sourced from
-  the node's contact store.
+- **Contacts**: `GET_CONTACTS` streaming with the `since` filter, plus
+  `ADD_UPDATE_CONTACT`, `REMOVE_CONTACT`, `GET_CONTACT_BY_KEY`, and `RESET_PATH`,
+  all backed by the node's contact store.
 - **Device state**: device time, battery/storage, channel reads
   (`GET_CHANNEL`, with the built-in Public channel at index 0), default flood
-  scope, and the flood-scope / advert-name / config setters.
+  scope, `GET_STATS` (core/radio/packets, wired to the router's packet
+  counters), and the flood-scope / advert-name / config setters.
 - **Direct messaging**: `SEND_TXT_MSG` → `SENT` with a `SEND_CONFIRMED` push on
   delivery, and incoming DMs delivered through the `MSG_WAITING` →
   `SYNC_NEXT_MESSAGE` queue as `CONTACT_MSG_RECV`.

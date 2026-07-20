@@ -101,8 +101,31 @@ type Config struct {
 	// CMD_SEND_CHANNEL_TXT_MSG returns an error.
 	SendChannel func(ctx context.Context, channelIdx uint8, text string) error
 
+	// Stats, if set, provides device statistics for GET_STATS (the app polls
+	// this). Without it, GET_STATS still answers with battery and uptime, and
+	// zeroed packet/radio counters.
+	Stats func() Stats
+
 	// Logger for connection events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
+}
+
+// Stats provides device statistics for GET_STATS. Any field the node does not
+// track may be left zero; the server fills in battery and uptime itself.
+type Stats struct {
+	// Packet counters (STATS_TYPE_PACKETS).
+	PacketsRecv, PacketsSent          uint32
+	SentFlood, SentDirect             uint32
+	RecvFlood, RecvDirect, RecvErrors uint32
+
+	// Radio (STATS_TYPE_RADIO); zero on a software node with no RF.
+	NoiseFloor           int16
+	LastRSSI, LastSNR    int8 // LastSNR is scaled x4 (0.25 dB units)
+	TxAirSecs, RxAirSecs uint32
+
+	// Core extras (STATS_TYPE_CORE); battery and uptime are added by the server.
+	ErrFlags uint16
+	QueueLen uint8
 }
 
 // Server serves the companion protocol for one Node over accepted connections.
@@ -111,6 +134,8 @@ type Server struct {
 	id          Identity
 	sendDM      func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error)
 	sendChannel func(ctx context.Context, channelIdx uint8, text string) error
+	stats       func() Stats
+	startTime   time.Time
 	pubChanHash uint8 // channel hash of the built-in Public channel
 	log         *slog.Logger
 
@@ -178,6 +203,8 @@ func NewServer(cfg Config) *Server {
 		id:          id,
 		sendDM:      cfg.SendDM,
 		sendChannel: cfg.SendChannel,
+		stats:       cfg.Stats,
+		startTime:   time.Now(),
 		pubChanHash: crypto.ComputeChannelHash(crypto.DefaultChannelKey),
 		log:         log.WithGroup("companion"),
 		name:        id.Name,
@@ -300,6 +327,18 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 	case serial.CmdGetContacts:
 		return s.sendContacts(ss, payload)
 
+	case serial.CmdAddUpdateContact:
+		return s.addUpdateContact(ss, payload)
+
+	case serial.CmdRemoveContact:
+		return s.removeContact(ss, payload)
+
+	case serial.CmdResetPath:
+		return s.resetPath(ss, payload)
+
+	case serial.CmdGetContactByKey:
+		return s.getContactByKey(ss, payload)
+
 	case serial.CmdSendTxtMsg:
 		return s.sendTextMsg(ss, payload)
 
@@ -324,6 +363,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 	case serial.CmdGetDefaultFloodScope:
 		// No default flood scope configured; report unset.
 		return ss.send(serial.EncodeDefaultFloodScope("", nil))
+
+	case serial.CmdGetStats:
+		return s.getStats(ss, payload)
 
 	case serial.CmdSyncNextMessage:
 		return s.sendNextMessage(ss)
@@ -654,6 +696,142 @@ func (s *Server) sendContacts(ss *session, payload []byte) error {
 		}
 	}
 	return ss.send(serial.EncodeEndOfContacts(mostRecent))
+}
+
+// addUpdateContact handles CMD_ADD_UPDATE_CONTACT: update the app-visible fields
+// of an existing contact, or add a new one. Replies OK, or TABLE_FULL if a new
+// contact cannot be stored.
+func (s *Server) addUpdateContact(ss *session, payload []byte) error {
+	c, err := serial.ParseContact(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var id core.MeshCoreID
+	copy(id[:], c.PublicKey[:])
+
+	lastMod := c.LastMod
+	if lastMod == 0 {
+		lastMod = s.node.Clock().GetCurrentTime()
+	}
+
+	store := s.node.Contacts()
+	if existing := store.GetByPubKey(id); existing != nil {
+		existing.Name = c.Name
+		existing.Type = c.Type
+		existing.Flags = c.Flags
+		existing.OutPathLen = c.OutPathLen
+		existing.OutPath = c.OutPath
+		existing.LastAdvertTimestamp = c.LastAdvert
+		existing.GPSLat = c.GPSLat
+		existing.GPSLon = c.GPSLon
+		existing.LastMod = lastMod
+		if err := store.UpdateContact(existing); err != nil {
+			return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+		}
+		return ss.send(serial.EncodeOK())
+	}
+
+	ci := &contact.ContactInfo{
+		ID:                  id,
+		Name:                c.Name,
+		Type:                c.Type,
+		Flags:               c.Flags,
+		OutPathLen:          c.OutPathLen,
+		OutPath:             c.OutPath,
+		LastAdvertTimestamp: c.LastAdvert,
+		GPSLat:              c.GPSLat,
+		GPSLon:              c.GPSLon,
+		LastMod:             lastMod,
+	}
+	if _, err := store.AddContact(ci); err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(serial.EncodeOK())
+}
+
+// removeContact handles CMD_REMOVE_CONTACT.
+func (s *Server) removeContact(ss *session, payload []byte) error {
+	id, ok := parseContactKey(payload)
+	if !ok {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	store := s.node.Contacts()
+	if store.GetByPubKey(id) == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	if err := store.RemoveContact(id); err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	return ss.send(serial.EncodeOK())
+}
+
+// resetPath handles CMD_RESET_PATH: forget a contact's cached direct path so the
+// next message floods.
+func (s *Server) resetPath(ss *session, payload []byte) error {
+	id, ok := parseContactKey(payload)
+	if !ok {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	store := s.node.Contacts()
+	ct := store.GetByPubKey(id)
+	if ct == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	ct.OutPathLen = serial.PathLenUnknown
+	ct.OutPath = nil
+	if err := store.UpdateContact(ct); err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	return ss.send(serial.EncodeOK())
+}
+
+// getContactByKey handles CMD_GET_CONTACT_BY_KEY.
+func (s *Server) getContactByKey(ss *session, payload []byte) error {
+	id, ok := parseContactKey(payload)
+	if !ok {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	ct := s.node.Contacts().GetByPubKey(id)
+	if ct == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	return ss.send(contactToWire(ct).Encode())
+}
+
+// getStats handles CMD_GET_STATS. The sub-type byte selects core, radio, or
+// packet statistics. Battery and uptime are server-owned; the rest come from the
+// optional Stats callback (zeroed when it is not set).
+func (s *Server) getStats(ss *session, payload []byte) error {
+	if len(payload) < 2 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var st Stats
+	if s.stats != nil {
+		st = s.stats()
+	}
+	switch payload[1] {
+	case serial.StatsTypeCore:
+		uptime := uint32(time.Since(s.startTime).Seconds())
+		return ss.send(serial.EncodeStatsCore(s.id.BatteryMilliVolts, uptime, st.ErrFlags, st.QueueLen))
+	case serial.StatsTypeRadio:
+		return ss.send(serial.EncodeStatsRadio(st.NoiseFloor, st.LastRSSI, st.LastSNR, st.TxAirSecs, st.RxAirSecs))
+	case serial.StatsTypePackets:
+		return ss.send(serial.EncodeStatsPackets(
+			st.PacketsRecv, st.PacketsSent, st.SentFlood, st.SentDirect,
+			st.RecvFlood, st.RecvDirect, st.RecvErrors))
+	default:
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+}
+
+// parseContactKey reads the leading 32-byte public key from a contact command.
+func parseContactKey(payload []byte) (core.MeshCoreID, bool) {
+	if len(payload) < 1+32 {
+		return core.MeshCoreID{}, false
+	}
+	var id core.MeshCoreID
+	copy(id[:], payload[1:33])
+	return id, true
 }
 
 // contactToWire maps a stored contact to the companion Contact frame.

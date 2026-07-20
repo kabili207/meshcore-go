@@ -135,6 +135,17 @@ func run() error {
 			}
 			return comp.SendChannelText(crypto.DefaultChannelKey, text)
 		},
+		Stats: func() companion.Stats {
+			c := comp.Base().Router.Counters().Snapshot()
+			return companion.Stats{
+				PacketsRecv: c.PacketsRecv,
+				PacketsSent: c.PacketsSent,
+				SentFlood:   c.SentFlood,
+				SentDirect:  c.SentDirect,
+				RecvFlood:   c.RecvFlood,
+				RecvDirect:  c.RecvDirect,
+			}
+		},
 		Logger: slog.Default(),
 	})
 
