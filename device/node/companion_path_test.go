@@ -86,8 +86,8 @@ func TestCompanionSendTrace(t *testing.T) {
 	comp, compCap := newTestCompanion(t)
 
 	path := []byte{0xAA, 0xBB} // two 1-byte relay hashes
-	tag, err := comp.SendTrace(0x12345678, 0x00, path)
-	if err != nil {
+	const tag = 0xCAFEBABE
+	if err := comp.SendTrace(tag, 0x12345678, 0x00, path); err != nil {
 		t.Fatalf("SendTrace: %v", err)
 	}
 

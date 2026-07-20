@@ -144,6 +144,9 @@ func run() error {
 		SendTelemetry: func(_ context.Context, to core.MeshCoreID) (uint32, error) {
 			return comp.SendTelemetryReq(to)
 		},
+		SendTrace: func(_ context.Context, tag, authCode uint32, flags uint8, path []byte) error {
+			return comp.SendTrace(tag, authCode, flags, path)
+		},
 		ExportSelf: func() []byte {
 			builder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
 				PrivateKey: priv,

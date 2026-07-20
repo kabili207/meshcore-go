@@ -43,6 +43,20 @@ func ParseGetContactsSince(payload []byte) (since uint32, hasSince bool) {
 	return 0, false
 }
 
+// ParseSendTracePath parses a CMD_SEND_TRACE_PATH frame:
+// [code][tag u32][auth u32][flags u8][path]. path is the concatenated relay
+// hashes; it aliases the payload.
+func ParseSendTracePath(payload []byte) (tag, authCode uint32, flags uint8, path []byte, err error) {
+	if len(payload) <= 10 || payload[0] != CmdSendTracePath {
+		return 0, 0, 0, nil, ErrShortFrame
+	}
+	tag = binary.LittleEndian.Uint32(payload[1:5])
+	authCode = binary.LittleEndian.Uint32(payload[5:9])
+	flags = payload[9]
+	path = payload[10:]
+	return tag, authCode, flags, path, nil
+}
+
 // RadioParams is a parsed CMD_SET_RADIO_PARAMS frame. Freq is in kHz
 // (freq_MHz*1000) and Bw in Hz (bw_kHz*1000), matching SELF_INFO.
 type RadioParams struct {

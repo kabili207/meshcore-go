@@ -1129,3 +1129,77 @@ func TestTelemetryResponsePush(t *testing.T) {
 		t.Errorf("prefix/data mismatch: %x", frames[0])
 	}
 }
+
+func TestSendTracePath(t *testing.T) {
+	var gotTag, gotAuth uint32
+	var gotFlags uint8
+	var gotPath []byte
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		SendTrace: func(_ context.Context, tag, authCode uint32, flags uint8, path []byte) error {
+			gotTag, gotAuth, gotFlags, gotPath = tag, authCode, flags, path
+			return nil
+		},
+	})
+	payload := []byte{serial.CmdSendTracePath}
+	payload = binary.LittleEndian.AppendUint32(payload, 0xAABBCCDD) // tag
+	payload = binary.LittleEndian.AppendUint32(payload, 0x11223344) // auth
+	payload = append(payload, 0x00, 0xAA, 0xBB)                     // flags + 2 relay hashes
+
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent {
+		t.Fatalf("expected SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 0xAABBCCDD {
+		t.Error("SENT expected_ack should be the tag")
+	}
+	if gotTag != 0xAABBCCDD || gotAuth != 0x11223344 || gotFlags != 0 || !bytes.Equal(gotPath, []byte{0xAA, 0xBB}) {
+		t.Errorf("SendTrace got tag=%x auth=%x flags=%d path=%x", gotTag, gotAuth, gotFlags, gotPath)
+	}
+}
+
+func TestSendTracePathShort(t *testing.T) {
+	s := NewServer(Config{
+		Node:      &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		SendTrace: func(context.Context, uint32, uint32, uint8, []byte) error { return nil },
+	})
+	resp := collectResponses(t, s, cmd(serial.CmdSendTracePath, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeIllegalArg {
+		t.Fatalf("expected IllegalArg, got %v", resp[0])
+	}
+}
+
+func TestTraceDataPush(t *testing.T) {
+	var handler func(any)
+	s := NewServer(Config{
+		Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		Events: func(h func(any)) { handler = h },
+	})
+	var out bytes.Buffer
+	sess := &session{srv: s, w: &out, ctx: context.Background()}
+	s.addSession(sess)
+
+	handler(&event.TraceReceived{
+		Event:      event.Event{RawPacket: &codec.Packet{SNR: 7}},
+		Tag:        0xAABBCCDD,
+		AuthCode:   0x11223344,
+		Flags:      0x00,
+		SNRs:       []int8{5, -3},
+		PathHashes: []byte{0xAA, 0xBB},
+	})
+
+	frames := decodeFrames(&out)
+	if len(frames) != 1 || frames[0][0] != serial.PushCodeTraceData {
+		t.Fatalf("expected TraceData push, got %v", frames)
+	}
+	f := frames[0] // [code][rsvd][path_len][flags][tag][auth][hashes][snrs][last_snr]
+	if f[2] != 2 || f[3] != 0 {
+		t.Errorf("path_len/flags = %d/%d", f[2], f[3])
+	}
+	if binary.LittleEndian.Uint32(f[4:8]) != 0xAABBCCDD || binary.LittleEndian.Uint32(f[8:12]) != 0x11223344 {
+		t.Error("tag/auth wrong")
+	}
+	if !bytes.Equal(f[12:14], []byte{0xAA, 0xBB}) || int8(f[14]) != 5 || int8(f[15]) != -3 || int8(f[16]) != 7 {
+		t.Errorf("hashes/snrs/lastSnr wrong: %x", f[12:])
+	}
+}

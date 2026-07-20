@@ -56,7 +56,8 @@ this package does not implement BLE.
   repeater's `RepeaterStats` blob for the app's health view, and
   `SEND_TELEMETRY_REQ` → `TELEMETRY_RESPONSE` forwards a remote node's
   CayenneLPP telemetry (a self request replies immediately, empty on a node
-  without sensors).
+  without sensors), and `SEND_TRACE_PATH` → `TRACE_DATA` runs a traceroute along
+  a relay-hash path (per-hop SNRs).
 - **Live contact updates**: `NEW_ADVERT` (a first-seen node, sent as the full
   contact frame) and `ADVERT` (a re-heard node) are pushed automatically from the
   node's advert events, so the app's contact list updates without a manual
@@ -69,10 +70,12 @@ the app reads as an old-firmware feature gate and degrades gracefully.
 
 ## Not yet wired
 
-Trace/path discovery (`SEND_TRACE_PATH` → `TRACE_DATA`). Its firmware reply shape
-is known (`SENT` followed by the push), so it follows the same pattern as
-status and telemetry. Login failure is also not surfaced: meshcore-go reports a
-bad-password login as a timeout rather than a `LOGIN_FAIL` push.
+Path discovery (`SEND_PATH_DISCOVERY_REQ` → `PATH_DISCOVERY_RESPONSE`). The node
+can send the request (`SendPathDiscovery`), but its result surfaces as a generic
+`PathReceived` event that does not map cleanly to the `PATH_DISCOVERY_RESPONSE`
+structure (pubkey prefix + out/in paths), so it is left unwired. Login failure is
+also not surfaced: meshcore-go reports a bad-password login as a timeout rather
+than a `LOGIN_FAIL` push.
 
 ## Wiring it
 

@@ -121,6 +121,11 @@ type Config struct {
 	// CMD_SEND_TELEMETRY_REQ returns an error; a self request still gets a reply.
 	SendTelemetry func(ctx context.Context, to core.MeshCoreID) (tag uint32, err error)
 
+	// SendTrace, if set, sends a TRACE along a relay-hash path with the app's tag
+	// and auth code. The result arrives as an event.TraceReceived, pushed as
+	// TRACE_DATA. Without it, CMD_SEND_TRACE_PATH returns an error.
+	SendTrace func(ctx context.Context, tag, authCode uint32, flags uint8, path []byte) error
+
 	// Stats, if set, provides device statistics for GET_STATS (the app polls
 	// this). Without it, GET_STATS still answers with battery and uptime, and
 	// zeroed packet/radio counters.
@@ -164,6 +169,7 @@ type Server struct {
 	sendLogin     func(ctx context.Context, to core.MeshCoreID, password string) error
 	sendStatus    func(ctx context.Context, to core.MeshCoreID) error
 	sendTelemetry func(ctx context.Context, to core.MeshCoreID) (uint32, error)
+	sendTrace     func(ctx context.Context, tag, authCode uint32, flags uint8, path []byte) error
 	stats         func() Stats
 	exportSelf    func() []byte
 	startTime     time.Time
@@ -268,6 +274,7 @@ func NewServer(cfg Config) *Server {
 		sendLogin:     cfg.SendLogin,
 		sendStatus:    cfg.SendStatus,
 		sendTelemetry: cfg.SendTelemetry,
+		sendTrace:     cfg.SendTrace,
 		stats:         cfg.Stats,
 		exportSelf:    cfg.ExportSelf,
 		startTime:     time.Now(),
@@ -435,6 +442,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdSendTelemetryReq:
 		return s.sendTelemetryReq(ss, payload)
+
+	case serial.CmdSendTracePath:
+		return s.sendTracePath(ss, payload)
 
 	case serial.CmdGetChannel:
 		return s.getChannel(ss, payload)
@@ -741,6 +751,8 @@ func (s *Server) handleEvent(evt any) {
 		s.pushStatusResponse(e)
 	case *event.TelemetryResponse:
 		s.pushTelemetryResponse(e)
+	case *event.TraceReceived:
+		s.pushTraceData(e)
 	}
 }
 
@@ -832,6 +844,33 @@ func (s *Server) sendTelemetryReq(ss *session, payload []byte) error {
 // pushTelemetryResponse emits PUSH_CODE_TELEMETRY_RESPONSE from a telemetry event.
 func (s *Server) pushTelemetryResponse(e *event.TelemetryResponse) {
 	s.pushToSessions(serial.EncodeTelemetryResponse(e.From[:6], e.Data))
+}
+
+// sendTracePath handles CMD_SEND_TRACE_PATH: send a trace with the app's tag and
+// reply SENT. The result arrives later as a TraceReceived event.
+func (s *Server) sendTracePath(ss *session, payload []byte) error {
+	if s.sendTrace == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	tag, authCode, flags, path, err := serial.ParseSendTracePath(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	if err := s.sendTrace(ss.ctx, tag, authCode, flags, path); err != nil {
+		s.log.Warn("trace failed", "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	// A trace is sent direct; the app correlates the TRACE_DATA reply by tag.
+	return ss.send(serial.EncodeSent(serial.SentTypeDirect, tag, 12000))
+}
+
+// pushTraceData emits PUSH_CODE_TRACE_DATA from a completed-trace event.
+func (s *Server) pushTraceData(e *event.TraceReceived) {
+	var lastSNR int8
+	if e.RawPacket != nil {
+		lastSNR = e.RawPacket.SNR
+	}
+	s.pushToSessions(serial.EncodeTraceData(e.Flags, e.Tag, e.AuthCode, e.PathHashes, e.SNRs, lastSNR))
 }
 
 // pushAdvert emits NEW_ADVERT for a first-seen contact (the full contact frame)

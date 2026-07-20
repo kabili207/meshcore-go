@@ -33,6 +33,9 @@ type TraceReceived struct {
 	// Tag is the trace's unique identifier, matching the SendTrace tag.
 	Tag uint32
 
+	// AuthCode is the trace's authentication code, echoed from the request.
+	AuthCode uint32
+
 	// Flags is the trace flags byte (lower 2 bits encode the relay hash size).
 	Flags uint8
 

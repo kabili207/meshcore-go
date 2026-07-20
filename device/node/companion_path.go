@@ -2,7 +2,6 @@ package node
 
 import (
 	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -55,17 +54,12 @@ func (n *CompanionNode) SendPathDiscovery(to core.MeshCoreID) error {
 
 // SendTrace broadcasts a TRACE along the given relay-hash route, collecting the
 // per-hop SNR. When the trace returns it is delivered as a TraceReceived event
-// (matched by the returned tag). flags encodes the relay hash size in its lower
-// two bits; path is the concatenated relay hashes of the round trip.
-func (n *CompanionNode) SendTrace(authCode uint32, flags uint8, path []byte) (uint32, error) {
-	var tagBytes [4]byte
-	if _, err := rand.Read(tagBytes[:]); err != nil {
-		return 0, err
-	}
-	tag := binary.LittleEndian.Uint32(tagBytes[:])
-
+// matched by tag. The caller supplies tag (a correlation id it chooses) and
+// authCode. flags encodes the relay hash size in its lower two bits; path is the
+// concatenated relay hashes of the round trip.
+func (n *CompanionNode) SendTrace(tag, authCode uint32, flags uint8, path []byte) error {
 	payload := codec.BuildTracePayload(tag, authCode, flags, path)
 	pkt := codec.NewPacket(codec.PayloadTypeTrace, codec.RouteTypeDirect, payload)
 	n.base.Router.SendTrace(pkt)
-	return tag, nil
+	return nil
 }

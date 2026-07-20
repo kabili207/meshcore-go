@@ -250,6 +250,27 @@ func EncodeLoginSuccess(pubKeyPrefix []byte, isAdmin bool, serverTimestamp uint3
 	return b
 }
 
+// EncodeTraceData builds a PUSH_CODE_TRACE_DATA payload (reply to a completed
+// SEND_TRACE_PATH): [code][reserved][path_len][flags][tag u32][auth u32]
+// [path_hashes path_len][path_snrs][last_snr i8]. path_hashes is the traced
+// relay route; snrs are the per-hop SNRs; lastSnr is the final-hop SNR.
+func EncodeTraceData(flags uint8, tag, authCode uint32, pathHashes []byte, snrs []int8, lastSnr int8) []byte {
+	pathLen := len(pathHashes)
+	b := make([]byte, 12+pathLen+len(snrs)+1)
+	b[0] = PushCodeTraceData
+	b[2] = uint8(pathLen)
+	b[3] = flags
+	binary.LittleEndian.PutUint32(b[4:8], tag)
+	binary.LittleEndian.PutUint32(b[8:12], authCode)
+	copy(b[12:12+pathLen], pathHashes)
+	off := 12 + pathLen
+	for i, s := range snrs {
+		b[off+i] = byte(s)
+	}
+	b[off+len(snrs)] = byte(lastSnr)
+	return b
+}
+
 // EncodeTelemetryResponse builds a PUSH_CODE_TELEMETRY_RESPONSE payload:
 // [code][reserved 1][pubkey_prefix 6][CayenneLPP data]. The data is forwarded as
 // received (empty for a self request on a node with no sensors).

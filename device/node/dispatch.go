@@ -441,6 +441,7 @@ func (b *BaseNode) handleTraceComplete(pkt *codec.Packet, src transport.PacketSo
 	b.emitEvent(&event.TraceReceived{
 		Event:      b.baseEvent(pkt, src, core.MeshCoreID{}),
 		Tag:        trace.Tag,
+		AuthCode:   trace.AuthCode,
 		Flags:      trace.Flags,
 		SNRs:       snrs,
 		PathHashes: trace.PathHashes,
