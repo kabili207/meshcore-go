@@ -28,6 +28,7 @@ type fakeNode struct {
 func (f *fakeNode) PublicKey() [32]byte            { return f.pk }
 func (f *fakeNode) Contacts() contact.ContactStore { return f.contacts }
 func (f *fakeNode) Clock() *clock.Clock            { return f.clk }
+func (f *fakeNode) AddChannel([]byte) uint8        { return 0 }
 
 // stubStore is a small in-memory ContactStore for tests, backed by a slice.
 type stubStore struct{ list []*contact.ContactInfo }
@@ -408,25 +409,26 @@ func TestIncomingMessagePushesMsgWaiting(t *testing.T) {
 }
 
 func TestSendChannelMsg(t *testing.T) {
-	var gotIdx uint8
+	var gotKey []byte
 	var gotText string
 	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
 	s := NewServer(Config{
 		Node: node,
-		SendChannel: func(_ context.Context, idx uint8, text string) error {
-			gotIdx, gotText = idx, text
+		SendChannel: func(_ context.Context, key []byte, text string) error {
+			gotKey, gotText = key, text
 			return nil
 		},
 	})
 
-	// [3][txt_type][channel_idx][sender_ts u32][text]
+	// [3][txt_type][channel_idx=0][sender_ts u32][text]
 	resp := collectResponses(t, s, cmd(serial.CmdSendChannelTxtMsg, 0, 0, 0, 0, 0, 0, 'h', 'i'))
 	// Firmware replies RESP_CODE_OK to a channel send, not RESP_CODE_SENT.
 	if len(resp) != 1 || resp[0][0] != serial.RespCodeOK {
 		t.Fatalf("expected OK, got %x", resp[0])
 	}
-	if gotIdx != 0 || gotText != "hi" {
-		t.Errorf("SendChannel got idx=%d text=%q", gotIdx, gotText)
+	// Index 0 resolves to the Public channel key.
+	if !bytes.Equal(gotKey, crypto.DefaultChannelKey) || gotText != "hi" {
+		t.Errorf("SendChannel got key=%x text=%q", gotKey, gotText)
 	}
 }
 
@@ -653,5 +655,50 @@ func TestGetStatsInvalidSubtype(t *testing.T) {
 	resp := collectResponses(t, s, cmd(serial.CmdGetStats, 99))
 	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeIllegalArg {
 		t.Fatalf("expected IllegalArg, got %v", resp[0])
+	}
+}
+
+func TestSetChannelRoundtrip(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+
+	secret := bytes.Repeat([]byte{0xAB}, 16)
+	name := make([]byte, 32)
+	copy(name, "Team")
+	payload := append([]byte{serial.CmdSetChannel, 1}, name...)
+	payload = append(payload, secret...)
+
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("set channel: expected OK, got %v", resp[0])
+	}
+
+	// GET_CHANNEL 1 returns the configured channel.
+	resp = collectResponses(t, s, cmd(serial.CmdGetChannel, 1))
+	if resp[0][0] != serial.RespCodeChannelInfo || string(resp[0][2:6]) != "Team" {
+		t.Errorf("get channel 1 name = %q", resp[0][2:34])
+	}
+	if !bytes.Equal(resp[0][34:50], secret) {
+		t.Error("channel 1 secret mismatch")
+	}
+}
+
+func TestSetChannelOutOfRange(t *testing.T) {
+	s, _ := newTestServer() // MaxGroupChannels = 8
+	payload := make([]byte, 50)
+	payload[0], payload[1] = serial.CmdSetChannel, 99
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Fatalf("expected NotFound, got %v", resp[0])
+	}
+}
+
+func TestSetChannel256BitUnsupported(t *testing.T) {
+	s, _ := newTestServer()
+	payload := make([]byte, serial.SetChannel256Len)
+	payload[0] = serial.CmdSetChannel
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeUnsupportedCmd {
+		t.Fatalf("expected UnsupportedCmd, got %v", resp[0])
 	}
 }

@@ -30,7 +30,6 @@ import (
 	sloghelper "github.com/kabili207/slog-helper"
 
 	"github.com/kabili207/meshcore-go/core"
-	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/companion"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
@@ -129,11 +128,8 @@ func run() error {
 				node.WithTxtType(txtType), node.WithAttempt(attempt), node.WithOnACK(onAck))
 			return flood, err
 		},
-		SendChannel: func(_ context.Context, channelIdx uint8, text string) error {
-			if channelIdx != 0 {
-				return fmt.Errorf("unknown channel index %d", channelIdx)
-			}
-			return comp.SendChannelText(crypto.DefaultChannelKey, text)
+		SendChannel: func(_ context.Context, channelKey []byte, text string) error {
+			return comp.SendChannelText(channelKey, text)
 		},
 		Stats: func() companion.Stats {
 			c := comp.Base().Router.Counters().Snapshot()

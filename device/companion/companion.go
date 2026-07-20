@@ -41,12 +41,15 @@ import (
 )
 
 // Node is the subset of a meshcore-go node the companion server reads. A
-// *node.BaseNode satisfies it, so callers pass companionNode.Base(). Later
-// phases will extend this with send methods.
+// *node.BaseNode satisfies it, so callers pass companionNode.Base().
 type Node interface {
 	PublicKey() [32]byte
 	Contacts() contact.ContactStore
 	Clock() *clock.Clock
+	// AddChannel registers a group-channel key so the node decrypts incoming
+	// messages on it. Returns the channel hash. Called when SET_CHANNEL
+	// configures a channel.
+	AddChannel(key []byte) uint8
 }
 
 // Identity is the static device description the server reports in SELF_INFO and
@@ -96,10 +99,10 @@ type Config struct {
 	// returns an error.
 	SendDM func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (flood bool, err error)
 
-	// SendChannel, if set, sends a text message to a group channel by index
-	// (index 0 is the built-in Public channel). Without it,
-	// CMD_SEND_CHANNEL_TXT_MSG returns an error.
-	SendChannel func(ctx context.Context, channelIdx uint8, text string) error
+	// SendChannel, if set, sends a text message to a group channel using its
+	// resolved 16-byte key (the server maps the channel index to the key).
+	// Without it, CMD_SEND_CHANNEL_TXT_MSG returns an error.
+	SendChannel func(ctx context.Context, channelKey []byte, text string) error
 
 	// Stats, if set, provides device statistics for GET_STATS (the app polls
 	// this). Without it, GET_STATS still answers with battery and uptime, and
@@ -133,20 +136,27 @@ type Server struct {
 	node        Node
 	id          Identity
 	sendDM      func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error)
-	sendChannel func(ctx context.Context, channelIdx uint8, text string) error
+	sendChannel func(ctx context.Context, channelKey []byte, text string) error
 	stats       func() Stats
 	startTime   time.Time
-	pubChanHash uint8 // channel hash of the built-in Public channel
 	log         *slog.Logger
 
-	mu   sync.RWMutex // guards mutable identity fields
-	name string       // current advertised name; SET_ADVERT_NAME updates it
+	mu       sync.RWMutex   // guards mutable identity fields and the channel table
+	name     string         // current advertised name; SET_ADVERT_NAME updates it
+	channels []channelEntry // group channels by index; [0] is Public
 
 	ackCounter atomic.Uint32 // per-send correlation token for SENT/SEND_CONFIRMED
 
 	msgMu    sync.Mutex            // guards queue and sessions
 	queue    []queuedMessage       // offline incoming-message queue
 	sessions map[*session]struct{} // currently connected apps
+}
+
+// channelEntry is one configured group channel. secret is 16 bytes, or empty
+// for an unconfigured slot.
+type channelEntry struct {
+	name   string
+	secret []byte
 }
 
 // queuedMessage is an incoming message awaiting CMD_SYNC_NEXT_MESSAGE drain. It
@@ -198,6 +208,11 @@ func NewServer(cfg Config) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
+	// Channel table indexed by channel index; index 0 is the built-in Public
+	// channel, the rest start unconfigured until SET_CHANNEL populates them.
+	channels := make([]channelEntry, id.MaxGroupChannels)
+	channels[0] = channelEntry{name: "Public", secret: crypto.DefaultChannelKey}
+
 	s := &Server{
 		node:        cfg.Node,
 		id:          id,
@@ -205,9 +220,9 @@ func NewServer(cfg Config) *Server {
 		sendChannel: cfg.SendChannel,
 		stats:       cfg.Stats,
 		startTime:   time.Now(),
-		pubChanHash: crypto.ComputeChannelHash(crypto.DefaultChannelKey),
 		log:         log.WithGroup("companion"),
 		name:        id.Name,
+		channels:    channels,
 		sessions:    make(map[*session]struct{}),
 	}
 	if cfg.Events != nil {
@@ -348,6 +363,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 	case serial.CmdGetChannel:
 		return s.getChannel(ss, payload)
 
+	case serial.CmdSetChannel:
+		return s.setChannel(ss, payload)
+
 	case serial.CmdGetDeviceTime:
 		return ss.send(serial.EncodeCurrTime(s.node.Clock().GetCurrentTime()))
 
@@ -428,23 +446,69 @@ func (s *Server) setName(name string) {
 	s.name = name
 }
 
-// getChannel answers CMD_GET_CHANNEL. Index 0 is the built-in Public channel;
-// other in-range indices report as empty (unconfigured); out-of-range indices
+// getChannel answers CMD_GET_CHANNEL. Configured indices return their name and
+// secret; in-range unconfigured indices report empty; out-of-range indices
 // return NotFound, matching the firmware.
 func (s *Server) getChannel(ss *session, payload []byte) error {
 	idx, err := serial.ParseGetChannel(payload)
 	if err != nil {
 		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
 	}
-	if uint16(idx) >= uint16(s.id.MaxGroupChannels) {
+	s.mu.RLock()
+	if int(idx) >= len(s.channels) {
+		s.mu.RUnlock()
 		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 	}
-	ci := &serial.ChannelInfo{Index: idx}
-	if idx == 0 {
-		ci.Name = "Public"
-		ci.Secret = crypto.DefaultChannelKey
+	ch := s.channels[idx]
+	s.mu.RUnlock()
+	return ss.send((&serial.ChannelInfo{Index: idx, Name: ch.name, Secret: ch.secret}).Encode())
+}
+
+// setChannel handles CMD_SET_CHANNEL, storing a channel's name and 128-bit key
+// and registering the key with the node so incoming messages on it decrypt.
+func (s *Server) setChannel(ss *session, payload []byte) error {
+	// The firmware supports only 128-bit secrets; a 256-bit frame is rejected.
+	if len(payload) >= serial.SetChannel256Len {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
 	}
-	return ss.send(ci.Encode())
+	idx, name, secret, err := serial.ParseSetChannel(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	s.mu.Lock()
+	if int(idx) >= len(s.channels) {
+		s.mu.Unlock()
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	s.channels[idx] = channelEntry{name: name, secret: secret}
+	s.mu.Unlock()
+
+	s.node.AddChannel(secret)
+	return ss.send(serial.EncodeOK())
+}
+
+// channelKey returns the 16-byte key for a channel index, or nil if the index is
+// out of range or unconfigured.
+func (s *Server) channelKey(idx uint8) []byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if int(idx) >= len(s.channels) || len(s.channels[idx].secret) == 0 {
+		return nil
+	}
+	return s.channels[idx].secret
+}
+
+// channelIndexForHash finds the index of the configured channel whose key hashes
+// to hash.
+func (s *Server) channelIndexForHash(hash uint8) (uint8, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i, ch := range s.channels {
+		if len(ch.secret) > 0 && crypto.ComputeChannelHash(ch.secret) == hash {
+			return uint8(i), true
+		}
+	}
+	return 0, false
 }
 
 // sendTextMsg handles CMD_SEND_TXT_MSG: resolve the recipient, send the message
@@ -500,7 +564,11 @@ func (s *Server) sendChannelMsg(ss *session, payload []byte) error {
 	if req.TxtType != 0 { // firmware only accepts TXT_TYPE_PLAIN on a channel
 		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
 	}
-	if err := s.sendChannel(ss.ctx, req.ChannelIdx, req.Text); err != nil {
+	key := s.channelKey(req.ChannelIdx)
+	if key == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	if err := s.sendChannel(ss.ctx, key, req.Text); err != nil {
 		s.log.Warn("channel send failed", "channel", req.ChannelIdx, "error", err)
 		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 	}
@@ -600,16 +668,17 @@ func (s *Server) enqueueDM(e *event.TextMessageReceived) {
 	s.enqueue(qm)
 }
 
-// enqueueChannel queues an incoming group message. Only channels the server can
-// map to an index (currently the built-in Public channel) are delivered.
+// enqueueChannel queues an incoming group message, mapping its channel hash to a
+// configured channel index. Messages on unknown channels are dropped.
 func (s *Server) enqueueChannel(e *event.GroupTextReceived) {
-	if e.ChannelHash != s.pubChanHash {
+	idx, ok := s.channelIndexForHash(e.ChannelHash)
+	if !ok {
 		s.log.Debug("dropping message for unknown channel", "hash", e.ChannelHash)
 		return
 	}
 	s.enqueue(queuedMessage{
 		isChannel:  true,
-		channelIdx: 0, // Public
+		channelIdx: idx,
 		pathLen:    serial.PathLenUnknown,
 		txtType:    0, // plain
 		senderTS:   s.node.Clock().GetCurrentTime(),

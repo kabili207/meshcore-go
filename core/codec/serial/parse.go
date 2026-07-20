@@ -149,6 +149,28 @@ func ParseGetChannel(payload []byte) (index uint8, err error) {
 	return payload[1], nil
 }
 
+// setChannelLen is a CMD_SET_CHANNEL frame with a 128-bit secret:
+// code + index + name(32) + secret(16).
+const setChannelLen = 1 + 1 + 32 + 16 // 50
+
+// SetChannel256Len is the frame length of a 256-bit-secret CMD_SET_CHANNEL,
+// which the firmware rejects as unsupported.
+const SetChannel256Len = 1 + 1 + 32 + 32 // 66
+
+// ParseSetChannel parses a CMD_SET_CHANNEL frame ([code][index][name 32-byte
+// C-string][secret 16]). Only the 128-bit secret form is supported; the caller
+// should reject a frame of SetChannel256Len or longer as unsupported first. The
+// returned secret is a fresh 16-byte copy.
+func ParseSetChannel(payload []byte) (index uint8, name string, secret []byte, err error) {
+	if len(payload) < setChannelLen || payload[0] != CmdSetChannel {
+		return 0, "", nil, ErrShortFrame
+	}
+	index = payload[1]
+	name = cString(payload[2:34])
+	secret = append([]byte(nil), payload[34:50]...)
+	return index, name, secret, nil
+}
+
 // ParseSetAdvertName reads the new node name from a CMD_SET_ADVERT_NAME frame.
 // The name is the remainder of the frame (not NUL-terminated on the wire).
 func ParseSetAdvertName(payload []byte) (name string, err error) {
