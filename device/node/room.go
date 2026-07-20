@@ -190,6 +190,22 @@ func NewRoom(cfg RoomConfig) (*RoomNode, error) {
 		log:         logger.WithGroup("room-node"),
 	}
 
+	// Wire runtime CLI hooks now that the scheduler and base node exist. This
+	// exposes the advert.interval / flood.advert.interval / multi.acks keys so a
+	// remote admin can retune them at runtime, matching firmware.
+	srv.SetNodeHooks(room.NodeHooks{
+		GetLocalAdvertInterval: scheduler.LocalInterval,
+		SetLocalAdvertInterval: func(iv uint8) {
+			scheduler.UpdateIntervals(iv, scheduler.FloodInterval())
+		},
+		GetFloodAdvertInterval: scheduler.FloodInterval,
+		SetFloodAdvertInterval: func(iv uint8) {
+			scheduler.UpdateIntervals(scheduler.LocalInterval(), iv)
+		},
+		GetMultiAcks: base.GetExtraAckTransmits,
+		SetMultiAcks: base.SetExtraAckTransmits,
+	})
+
 	// Wire events from BaseNode to room server handlers
 	base.OnEvent(n.dispatchToServer)
 

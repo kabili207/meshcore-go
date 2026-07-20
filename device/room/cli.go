@@ -220,6 +220,48 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 		Set: func(v string) error { s.cfg.OwnerInfo = v; return nil },
 	})
 
+	// Advert interval keys are only registered when the node wired scheduler
+	// hooks (RoomNode does; a bare Server does not).
+	if s.cfg.GetLocalAdvertInterval != nil && s.cfg.SetLocalAdvertInterval != nil {
+		d.Key("advert.interval", cli.ConfigKey{
+			Get: func() string { return strconv.Itoa(int(s.cfg.GetLocalAdvertInterval())) },
+			Set: func(v string) error {
+				iv, err := parseInterval(v)
+				if err != nil {
+					return err
+				}
+				s.cfg.SetLocalAdvertInterval(iv)
+				return nil
+			},
+		})
+	}
+	if s.cfg.GetFloodAdvertInterval != nil && s.cfg.SetFloodAdvertInterval != nil {
+		d.Key("flood.advert.interval", cli.ConfigKey{
+			Get: func() string { return strconv.Itoa(int(s.cfg.GetFloodAdvertInterval())) },
+			Set: func(v string) error {
+				iv, err := parseInterval(v)
+				if err != nil {
+					return err
+				}
+				s.cfg.SetFloodAdvertInterval(iv)
+				return nil
+			},
+		})
+	}
+	if s.cfg.GetMultiAcks != nil && s.cfg.SetMultiAcks != nil {
+		d.Key("multi.acks", cli.ConfigKey{
+			Get: func() string { return strconv.Itoa(s.cfg.GetMultiAcks()) },
+			Set: func(v string) error {
+				acks, err := strconv.Atoi(v)
+				if err != nil || acks < 0 {
+					return errors.New("expected a non-negative number")
+				}
+				s.cfg.SetMultiAcks(acks)
+				return nil
+			},
+		})
+	}
+
 	// --- Read-only keys ---
 	d.Key("public.key", cli.ConfigKey{Get: func() string { return hex.EncodeToString(s.cfg.PublicKey[:]) }})
 	d.Key("role", cli.ConfigKey{Get: func() string { return "room_server" }})
@@ -312,6 +354,15 @@ func (s *Server) cliVer() string {
 // cliStatsCore reports node-level counters: table sizes.
 func (s *Server) cliStatsCore() string {
 	return fmt.Sprintf("clients=%d posts=%d", s.cfg.Clients.Count(), s.cfg.Posts.Count())
+}
+
+// parseInterval parses an advert interval byte in firmware units (0-255).
+func parseInterval(v string) (uint8, error) {
+	iv, err := strconv.ParseUint(v, 10, 8)
+	if err != nil {
+		return 0, errors.New("expected a number 0-255")
+	}
+	return uint8(iv), nil
 }
 
 // setHops parses a non-negative hop count and applies it via set.

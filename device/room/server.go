@@ -109,6 +109,24 @@ type ServerConfig struct {
 	// Router. May be nil.
 	OnRegionsChanged func(data []byte) error
 
+	// Advert interval hooks. When both Get and Set of a pair are non-nil, the
+	// corresponding CLI key ("advert.interval" / "flood.advert.interval") is
+	// registered so a remote admin can retune advertisement cadence at runtime.
+	// The RoomNode wires these to its advert scheduler. Left nil (e.g. a bare
+	// room.Server with no scheduler), the keys are not exposed. Intervals are in
+	// firmware units: local = value * 2 minutes, flood = value hours; 0 disables.
+	GetLocalAdvertInterval func() uint8
+	SetLocalAdvertInterval func(uint8)
+	GetFloodAdvertInterval func() uint8
+	SetFloodAdvertInterval func(uint8)
+
+	// Multi-ack hooks. When both are non-nil, the "multi.acks" CLI key is
+	// registered, letting an admin set the number of redundant ACK copies sent
+	// over a known direct path (firmware multi_acks). The RoomNode wires these to
+	// its BaseNode. Left nil, the key is not exposed.
+	GetMultiAcks func() int
+	SetMultiAcks func(int)
+
 	// BootloaderVersion is returned by "get bootloader.ver". On Go nodes
 	// (not running on NRF52 hardware), this is typically "ERROR: unsupported".
 	BootloaderVersion string
@@ -167,6 +185,38 @@ func (s *Server) SetOnSettingChanged(fn func(key, value string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cfg.OnSettingChanged = fn
+	// Rebuild the dispatcher so its AfterSet hook picks up the new callback.
+	// buildCLI binds the hook at construction time, so a callback wired after
+	// NewServer (the common case when persistence depends on other components)
+	// would otherwise never fire.
+	s.cli = s.buildCLI()
+}
+
+// NodeHooks bundles the optional CLI hooks a node wires into the room server
+// after construction, once the components they touch (advert scheduler, base
+// node) exist. Nil pairs leave the corresponding CLI key unregistered.
+type NodeHooks struct {
+	GetLocalAdvertInterval func() uint8
+	SetLocalAdvertInterval func(uint8)
+	GetFloodAdvertInterval func() uint8
+	SetFloodAdvertInterval func(uint8)
+	GetMultiAcks           func() int
+	SetMultiAcks           func(int)
+}
+
+// SetNodeHooks installs node-level CLI hooks (advert intervals, multi-acks) and
+// rebuilds the dispatcher so the corresponding keys are registered. Called by
+// RoomNode after its scheduler and base node are built.
+func (s *Server) SetNodeHooks(h NodeHooks) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.GetLocalAdvertInterval = h.GetLocalAdvertInterval
+	s.cfg.SetLocalAdvertInterval = h.SetLocalAdvertInterval
+	s.cfg.GetFloodAdvertInterval = h.GetFloodAdvertInterval
+	s.cfg.SetFloodAdvertInterval = h.SetFloodAdvertInterval
+	s.cfg.GetMultiAcks = h.GetMultiAcks
+	s.cfg.SetMultiAcks = h.SetMultiAcks
+	s.cli = s.buildCLI()
 }
 
 // NewServer creates a room server with the given configuration.

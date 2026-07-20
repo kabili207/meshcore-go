@@ -124,13 +124,52 @@ func TestRoomCLI_Version(t *testing.T) {
 func TestRoomCLI_AfterSetHook(t *testing.T) {
 	h := newTestHarness(t)
 	var gotKey, gotVal string
-	h.server.cfg.OnSettingChanged = func(k, v string) { gotKey, gotVal = k, v }
-	// Rebuild the dispatcher so it picks up the hook (normally set before NewServer).
-	h.server.cli = h.server.buildCLI()
+	// SetOnSettingChanged rebuilds the dispatcher so a hook wired after
+	// construction takes effect (the common case for the room server app).
+	h.server.SetOnSettingChanged(func(k, v string) { gotKey, gotVal = k, v })
 
 	h.server.executeCLI("set name Hall")
 	if gotKey != "name" || gotVal != "Hall" {
 		t.Errorf("OnSettingChanged(%q,%q), want (name, Hall)", gotKey, gotVal)
+	}
+}
+
+func TestRoomCLI_NodeHooks(t *testing.T) {
+	h := newTestHarness(t)
+
+	// Without hooks wired, the node-level keys are not registered.
+	if got := h.server.executeCLI("get advert.interval"); !strings.HasPrefix(got, "??:") {
+		t.Errorf("advert.interval before hooks = %q, want unknown-key error", got)
+	}
+
+	local, flood := uint8(1), uint8(47)
+	acks := 0
+	h.server.SetNodeHooks(NodeHooks{
+		GetLocalAdvertInterval: func() uint8 { return local },
+		SetLocalAdvertInterval: func(v uint8) { local = v },
+		GetFloodAdvertInterval: func() uint8 { return flood },
+		SetFloodAdvertInterval: func(v uint8) { flood = v },
+		GetMultiAcks:           func() int { return acks },
+		SetMultiAcks:           func(v int) { acks = v },
+	})
+
+	if got := h.server.executeCLI("get advert.interval"); got != "1" {
+		t.Errorf("get advert.interval = %q, want 1", got)
+	}
+	if got := h.server.executeCLI("set advert.interval 5"); got != "OK" || local != 5 {
+		t.Errorf("set advert.interval = %q (local=%d), want OK/5", got, local)
+	}
+	if got := h.server.executeCLI("set flood.advert.interval 12"); got != "OK" || flood != 12 {
+		t.Errorf("set flood.advert.interval = %q (flood=%d), want OK/12", got, flood)
+	}
+	if got := h.server.executeCLI("set multi.acks 2"); got != "OK" || acks != 2 {
+		t.Errorf("set multi.acks = %q (acks=%d), want OK/2", got, acks)
+	}
+	if got := h.server.executeCLI("set advert.interval nope"); !strings.Contains(got, "0-255") {
+		t.Errorf("set advert.interval nope = %q, want range error", got)
+	}
+	if got := h.server.executeCLI("set multi.acks -1"); !strings.Contains(got, "non-negative") {
+		t.Errorf("set multi.acks -1 = %q, want non-negative error", got)
 	}
 }
 
