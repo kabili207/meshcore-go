@@ -510,6 +510,48 @@ func TestHandlePacket_Dedup(t *testing.T) {
 	}
 }
 
+// The packet monitor must fire for EVERY reception, including duplicates that
+// dedup suppresses for forwarding/app handling. Observers need every physical
+// reception (a flood heard via different paths hashes identically because the
+// dedup hash is path-blind). Regression test for observer packet loss.
+func TestHandlePacket_MonitorFiresBeforeDedup(t *testing.T) {
+	mt := newMockTransport()
+	r := New(Config{SelfID: selfID(0xAA), ForwardPackets: true})
+	r.AddTransport(mt, transport.PacketSourceMQTT)
+
+	// The monitor fires for both receptions and sends; src distinguishes them
+	// (PacketSourceLocal = a send). Count them separately.
+	rxMonitor, txMonitor := 0, 0
+	r.SetPacketMonitor(func(pkt *codec.Packet, src transport.PacketSource) {
+		if src == transport.PacketSourceLocal {
+			txMonitor++
+		} else {
+			rxMonitor++
+		}
+	})
+	appCount := 0
+	r.SetPacketHandler(func(pkt *codec.Packet, src transport.PacketSource) {
+		appCount++
+	})
+
+	pkt := makeFloodPacket(codec.PayloadTypeTxtMsg, []byte{0x01, 0x02, 0x03})
+	r.HandlePacket(pkt, transport.PacketSourceSerial)
+	r.HandlePacket(pkt, transport.PacketSourceSerial) // duplicate
+
+	// Both receptions must reach the monitor, even though the second is a dedup
+	// duplicate the app handler and forwarder ignore.
+	if rxMonitor != 2 {
+		t.Errorf("RX monitor fired %d times, want 2 (must see every reception incl. duplicate)", rxMonitor)
+	}
+	if appCount != 1 {
+		t.Errorf("app handler fired %d times, want 1 (dedup suppresses the duplicate)", appCount)
+	}
+	// Only the first (non-duplicate) flood is forwarded, so exactly one TX.
+	if txMonitor != 1 {
+		t.Errorf("TX monitor fired %d times, want 1 (only the unique flood is forwarded)", txMonitor)
+	}
+}
+
 // --- Version Gate ---
 
 func TestHandlePacket_UnsupportedVersion(t *testing.T) {

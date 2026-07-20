@@ -2,6 +2,7 @@ package dedupe
 
 import (
 	"encoding/binary"
+	"sync"
 	"testing"
 
 	"github.com/kabili207/meshcore-go/core/codec"
@@ -192,5 +193,35 @@ func TestCalculatePacketHash_NonTraceIgnoresPathLen(t *testing.T) {
 
 	if hash1 != hash2 {
 		t.Error("non-TRACE packets with same payload should have same hash regardless of path_len")
+	}
+}
+
+// HasSeen must be safe under concurrent access. Self-originated sends
+// (SendFlood, SendTrace) mark packets seen from independent goroutines while
+// the receive path also calls HasSeen. Distinct packets must never be reported
+// as duplicates, and there must be no data race (run with -race). Regression
+// test for observer packet loss caused by a racing dedup buffer.
+func TestHasSeen_ConcurrentDistinct(t *testing.T) {
+	d := New()
+	const n = 500
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	falseDup := 0
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// Distinct payload per i produces a distinct hash.
+			pkt := makePacket(codec.PayloadTypeTxtMsg, []byte{byte(i), byte(i >> 8), 0xAB, 0xCD})
+			if d.HasSeen(pkt) {
+				mu.Lock()
+				falseDup++
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	if falseDup > 0 {
+		t.Fatalf("%d distinct packets were falsely reported as duplicates", falseDup)
 	}
 }

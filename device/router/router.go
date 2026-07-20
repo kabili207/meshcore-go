@@ -59,14 +59,17 @@ const (
 // flood forwarding.
 type PacketHandler func(pkt *codec.Packet, src transport.PacketSource)
 
-// PacketMonitor is called for every unique, valid packet after deduplication,
+// PacketMonitor is called for every valid reception BEFORE deduplication,
 // regardless of routing decisions. Unlike PacketHandler, it fires for all
 // packets including those that are only forwarded (e.g., direct-routed packets
-// transiting this node). This is useful for observer/telemetry systems that
-// need visibility into all mesh traffic.
+// transiting this node) AND including duplicate copies of a flood that arrived
+// via different paths. Observer/telemetry systems need visibility into every
+// physical reception, so the path-blind dedup gate must not hide duplicates
+// from them (it still gates forwarding and application processing).
 //
-// The monitor must not modify the packet. It runs synchronously, so it should
-// return quickly or dispatch work to a goroutine.
+// The monitor must not modify the packet. It runs synchronously on the
+// serialized receive path, so it should return quickly or dispatch work to a
+// goroutine.
 type PacketMonitor func(pkt *codec.Packet, src transport.PacketSource)
 
 // Config configures a Router.
@@ -152,6 +155,17 @@ type Router struct {
 	dedup    *dedupe.PacketDeduplicator
 	queue    *SendQueue
 	counters RouterCounters
+
+	// recvMu serializes the transport-facing receive path. The whole
+	// HandlePacket pipeline (dedup, TRACE, room/region handlers, multipart
+	// reassembly) assumes single-threaded access, but transports can deliver
+	// concurrently: the MQTT transport uses OrderMatters(false), and multiple
+	// transports (MQTT + serial) deliver from independent goroutines. This lock
+	// is taken only at the transport entry wrapper in AddTransport, so the
+	// internal recursive HandlePacket call in handleMultipart does not deadlock.
+	// It is separate from mu (which guards config/handler fields and is taken
+	// inside the receive path) to avoid re-entrant locking.
+	recvMu sync.Mutex
 
 	mu         sync.RWMutex
 	transports []transportEntry
@@ -267,10 +281,11 @@ func (r *Router) SetPacketHandler(fn PacketHandler) {
 	r.onPacket = fn
 }
 
-// SetPacketMonitor sets a monitor callback that fires for every unique packet
-// after deduplication, regardless of routing. This includes packets that are
-// only forwarded through this node and never reach the application handler.
-// Useful for observer/telemetry systems.
+// SetPacketMonitor sets a monitor callback that fires for every valid reception
+// before deduplication, regardless of routing. This includes packets that are
+// only forwarded through this node, never reach the application handler, or are
+// duplicate copies of a flood heard via different paths. Useful for
+// observer/telemetry systems that must see every physical reception.
 func (r *Router) SetPacketMonitor(fn PacketMonitor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -379,6 +394,12 @@ func (r *Router) AddTransport(t transport.Transport, source transport.PacketSour
 	r.mu.Unlock()
 
 	t.SetPacketHandler(func(pkt *codec.Packet, src transport.PacketSource) {
+		// Serialize the receive path across all transports and any concurrent
+		// per-message delivery goroutines. The internal recursion in
+		// handleMultipart calls HandlePacket directly (already under this lock),
+		// so it must not be re-acquired there.
+		r.recvMu.Lock()
+		defer r.recvMu.Unlock()
 		r.HandlePacket(pkt, src)
 	})
 }
@@ -417,7 +438,18 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 		return
 	}
 
-	// Gate 3: deduplication (also inserts the packet into the seen table)
+	// Monitor hook: fires for every valid reception BEFORE dedup, regardless of
+	// routing decisions. Observers must see every physical reception, including
+	// duplicate copies of a flood that arrived via different paths (the dedup
+	// hash is path-blind by design, so it would otherwise collapse them). This
+	// matches the firmware, which captures at logRx/logRxRaw before hasSeen().
+	// Only the version and transport-code gates run ahead of this, since those
+	// reject malformed or foreign-scoped packets that never should be reported.
+	r.notifyMonitor(pkt, src)
+
+	// Gate 3: deduplication (also inserts the packet into the seen table).
+	// Dedup gates forwarding and application processing only, NOT observer
+	// capture (which happened above).
 	if r.dedup.HasSeen(pkt) {
 		if pkt.IsFlood() {
 			r.counters.FloodDups.Add(1)
@@ -426,10 +458,6 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 		}
 		return
 	}
-
-	// Monitor hook: fires for every unique packet after dedup, regardless
-	// of routing decisions. Used by observer/telemetry systems.
-	r.notifyMonitor(pkt, src)
 
 	// Gate 3.5: TRACE handling (after dedup, before direct routing —
 	// TRACE uses Path[] for SNR values, not relay hashes)

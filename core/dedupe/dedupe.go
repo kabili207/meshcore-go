@@ -12,6 +12,7 @@ package dedupe
 
 import (
 	"crypto/sha256"
+	"sync"
 
 	"github.com/kabili207/meshcore-go/core/codec"
 )
@@ -24,7 +25,13 @@ const (
 )
 
 // PacketDeduplicator tracks recently seen packets to prevent processing duplicates.
+//
+// HasSeen and Clear are safe for concurrent use: the router's receive path is
+// normally serialized, but self-originated sends (SendFlood, SendTrace, ...)
+// mark packets seen from independent goroutines (advert scheduler, sync loop,
+// ACK retries), so the buffer must be guarded.
 type PacketDeduplicator struct {
+	mu        sync.Mutex
 	hashes    []byte // circular buffer of PacketHashSize-byte hashes
 	maxHashes int
 	nextHash  int
@@ -51,6 +58,9 @@ func NewWithCapacity(maxHashes int) *PacketDeduplicator {
 func (d *PacketDeduplicator) HasSeen(packet *codec.Packet) bool {
 	hash := CalculatePacketHash(packet)
 
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	for i := range d.maxHashes {
 		offset := i * PacketHashSize
 		if sliceEqual(hash[:], d.hashes[offset:offset+PacketHashSize]) {
@@ -66,6 +76,8 @@ func (d *PacketDeduplicator) HasSeen(packet *codec.Packet) bool {
 
 // Clear resets the deduplicator, forgetting all previously seen packets.
 func (d *PacketDeduplicator) Clear() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	clear(d.hashes)
 	d.nextHash = 0
 }
