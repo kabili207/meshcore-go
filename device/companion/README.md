@@ -51,7 +51,9 @@ this package does not implement BLE.
   callback and the node's `LoginResponse` event) logs the app into a repeater or
   room server. Admin CLI then rides the messaging path: the app sends commands
   as `SEND_TXT_MSG` with the CLI type, and replies return as `CONTACT_MSG_RECV`
-  of the CLI type, which the app routes as `cli_reply`.
+  of the CLI type, which the app routes as `cli_reply`. `SEND_STATUS_REQ` →
+  `STATUS_RESPONSE` (via `SendStatus` and the `StatusResponse` event) forwards a
+  repeater's `RepeaterStats` blob for the app's health view.
 - **Live contact updates**: `NEW_ADVERT` (a first-seen node, sent as the full
   contact frame) and `ADVERT` (a re-heard node) are pushed automatically from the
   node's advert events, so the app's contact list updates without a manual
@@ -64,12 +66,11 @@ the app reads as an old-firmware feature gate and degrades gracefully.
 
 ## Not yet wired
 
-Remote status (`SEND_STATUS_REQ` → `STATUS_RESPONSE`), telemetry
-(`SEND_TELEMETRY_REQ` → `TELEMETRY_RESPONSE`), and trace/path discovery
+Telemetry (`SEND_TELEMETRY_REQ` → `TELEMETRY_RESPONSE`) and trace/path discovery
 (`SEND_TRACE_PATH` → `TRACE_DATA`). Their firmware reply shapes are known (`SENT`
-followed by the matching push), so they follow the same pattern as login. Login
-failure is also not surfaced: meshcore-go reports a bad-password login as a
-timeout rather than a `LOGIN_FAIL` push.
+followed by the matching push), so they follow the same pattern as login and
+status. Login failure is also not surfaced: meshcore-go reports a bad-password
+login as a timeout rather than a `LOGIN_FAIL` push.
 
 ## Wiring it
 

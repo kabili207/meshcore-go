@@ -250,6 +250,17 @@ func EncodeLoginSuccess(pubKeyPrefix []byte, isAdmin bool, serverTimestamp uint3
 	return b
 }
 
+// EncodeStatusResponse builds a PUSH_CODE_STATUS_RESPONSE payload:
+// [code][reserved 1][pubkey_prefix 6][status blob]. The blob is the remote
+// repeater's serialized RepeaterStats, forwarded as received.
+func EncodeStatusResponse(pubKeyPrefix, statusBlob []byte) []byte {
+	b := make([]byte, 8+len(statusBlob))
+	b[0] = PushCodeStatusResponse
+	copy(b[2:8], pubKeyPrefix)
+	copy(b[8:], statusBlob)
+	return b
+}
+
 // EncodeMsgWaiting builds a PUSH_CODE_MSG_WAITING payload (single byte). It
 // tells the app to drain the queue with CMD_SYNC_NEXT_MESSAGE.
 func EncodeMsgWaiting() []byte { return []byte{PushCodeMsgWaiting} }

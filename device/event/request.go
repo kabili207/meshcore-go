@@ -85,3 +85,13 @@ type TelemetryResponse struct {
 	// application's responsibility.
 	Data []byte
 }
+
+// StatusResponse fires when a device-status reply (from SendStatusReq) is
+// received from a repeater or room server.
+type StatusResponse struct {
+	Event
+
+	// Data is the serialized RepeaterStats blob from the peer, forwarded as
+	// received. Parsing is the application's responsibility.
+	Data []byte
+}

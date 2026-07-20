@@ -122,6 +122,7 @@ func (n *CompanionNode) onInternalEvent(evt any) {
 		n.connections.Touch(e.From) // any response means the server is alive
 		n.handleLoginResponse(e)
 		n.handleTelemetryResponse(e)
+		n.handleStatusResponse(e)
 	}
 }
 

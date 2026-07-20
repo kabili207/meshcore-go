@@ -112,6 +112,11 @@ type Config struct {
 	// CMD_SEND_LOGIN returns an error.
 	SendLogin func(ctx context.Context, to core.MeshCoreID, password string) error
 
+	// SendStatus, if set, requests device status from a remote repeater or room
+	// server. The reply arrives as an event.StatusResponse, which the server
+	// pushes as STATUS_RESPONSE. Without it, CMD_SEND_STATUS_REQ returns an error.
+	SendStatus func(ctx context.Context, to core.MeshCoreID) error
+
 	// Stats, if set, provides device statistics for GET_STATS (the app polls
 	// this). Without it, GET_STATS still answers with battery and uptime, and
 	// zeroed packet/radio counters.
@@ -153,6 +158,7 @@ type Server struct {
 	sendDM      func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error)
 	sendChannel func(ctx context.Context, channelKey []byte, text string) error
 	sendLogin   func(ctx context.Context, to core.MeshCoreID, password string) error
+	sendStatus  func(ctx context.Context, to core.MeshCoreID) error
 	stats       func() Stats
 	exportSelf  func() []byte
 	startTime   time.Time
@@ -255,6 +261,7 @@ func NewServer(cfg Config) *Server {
 		sendDM:       cfg.SendDM,
 		sendChannel:  cfg.SendChannel,
 		sendLogin:    cfg.SendLogin,
+		sendStatus:   cfg.SendStatus,
 		stats:        cfg.Stats,
 		exportSelf:   cfg.ExportSelf,
 		startTime:    time.Now(),
@@ -416,6 +423,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdSendLogin:
 		return s.sendLoginCmd(ss, payload)
+
+	case serial.CmdSendStatusReq:
+		return s.sendStatusReq(ss, payload)
 
 	case serial.CmdGetChannel:
 		return s.getChannel(ss, payload)
@@ -718,6 +728,8 @@ func (s *Server) handleEvent(evt any) {
 		s.pushAdvert(e)
 	case *event.LoginResponse:
 		s.pushLoginSuccess(e)
+	case *event.StatusResponse:
+		s.pushStatusResponse(e)
 	}
 }
 
@@ -750,6 +762,32 @@ func (s *Server) sendLoginCmd(ss *session, payload []byte) error {
 func (s *Server) pushLoginSuccess(e *event.LoginResponse) {
 	s.pushToSessions(serial.EncodeLoginSuccess(
 		e.From[:6], e.IsAdmin, e.ServerTimestamp, e.Permissions, e.FirmwareVerLevel))
+}
+
+// sendStatusReq handles CMD_SEND_STATUS_REQ: request status from a remote server
+// and reply SENT. The status blob arrives later as a StatusResponse event.
+func (s *Server) sendStatusReq(ss *session, payload []byte) error {
+	if s.sendStatus == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	if len(payload) < 1+32 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var to core.MeshCoreID
+	copy(to[:], payload[1:33])
+	if s.node.Contacts().GetByPubKey(to) == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	if err := s.sendStatus(ss.ctx, to); err != nil {
+		s.log.Warn("status request failed", "to", to.String(), "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(serial.EncodeSent(serial.SentTypeFlood, binary.LittleEndian.Uint32(to[:4]), 12000))
+}
+
+// pushStatusResponse emits PUSH_CODE_STATUS_RESPONSE from a status response event.
+func (s *Server) pushStatusResponse(e *event.StatusResponse) {
+	s.pushToSessions(serial.EncodeStatusResponse(e.From[:6], e.Data))
 }
 
 // pushAdvert emits NEW_ADVERT for a first-seen contact (the full contact frame)

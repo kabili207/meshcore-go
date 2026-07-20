@@ -41,6 +41,56 @@ func (n *CompanionNode) SendTelemetryReq(to core.MeshCoreID) (uint32, error) {
 	return tag, nil
 }
 
+// SendStatusReq requests device status (RepeaterStats) from a repeater or room
+// server. The reply arrives as a StatusResponse event. Returns the request tag,
+// which also correlates the response.
+func (n *CompanionNode) SendStatusReq(to core.MeshCoreID) (uint32, error) {
+	secret, err := n.base.Contacts().GetSharedSecret(to)
+	if err != nil {
+		return 0, fmt.Errorf("shared secret: %w", err)
+	}
+
+	tag := n.clk.GetCurrentTimeUnique()
+	content := codec.BuildRequestContent(tag, codec.ReqTypeGetStats, nil)
+
+	encrypted, err := crypto.EncryptAddressedWithSecret(content, secret)
+	if err != nil {
+		return 0, fmt.Errorf("encrypt status request: %w", err)
+	}
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	selfID := n.base.ID()
+	payload := codec.BuildAddressedPayload(to.Hash(), selfID.Hash(), mac, ciphertext)
+	pkt := codec.NewPacket(codec.PayloadTypeReq, codec.RouteTypeFlood, payload)
+	n.sendToContact(pkt, n.base.Contacts().GetByPubKey(to))
+
+	n.pendingMu.Lock()
+	n.pendingStatus[tag] = to
+	n.pendingMu.Unlock()
+
+	return tag, nil
+}
+
+// handleStatusResponse promotes a response matching a pending status request
+// into a StatusResponse event.
+func (n *CompanionNode) handleStatusResponse(e *event.ResponseReceived) {
+	n.pendingMu.Lock()
+	peer, pending := n.pendingStatus[e.Tag]
+	if pending && peer == e.From {
+		delete(n.pendingStatus, e.Tag)
+	} else {
+		pending = false
+	}
+	n.pendingMu.Unlock()
+	if !pending {
+		return
+	}
+
+	n.base.emitEvent(&event.StatusResponse{
+		Event: n.base.baseEvent(e.RawPacket, e.Source, e.From),
+		Data:  e.Content,
+	})
+}
+
 // handleTelemetryResponse promotes a response matching a pending telemetry
 // request into a TelemetryResponse event.
 func (n *CompanionNode) handleTelemetryResponse(e *event.ResponseReceived) {

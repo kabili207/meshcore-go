@@ -137,6 +137,10 @@ func run() error {
 			_, err := comp.SendLogin(to, password)
 			return err
 		},
+		SendStatus: func(_ context.Context, to core.MeshCoreID) error {
+			_, err := comp.SendStatusReq(to)
+			return err
+		},
 		ExportSelf: func() []byte {
 			builder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
 				PrivateKey: priv,

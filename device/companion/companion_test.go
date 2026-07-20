@@ -998,3 +998,57 @@ func TestCliSendZeroAck(t *testing.T) {
 		t.Errorf("txtType = %d, want CLI", gotType)
 	}
 }
+
+func TestSendStatusReq(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x22
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	var gotTo core.MeshCoreID
+	s := NewServer(Config{
+		Node:       &fakeNode{clk: clock.New(), contacts: store},
+		SendStatus: func(_ context.Context, to core.MeshCoreID) error { gotTo = to; return nil },
+	})
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdSendStatusReq}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeSent {
+		t.Fatalf("expected SENT, got %v", resp[0])
+	}
+	if gotTo != id {
+		t.Errorf("SendStatus got to=%x", gotTo)
+	}
+}
+
+func TestSendStatusReqUnknownContact(t *testing.T) {
+	s := NewServer(Config{
+		Node:       &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		SendStatus: func(context.Context, core.MeshCoreID) error { return nil },
+	})
+	var id core.MeshCoreID
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdSendStatusReq}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Fatalf("expected NotFound, got %v", resp[0])
+	}
+}
+
+func TestStatusResponsePush(t *testing.T) {
+	var handler func(any)
+	s := NewServer(Config{
+		Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		Events: func(h func(any)) { handler = h },
+	})
+	var out bytes.Buffer
+	sess := &session{srv: s, w: &out, ctx: context.Background()}
+	s.addSession(sess)
+
+	var from core.MeshCoreID
+	from[0], from[3] = 0x77, 0x88
+	blob := bytes.Repeat([]byte{0xEE}, 56) // RepeaterStats is 56 bytes
+	handler(&event.StatusResponse{Event: event.Event{From: from}, Data: blob})
+
+	frames := decodeFrames(&out)
+	if len(frames) != 1 || frames[0][0] != serial.PushCodeStatusResponse || len(frames[0]) != 8+56 {
+		t.Fatalf("expected 64-byte StatusResponse, got %v", frames)
+	}
+	if !bytes.Equal(frames[0][2:8], from[:6]) || !bytes.Equal(frames[0][8:], blob) {
+		t.Errorf("prefix/blob mismatch: %x", frames[0][:8])
+	}
+}
