@@ -308,6 +308,12 @@ func EncodeBattAndStorage(batteryMilliVolts uint16, storageUsedKB, storageTotalK
 	return b
 }
 
+// EncodeExportContact builds a RESP_CODE_EXPORT_CONTACT payload: the code byte
+// followed by the serialized advert packet the app turns into a share URI/QR.
+func EncodeExportContact(advertPacket []byte) []byte {
+	return append([]byte{RespCodeExportContact}, advertPacket...)
+}
+
 // EncodeCustomVars builds a RESP_CODE_CUSTOM_VARS payload: the code byte
 // followed by a comma-separated "name:value" list (empty for no custom vars).
 func EncodeCustomVars(vars string) []byte {

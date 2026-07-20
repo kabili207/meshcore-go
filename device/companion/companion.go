@@ -34,6 +34,7 @@ import (
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/clock"
+	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/codec/serial"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/contact"
@@ -109,6 +110,13 @@ type Config struct {
 	// zeroed packet/radio counters.
 	Stats func() Stats
 
+	// ExportSelf, if set, returns this node's own advert as a serialized packet
+	// for EXPORT_CONTACT (self), which the app turns into a share URI/QR. Return
+	// nil if it cannot be built. Without it, EXPORT_CONTACT of self is
+	// unsupported. Exporting a saved contact is never supported (meshcore-go does
+	// not store others' advert signatures).
+	ExportSelf func() []byte
+
 	// Logger for connection events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -138,6 +146,7 @@ type Server struct {
 	sendDM      func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error)
 	sendChannel func(ctx context.Context, channelKey []byte, text string) error
 	stats       func() Stats
+	exportSelf  func() []byte
 	startTime   time.Time
 	log         *slog.Logger
 
@@ -238,6 +247,7 @@ func NewServer(cfg Config) *Server {
 		sendDM:       cfg.SendDM,
 		sendChannel:  cfg.SendChannel,
 		stats:        cfg.Stats,
+		exportSelf:   cfg.ExportSelf,
 		startTime:    time.Now(),
 		log:          log.WithGroup("companion"),
 		name:         id.Name,
@@ -377,6 +387,17 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdGetContactByKey:
 		return s.getContactByKey(ss, payload)
+
+	case serial.CmdExportContact:
+		return s.exportContact(ss, payload)
+
+	case serial.CmdImportContact:
+		return s.importContact(ss, payload)
+
+	case serial.CmdShareContact:
+		// Sharing rebroadcasts a saved contact's signed advert, which meshcore-go
+		// does not store.
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 
 	case serial.CmdSendTxtMsg:
 		return s.sendTextMsg(ss, payload)
@@ -1012,6 +1033,45 @@ func (s *Server) getStats(ss *session, payload []byte) error {
 	default:
 		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
 	}
+}
+
+// exportContact handles CMD_EXPORT_CONTACT. A frame without a pubkey exports
+// this node's own advert (for a share URI/QR); a frame naming a saved contact is
+// unsupported because meshcore-go does not store others' advert signatures.
+func (s *Server) exportContact(ss *session, payload []byte) error {
+	if len(payload) >= 1+32 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	if s.exportSelf == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	data := s.exportSelf()
+	if len(data) == 0 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(serial.EncodeExportContact(data))
+}
+
+// importContact handles CMD_IMPORT_CONTACT: parse the shared advert packet,
+// verify it, and add the contact.
+func (s *Server) importContact(ss *session, payload []byte) error {
+	if len(payload) < 2 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var pkt codec.Packet
+	if err := pkt.ReadFrom(payload[1:]); err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	advert, err := codec.ParseAdvertPayload(pkt.Payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	result := contact.ProcessAdvert(s.node.Contacts(), advert, s.node.Clock().GetCurrentTime(), true)
+	if result.Rejected {
+		s.log.Debug("import contact rejected", "reason", result.RejectReason)
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	return ss.send(serial.EncodeOK())
 }
 
 // parseContactKey reads the leading 32-byte public key from a contact command.

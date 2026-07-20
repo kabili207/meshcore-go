@@ -30,6 +30,8 @@ import (
 	sloghelper "github.com/kabili207/slog-helper"
 
 	"github.com/kabili207/meshcore-go/core"
+	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/device/advert"
 	"github.com/kabili207/meshcore-go/device/companion"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
@@ -130,6 +132,19 @@ func run() error {
 		},
 		SendChannel: func(_ context.Context, channelKey []byte, text string) error {
 			return comp.SendChannelText(channelKey, text)
+		},
+		ExportSelf: func() []byte {
+			builder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
+				PrivateKey: priv,
+				PublicKey:  comp.Base().PublicKey(),
+				Clock:      comp.Base().Clock(),
+				AppData:    &codec.AdvertAppData{Name: *name, NodeType: codec.NodeTypeChat},
+			})
+			pkt := builder()
+			if pkt == nil {
+				return nil
+			}
+			return pkt.WriteTo()
 		},
 		Stats: func() companion.Stats {
 			c := comp.Base().Router.Counters().Snapshot()

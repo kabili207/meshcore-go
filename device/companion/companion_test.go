@@ -9,10 +9,14 @@ import (
 
 	"encoding/binary"
 
+	"crypto/ed25519"
 	"github.com/kabili207/meshcore-go/core"
+
 	"github.com/kabili207/meshcore-go/core/clock"
+	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/codec/serial"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/advert"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 )
@@ -810,6 +814,84 @@ func TestGetAdvertPathNotFound(t *testing.T) {
 	var id core.MeshCoreID
 	req := append([]byte{serial.CmdGetAdvertPath, 0}, id[:]...) // reserved byte + pubkey
 	resp := collectResponses(t, s, cmd(req...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Fatalf("expected NotFound, got %v", resp[0])
+	}
+}
+
+// buildSelfAdvert produces a signed self-advert packet for import/export tests.
+func buildSelfAdvert(t *testing.T, name string) ([]byte, ed25519.PublicKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pk [32]byte
+	copy(pk[:], pub)
+	builder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
+		PrivateKey: priv,
+		PublicKey:  pk,
+		Clock:      clock.New(),
+		AppData:    &codec.AdvertAppData{Name: name, NodeType: codec.NodeTypeChat},
+	})
+	pkt := builder()
+	if pkt == nil {
+		t.Fatal("builder returned nil packet")
+	}
+	return pkt.WriteTo(), pub
+}
+
+func TestImportContact(t *testing.T) {
+	store := &stubStore{}
+	s := NewServer(Config{Node: &fakeNode{clk: clock.New(), contacts: store}})
+
+	advertBytes, pub := buildSelfAdvert(t, "Imported")
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdImportContact}, advertBytes...)...))
+	if resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("import: expected OK, got %v", resp[0])
+	}
+	var id core.MeshCoreID
+	copy(id[:], pub)
+	if store.GetByPubKey(id) == nil {
+		t.Error("imported contact not in store")
+	}
+}
+
+func TestImportContactBadData(t *testing.T) {
+	s, _ := newTestServer()
+	resp := collectResponses(t, s, cmd(serial.CmdImportContact, 0x01, 0x02, 0x03))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeIllegalArg {
+		t.Fatalf("expected IllegalArg, got %v", resp[0])
+	}
+}
+
+func TestExportSelf(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{
+		Node:       node,
+		ExportSelf: func() []byte { return []byte{0xDE, 0xAD, 0xBE, 0xEF} },
+	})
+	// EXPORT_CONTACT with no pubkey -> export self.
+	resp := collectResponses(t, s, cmd(serial.CmdExportContact))
+	if resp[0][0] != serial.RespCodeExportContact || !bytes.Equal(resp[0][1:], []byte{0xDE, 0xAD, 0xBE, 0xEF}) {
+		t.Fatalf("export self = %x", resp[0])
+	}
+}
+
+func TestExportContactByKeyNotFound(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node, ExportSelf: func() []byte { return []byte{1} }})
+	var id core.MeshCoreID
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdExportContact}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Fatalf("export saved contact should be NotFound, got %v", resp[0])
+	}
+}
+
+func TestShareContactNotFound(t *testing.T) {
+	s, _ := newTestServer()
+	var id core.MeshCoreID
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdShareContact}, id[:]...)...))
 	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
 		t.Fatalf("expected NotFound, got %v", resp[0])
 	}

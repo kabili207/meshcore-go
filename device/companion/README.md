@@ -27,12 +27,20 @@ this package does not implement BLE.
   server remembers the app's declared protocol version and uses it to pick the
   V3 vs pre-V3 layout for incoming-message frames.
 - **Contacts**: `GET_CONTACTS` streaming with the `since` filter, plus
-  `ADD_UPDATE_CONTACT`, `REMOVE_CONTACT`, `GET_CONTACT_BY_KEY`, and `RESET_PATH`,
-  all backed by the node's contact store.
-- **Device state**: device time, battery/storage, channel reads
-  (`GET_CHANNEL`, with the built-in Public channel at index 0), default flood
-  scope, `GET_STATS` (core/radio/packets, wired to the router's packet
-  counters), and the flood-scope / advert-name / config setters.
+  `ADD_UPDATE_CONTACT`, `REMOVE_CONTACT`, `GET_CONTACT_BY_KEY`, `RESET_PATH`,
+  `IMPORT_CONTACT` (verify and add a shared advert), and `EXPORT_CONTACT` of
+  this node for a share URI/QR (via the `ExportSelf` callback). Exporting or
+  `SHARE`-ing a *saved* contact returns `NOT_FOUND`: that rebroadcasts the
+  contact's original signed advert, which meshcore-go's contact model does not
+  store.
+- **Device state**: device time, battery/storage, channels (`GET_CHANNEL` /
+  `SET_CHANNEL`, with the built-in Public channel at index 0 and configurable
+  128-bit channels at other indices), default flood scope, `GET_STATS`
+  (core/radio/packets, wired to the router's packet counters), radio config
+  (`SET_RADIO_PARAMS` / `SET_RADIO_TX_POWER` update the params reported in
+  `SELF_INFO`, `GET`/`SET_TUNING_PARAMS`), auto-add config
+  (`GET`/`SET_AUTOADD_CONFIG`), custom vars and advert-path reads, and the
+  flood-scope / advert-name / config setters.
 - **Direct messaging**: `SEND_TXT_MSG` → `SENT` with a `SEND_CONFIRMED` push on
   delivery, and incoming DMs delivered through the `MSG_WAITING` →
   `SYNC_NEXT_MESSAGE` queue as `CONTACT_MSG_RECV`.
@@ -91,12 +99,10 @@ srv := companion.NewServer(companion.Config{
         return flood, err
     },
 
-    // Outgoing channel message by index (0 is the Public channel).
-    SendChannel: func(_ context.Context, channelIdx uint8, text string) error {
-        if channelIdx != 0 {
-            return fmt.Errorf("unknown channel index %d", channelIdx)
-        }
-        return comp.SendChannelText(crypto.DefaultChannelKey, text)
+    // Outgoing channel message. The server resolves the channel index to its
+    // key from its channel table and passes the key here.
+    SendChannel: func(_ context.Context, channelKey []byte, text string) error {
+        return comp.SendChannelText(channelKey, text)
     },
 })
 
