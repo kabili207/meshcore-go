@@ -775,3 +775,42 @@ func TestTuningParamsRoundtrip(t *testing.T) {
 		t.Errorf("tuning params mismatch: %x", resp[0][1:9])
 	}
 }
+
+func TestGetCustomVarsEmpty(t *testing.T) {
+	s, _ := newTestServer()
+	resp := collectResponses(t, s, cmd(serial.CmdGetCustomVars))
+	if len(resp) != 1 || resp[0][0] != serial.RespCodeCustomVars || len(resp[0]) != 1 {
+		t.Fatalf("expected bare CustomVars code, got %v", resp[0])
+	}
+}
+
+func TestAutoaddConfigRoundtrip(t *testing.T) {
+	s, _ := newTestServer()
+	// SET config=3, max_hops=5.
+	if resp := collectResponses(t, s, cmd(serial.CmdSetAutoaddConfig, 3, 5)); resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("set autoadd: expected OK, got %v", resp[0])
+	}
+	resp := collectResponses(t, s, cmd(serial.CmdGetAutoaddConfig))
+	if len(resp[0]) != 3 || resp[0][0] != serial.RespCodeAutoaddConfig || resp[0][1] != 3 || resp[0][2] != 5 {
+		t.Fatalf("get autoadd = %v, want [25 3 5]", resp[0])
+	}
+}
+
+func TestAutoaddMaxHopsClamped(t *testing.T) {
+	s, _ := newTestServer()
+	collectResponses(t, s, cmd(serial.CmdSetAutoaddConfig, 1, 200)) // 200 clamps to 64
+	resp := collectResponses(t, s, cmd(serial.CmdGetAutoaddConfig))
+	if resp[0][2] != 64 {
+		t.Errorf("max_hops = %d, want 64 (clamped)", resp[0][2])
+	}
+}
+
+func TestGetAdvertPathNotFound(t *testing.T) {
+	s, _ := newTestServer()
+	var id core.MeshCoreID
+	req := append([]byte{serial.CmdGetAdvertPath, 0}, id[:]...) // reserved byte + pubkey
+	resp := collectResponses(t, s, cmd(req...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Fatalf("expected NotFound, got %v", resp[0])
+	}
+}

@@ -155,6 +155,9 @@ type Server struct {
 	rxDelay       uint32
 	airtimeFactor uint32
 
+	autoaddConfig  uint8 // CMD_SET/GET_AUTOADD_CONFIG
+	autoaddMaxHops uint8
+
 	ackCounter atomic.Uint32 // per-send correlation token for SENT/SEND_CONFIRMED
 
 	msgMu    sync.Mutex            // guards queue and sessions
@@ -417,6 +420,20 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdGetTuningParams:
 		return s.getTuningParams(ss)
+
+	case serial.CmdGetCustomVars:
+		// A software node exposes no sensor settings.
+		return ss.send(serial.EncodeCustomVars(""))
+
+	case serial.CmdGetAutoaddConfig:
+		return s.getAutoaddConfig(ss)
+
+	case serial.CmdSetAutoaddConfig:
+		return s.setAutoaddConfig(ss, payload)
+
+	case serial.CmdGetAdvertPath:
+		// No inbound advert-path cache is kept, so no path is known.
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 
 	case serial.CmdSyncNextMessage:
 		return s.sendNextMessage(ss)
@@ -946,6 +963,29 @@ func (s *Server) getTuningParams(ss *session) error {
 	rx, af := s.rxDelay, s.airtimeFactor
 	s.mu.RUnlock()
 	return ss.send(serial.EncodeTuningParams(rx, af))
+}
+
+// getAutoaddConfig handles CMD_GET_AUTOADD_CONFIG.
+func (s *Server) getAutoaddConfig(ss *session) error {
+	s.mu.RLock()
+	cfg, hops := s.autoaddConfig, s.autoaddMaxHops
+	s.mu.RUnlock()
+	return ss.send(serial.EncodeAutoaddConfig(cfg, hops))
+}
+
+// setAutoaddConfig handles CMD_SET_AUTOADD_CONFIG. The max-hops byte is optional.
+func (s *Server) setAutoaddConfig(ss *session, payload []byte) error {
+	cfg, hops, hasHops, err := serial.ParseSetAutoaddConfig(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	s.mu.Lock()
+	s.autoaddConfig = cfg
+	if hasHops {
+		s.autoaddMaxHops = hops
+	}
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
 }
 
 // getStats handles CMD_GET_STATS. The sub-type byte selects core, radio, or

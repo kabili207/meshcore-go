@@ -84,6 +84,21 @@ func ParseSetTuningParams(payload []byte) (rxDelay, airtimeFactor uint32, err er
 	return binary.LittleEndian.Uint32(payload[1:5]), binary.LittleEndian.Uint32(payload[5:9]), nil
 }
 
+// ParseSetAutoaddConfig parses a CMD_SET_AUTOADD_CONFIG frame:
+// [code][config][max_hops?]. hasMaxHops is false when the optional max-hops byte
+// is absent; when present it is clamped to 64, matching the firmware.
+func ParseSetAutoaddConfig(payload []byte) (config, maxHops uint8, hasMaxHops bool, err error) {
+	if len(payload) < 2 || payload[0] != CmdSetAutoaddConfig {
+		return 0, 0, false, ErrShortFrame
+	}
+	config = payload[1]
+	if len(payload) >= 3 {
+		maxHops = min(payload[2], 64)
+		hasMaxHops = true
+	}
+	return config, maxHops, hasMaxHops, nil
+}
+
 // ParseSetDeviceTime reads the epoch seconds from a CMD_SET_DEVICE_TIME frame.
 // The firmware only accepts a time at or after its current clock.
 func ParseSetDeviceTime(payload []byte) (epochSecs uint32, err error) {

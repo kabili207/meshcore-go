@@ -308,6 +308,18 @@ func EncodeBattAndStorage(batteryMilliVolts uint16, storageUsedKB, storageTotalK
 	return b
 }
 
+// EncodeCustomVars builds a RESP_CODE_CUSTOM_VARS payload: the code byte
+// followed by a comma-separated "name:value" list (empty for no custom vars).
+func EncodeCustomVars(vars string) []byte {
+	return append([]byte{RespCodeCustomVars}, vars...)
+}
+
+// EncodeAutoaddConfig builds a RESP_CODE_AUTOADD_CONFIG payload:
+// [code][config][max_hops].
+func EncodeAutoaddConfig(config, maxHops uint8) []byte {
+	return []byte{RespCodeAutoaddConfig, config, maxHops}
+}
+
 // EncodeTuningParams builds a RESP_CODE_TUNING_PARAMS payload (reply to
 // CMD_GET_TUNING_PARAMS): [code][rx_delay u32][airtime_factor u32], both x1000.
 func EncodeTuningParams(rxDelay, airtimeFactor uint32) []byte {
