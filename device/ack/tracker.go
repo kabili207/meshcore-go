@@ -61,9 +61,9 @@ type TrackerConfig struct {
 
 // Tracker tracks pending ACKs and handles timeouts and retries.
 type Tracker struct {
-	cfg    TrackerConfig
-	log    *slog.Logger
-	mu     sync.Mutex
+	cfg     TrackerConfig
+	log     *slog.Logger
+	mu      sync.Mutex
 	pending map[uint32]*PendingACK
 	cancel  context.CancelFunc
 

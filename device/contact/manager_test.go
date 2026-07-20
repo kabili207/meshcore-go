@@ -200,17 +200,17 @@ func TestManager_UpdateContact(t *testing.T) {
 	m.AddContact(makeContactWithID(id, "Alice", 100))
 
 	updated := &ContactInfo{
-		ID:                 id,
-		Name:               "Alice Updated",
-		Type:               0x02,
-		Flags:              FlagFavorite,
-		OutPathLen:         3,
-		OutPath:            []byte{0x01, 0x02, 0x03},
+		ID:                  id,
+		Name:                "Alice Updated",
+		Type:                0x02,
+		Flags:               FlagFavorite,
+		OutPathLen:          3,
+		OutPath:             []byte{0x01, 0x02, 0x03},
 		LastAdvertTimestamp: 2000,
-		LastMod:            200,
-		GPSLat:             37774900,
-		GPSLon:             -122419400,
-		SyncSince:          500,
+		LastMod:             200,
+		GPSLat:              37774900,
+		GPSLon:              -122419400,
+		SyncSince:           500,
 	}
 
 	if err := m.UpdateContact(updated); err != nil {
@@ -371,7 +371,7 @@ func TestManager_SearchByHash(t *testing.T) {
 	// Create contacts with the same hash (first byte) but different keys
 	id1 := makeIDWithHash(0xAA)
 	id2 := core.MeshCoreID{0xAA, 0x10, 0x20} // same hash, different key
-	id3 := makeIDWithHash(0xBB)               // different hash
+	id3 := makeIDWithHash(0xBB)              // different hash
 
 	m.AddContact(makeContactWithID(id1, "A", 1))
 	m.AddContact(makeContactWithID(id2, "B", 2))

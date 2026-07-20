@@ -89,4 +89,3 @@ func (s *Server) sendPathReturn(origPkt *codec.Packet, recipientID core.MeshCore
 		"peer", recipientID.String(),
 		"path_len", len(returnPath))
 }
-

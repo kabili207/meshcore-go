@@ -133,6 +133,10 @@ func run() error {
 		SendChannel: func(_ context.Context, channelKey []byte, text string) error {
 			return comp.SendChannelText(channelKey, text)
 		},
+		SendLogin: func(_ context.Context, to core.MeshCoreID, password string) error {
+			_, err := comp.SendLogin(to, password)
+			return err
+		},
 		ExportSelf: func() []byte {
 			builder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
 				PrivateKey: priv,

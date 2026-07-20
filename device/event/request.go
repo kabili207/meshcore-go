@@ -64,6 +64,16 @@ type LoginResponse struct {
 	// Permissions is the ACL permission byte the server granted (see
 	// codec.PermACL* constants).
 	Permissions uint8
+
+	// IsAdmin is true if the server granted admin access.
+	IsAdmin bool
+
+	// ServerTimestamp is the server's clock at login (the response tag).
+	ServerTimestamp uint32
+
+	// FirmwareVerLevel is the server's firmware version level, used by clients
+	// to gate which admin features they offer.
+	FirmwareVerLevel uint8
 }
 
 // TelemetryResponse fires when a peer answers a SendTelemetryReq. The embedded

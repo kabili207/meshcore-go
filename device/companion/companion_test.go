@@ -896,3 +896,105 @@ func TestShareContactNotFound(t *testing.T) {
 		t.Fatalf("expected NotFound, got %v", resp[0])
 	}
 }
+
+func TestSendLogin(t *testing.T) {
+	var id core.MeshCoreID
+	for i := range id {
+		id[i] = byte(i + 1)
+	}
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	var gotTo core.MeshCoreID
+	var gotPass string
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendLogin: func(_ context.Context, to core.MeshCoreID, password string) error {
+			gotTo, gotPass = to, password
+			return nil
+		},
+	})
+	payload := append([]byte{serial.CmdSendLogin}, id[:]...)
+	payload = append(payload, []byte("secret")...)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent {
+		t.Fatalf("expected SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != binary.LittleEndian.Uint32(id[:4]) {
+		t.Error("SENT expected_ack should be the target pubkey prefix")
+	}
+	if gotTo != id || gotPass != "secret" {
+		t.Errorf("SendLogin got to=%x pass=%q", gotTo, gotPass)
+	}
+}
+
+func TestSendLoginUnknownContact(t *testing.T) {
+	s := NewServer(Config{
+		Node:      &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		SendLogin: func(context.Context, core.MeshCoreID, string) error { return nil },
+	})
+	var id core.MeshCoreID
+	resp := collectResponses(t, s, cmd(append([]byte{serial.CmdSendLogin}, id[:]...)...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Fatalf("expected NotFound, got %v", resp[0])
+	}
+}
+
+func TestLoginSuccessPush(t *testing.T) {
+	var handler func(any)
+	s := NewServer(Config{
+		Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		Events: func(h func(any)) { handler = h },
+	})
+	var out bytes.Buffer
+	sess := &session{srv: s, w: &out, ctx: context.Background()}
+	s.addSession(sess)
+
+	var from core.MeshCoreID
+	from[0], from[5] = 0xAA, 0xBB
+	handler(&event.LoginResponse{
+		Event:            event.Event{From: from},
+		Permissions:      3,
+		IsAdmin:          true,
+		ServerTimestamp:  12345,
+		FirmwareVerLevel: 1,
+	})
+
+	frames := decodeFrames(&out)
+	if len(frames) != 1 || frames[0][0] != serial.PushCodeLoginSuccess || len(frames[0]) != 14 {
+		t.Fatalf("expected 14-byte LoginSuccess, got %v", frames)
+	}
+	if frames[0][1] != 1 || !bytes.Equal(frames[0][2:8], from[:6]) {
+		t.Errorf("is_admin/prefix wrong: %x", frames[0])
+	}
+	if binary.LittleEndian.Uint32(frames[0][8:12]) != 12345 || frames[0][12] != 3 || frames[0][13] != 1 {
+		t.Errorf("server_ts/acl/fw fields wrong: %x", frames[0])
+	}
+}
+
+func TestCliSendZeroAck(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x11
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	var gotType uint8
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendDM: func(_ context.Context, _ core.MeshCoreID, _ string, txtType, _ uint8, onAck func()) (bool, error) {
+			gotType = txtType
+			if onAck != nil {
+				t.Error("CLI send should not register an ACK callback")
+			}
+			return false, nil
+		},
+	})
+	payload := append([]byte{serial.CmdSendTxtMsg, serial.TxtTypeCLI, 0, 0, 0, 0, 0}, id[:6]...)
+	payload = append(payload, []byte("neighbors")...)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent {
+		t.Fatalf("expected SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 0 {
+		t.Errorf("CLI SENT expected_ack should be 0, got %d", binary.LittleEndian.Uint32(resp[0][2:6]))
+	}
+	if gotType != serial.TxtTypeCLI {
+		t.Errorf("txtType = %d, want CLI", gotType)
+	}
+}

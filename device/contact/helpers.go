@@ -128,17 +128,17 @@ func ProcessAdvert(
 
 	// Step 7: existing contact — update fields
 	updated := &ContactInfo{
-		ID:                 existing.ID,
-		Name:               advert.AppData.Name,
-		Type:               advert.AppData.NodeType,
-		Flags:              existing.Flags,
-		OutPathLen:         existing.OutPathLen,
-		OutPath:            existing.OutPath,
+		ID:                  existing.ID,
+		Name:                advert.AppData.Name,
+		Type:                advert.AppData.NodeType,
+		Flags:               existing.Flags,
+		OutPathLen:          existing.OutPathLen,
+		OutPath:             existing.OutPath,
 		LastAdvertTimestamp: advert.Timestamp,
-		LastMod:            nowTimestamp,
-		GPSLat:             existing.GPSLat,
-		GPSLon:             existing.GPSLon,
-		SyncSince:          existing.SyncSince,
+		LastMod:             nowTimestamp,
+		GPSLat:              existing.GPSLat,
+		GPSLon:              existing.GPSLon,
+		SyncSince:           existing.SyncSince,
 	}
 	if advert.AppData.HasLocation() {
 		updated.GPSLat = int32(math.Round(*advert.AppData.Lat * codec.CoordScale))
@@ -193,11 +193,11 @@ func ProcessPath(
 // This is the Go equivalent of firmware's populateContactFromAdvert().
 func populateContactFromAdvert(advert *codec.AdvertPayload, nowTimestamp uint32) *ContactInfo {
 	c := &ContactInfo{
-		Name:               advert.AppData.Name,
-		Type:               advert.AppData.NodeType,
-		OutPathLen:         PathUnknown,
+		Name:                advert.AppData.Name,
+		Type:                advert.AppData.NodeType,
+		OutPathLen:          PathUnknown,
 		LastAdvertTimestamp: advert.Timestamp,
-		LastMod:            nowTimestamp,
+		LastMod:             nowTimestamp,
 	}
 	copy(c.ID[:], advert.PubKey[:])
 

@@ -24,9 +24,9 @@ func newMockTransport() *mockTransport {
 	return &mockTransport{connected: true}
 }
 
-func (m *mockTransport) Start(_ context.Context) error            { return nil }
-func (m *mockTransport) Stop() error                               { return nil }
-func (m *mockTransport) IsConnected() bool                         { return m.connected }
+func (m *mockTransport) Start(_ context.Context) error              { return nil }
+func (m *mockTransport) Stop() error                                { return nil }
+func (m *mockTransport) IsConnected() bool                          { return m.connected }
 func (m *mockTransport) SetPacketHandler(_ transport.PacketHandler) {}
 func (m *mockTransport) SetStateHandler(_ transport.StateHandler)   {}
 

@@ -21,8 +21,8 @@ import (
 type SelfAdvertConfig struct {
 	PrivateKey ed25519.PrivateKey
 	PublicKey  [32]byte
-	Clock     *clock.Clock
-	AppData   *codec.AdvertAppData // Name, NodeType, GPS, etc.
+	Clock      *clock.Clock
+	AppData    *codec.AdvertAppData // Name, NodeType, GPS, etc.
 }
 
 // AdvertBuilder is a function that creates a self-ADVERT packet.

@@ -23,6 +23,7 @@ package companion
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"log/slog"
@@ -105,6 +106,12 @@ type Config struct {
 	// Without it, CMD_SEND_CHANNEL_TXT_MSG returns an error.
 	SendChannel func(ctx context.Context, channelKey []byte, text string) error
 
+	// SendLogin, if set, sends a login request to a remote repeater or room
+	// server (for remote admin). The login result arrives asynchronously as an
+	// event.LoginResponse, which the server pushes as LOGIN_SUCCESS. Without it,
+	// CMD_SEND_LOGIN returns an error.
+	SendLogin func(ctx context.Context, to core.MeshCoreID, password string) error
+
 	// Stats, if set, provides device statistics for GET_STATS (the app polls
 	// this). Without it, GET_STATS still answers with battery and uptime, and
 	// zeroed packet/radio counters.
@@ -145,6 +152,7 @@ type Server struct {
 	id          Identity
 	sendDM      func(ctx context.Context, to core.MeshCoreID, text string, txtType, attempt uint8, onAck func()) (bool, error)
 	sendChannel func(ctx context.Context, channelKey []byte, text string) error
+	sendLogin   func(ctx context.Context, to core.MeshCoreID, password string) error
 	stats       func() Stats
 	exportSelf  func() []byte
 	startTime   time.Time
@@ -246,6 +254,7 @@ func NewServer(cfg Config) *Server {
 		id:           id,
 		sendDM:       cfg.SendDM,
 		sendChannel:  cfg.SendChannel,
+		sendLogin:    cfg.SendLogin,
 		stats:        cfg.Stats,
 		exportSelf:   cfg.ExportSelf,
 		startTime:    time.Now(),
@@ -404,6 +413,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdSendChannelTxtMsg:
 		return s.sendChannelMsg(ss, payload)
+
+	case serial.CmdSendLogin:
+		return s.sendLoginCmd(ss, payload)
 
 	case serial.CmdGetChannel:
 		return s.getChannel(ss, payload)
@@ -594,6 +606,22 @@ func (s *Server) sendTextMsg(ss *session, payload []byte) error {
 		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 	}
 
+	// Remote-admin CLI commands are not ACKed: reply SENT with a zero
+	// expected-ack and register no confirmation. The reply returns later as a
+	// CONTACT_MSG_RECV with the CLI type, which the app routes as a cli_reply.
+	if req.TxtType == serial.TxtTypeCLI {
+		flood, err := s.sendDM(ss.ctx, ct.ID, req.Text, req.TxtType, req.Attempt, nil)
+		if err != nil {
+			s.log.Warn("cli send failed", "to", ct.ID.String(), "error", err)
+			return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+		}
+		sentType := uint8(serial.SentTypeDirect)
+		if flood {
+			sentType = serial.SentTypeFlood
+		}
+		return ss.send(serial.EncodeSent(sentType, 0, 8000))
+	}
+
 	// The app correlates its RESP_CODE_SENT.expected_ack with the later
 	// PUSH_CODE_SEND_CONFIRMED.ack_code; a server-side token keeps that pairing
 	// unique regardless of the on-air ACK CRC.
@@ -688,7 +716,40 @@ func (s *Server) handleEvent(evt any) {
 		s.enqueueChannel(e)
 	case *event.AdvertReceived:
 		s.pushAdvert(e)
+	case *event.LoginResponse:
+		s.pushLoginSuccess(e)
 	}
+}
+
+// sendLoginCmd handles CMD_SEND_LOGIN: send a login to a remote server and reply
+// SENT. The result arrives later as a LoginResponse event, pushed as
+// LOGIN_SUCCESS.
+func (s *Server) sendLoginCmd(ss *session, payload []byte) error {
+	if s.sendLogin == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	if len(payload) < 1+32 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var to core.MeshCoreID
+	copy(to[:], payload[1:33])
+	if s.node.Contacts().GetByPubKey(to) == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	password := string(payload[33:])
+	if err := s.sendLogin(ss.ctx, to, password); err != nil {
+		s.log.Warn("login send failed", "to", to.String(), "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	// The app correlates LOGIN_SUCCESS by the target's pubkey prefix; the SENT
+	// frame carries the first 4 pubkey bytes as its expected-ack (firmware parity).
+	return ss.send(serial.EncodeSent(serial.SentTypeFlood, binary.LittleEndian.Uint32(to[:4]), 12000))
+}
+
+// pushLoginSuccess emits PUSH_CODE_LOGIN_SUCCESS from a login response event.
+func (s *Server) pushLoginSuccess(e *event.LoginResponse) {
+	s.pushToSessions(serial.EncodeLoginSuccess(
+		e.From[:6], e.IsAdmin, e.ServerTimestamp, e.Permissions, e.FirmwareVerLevel))
 }
 
 // pushAdvert emits NEW_ADVERT for a first-seen contact (the full contact frame)

@@ -40,10 +40,10 @@ func TestHandleTrace_SingleHopForward(t *testing.T) {
 	// 1-byte hashes: [0xAA, 0xBB, 0xCC] — we're hop 0
 	pkt := makeTracePacket(
 		[]byte{0xAA, 0xBB, 0xCC}, // pathHashes
-		0x00,                      // flags: 1-byte hashes
-		0,                         // pathLen: no hops yet
-		nil,                       // path: empty
-		40,                        // SNR: 10.0 dB raw
+		0x00,                     // flags: 1-byte hashes
+		0,                        // pathLen: no hops yet
+		nil,                      // path: empty
+		40,                       // SNR: 10.0 dB raw
 	)
 
 	r.HandlePacket(pkt, transport.PacketSourceSerial)

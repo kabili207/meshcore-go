@@ -46,7 +46,7 @@ type ContactInfo struct {
 
 	// Timestamps
 	LastAdvertTimestamp uint32 // Peer's clock timestamp from their last ADVERT
-	LastMod            uint32 // Our clock time when contact was last modified
+	LastMod             uint32 // Our clock time when contact was last modified
 
 	// Location (stored as integer × 1,000,000, matching firmware int32)
 	GPSLat int32

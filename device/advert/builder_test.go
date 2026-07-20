@@ -28,7 +28,7 @@ func makeSelfAdvertConfig(t *testing.T, name string, nodeType uint8) (*SelfAdver
 	cfg := &SelfAdvertConfig{
 		PrivateKey: kp.PrivateKey,
 		PublicKey:  pubKey,
-		Clock:     clk,
+		Clock:      clk,
 		AppData: &codec.AdvertAppData{
 			NodeType: nodeType,
 			Name:     name,

@@ -12,6 +12,13 @@ const (
 	AdvTypeSensor   = 4
 )
 
+// Text message types (firmware TXT_TYPE_*) in SEND_TXT_MSG and CONTACT_MSG_RECV.
+const (
+	TxtTypePlain  = 0
+	TxtTypeCLI    = 1 // remote-admin CLI command / reply
+	TxtTypeSigned = 2
+)
+
 // CompanionFirmwareVerCode is the FIRMWARE_VER_CODE the device reports as byte 1
 // of DEVICE_INFO. 13 corresponds to firmware v1.16.0 and gates which features
 // the phone apps enable.
@@ -224,6 +231,22 @@ func EncodeSent(sentType uint8, expectedAck, estTimeoutMs uint32) []byte {
 	b[1] = sentType
 	binary.LittleEndian.PutUint32(b[2:6], expectedAck)
 	binary.LittleEndian.PutUint32(b[6:10], estTimeoutMs)
+	return b
+}
+
+// EncodeLoginSuccess builds a PUSH_CODE_LOGIN_SUCCESS payload (new 14-byte
+// form): [code][is_admin][pubkey_prefix 6][server_ts u32][acl_perms][fw_ver_level].
+// The app correlates it to a pending login by the pubkey prefix.
+func EncodeLoginSuccess(pubKeyPrefix []byte, isAdmin bool, serverTimestamp uint32, aclPerms, fwVerLevel uint8) []byte {
+	b := make([]byte, 14)
+	b[0] = PushCodeLoginSuccess
+	if isAdmin {
+		b[1] = 1
+	}
+	copy(b[2:8], pubKeyPrefix)
+	binary.LittleEndian.PutUint32(b[8:12], serverTimestamp)
+	b[12] = aclPerms
+	b[13] = fwVerLevel
 	return b
 }
 

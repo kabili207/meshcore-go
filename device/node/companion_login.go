@@ -134,11 +134,17 @@ func (n *CompanionNode) handleLoginResponse(e *event.ResponseReceived) {
 	if !pending {
 		return
 	}
-	// Login-OK content: resp_type(1) + legacy(1) + admin(1) + perms(1) + ...
+	// Login-OK content: resp_type(1) + keepalive(1) + admin(1) + perms(1) +
+	// random(4) + fw_ver_level(1). See buildRepeaterLoginResponse.
 	if len(e.Content) < 4 || e.Content[0] != codec.RespServerLoginOK {
 		return
 	}
+	isAdmin := e.Content[2] != 0
 	perms := e.Content[3]
+	var fwVerLevel uint8
+	if len(e.Content) >= 9 {
+		fwVerLevel = e.Content[8]
+	}
 
 	n.pendingMu.Lock()
 	delete(n.pendingLogins, e.From)
@@ -146,8 +152,11 @@ func (n *CompanionNode) handleLoginResponse(e *event.ResponseReceived) {
 
 	n.connections.Register(e.From)
 	n.base.emitEvent(&event.LoginResponse{
-		Event:       event.Event{From: e.From, Timestamp: time.Now()},
-		Permissions: perms,
+		Event:            event.Event{From: e.From, Timestamp: time.Now()},
+		Permissions:      perms,
+		IsAdmin:          isAdmin,
+		ServerTimestamp:  e.Tag,
+		FirmwareVerLevel: fwVerLevel,
 	})
 	n.log.Info("logged in to server", "peer", e.From.String(), "perms", perms)
 }

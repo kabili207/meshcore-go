@@ -78,7 +78,7 @@ func TestSendQueue_DelayedItems(t *testing.T) {
 	ready := makeTestPacket(codec.PayloadTypeAck)
 
 	q.Push(delayed, 0, 100*time.Millisecond, 0, true) // high priority but delayed
-	q.Push(ready, 5, 0, 0, true)                       // low priority but ready now
+	q.Push(ready, 5, 0, 0, true)                      // low priority but ready now
 
 	// The delayed item shouldn't be returned yet
 	got := q.Pop()
