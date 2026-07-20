@@ -308,6 +308,16 @@ func EncodeBattAndStorage(batteryMilliVolts uint16, storageUsedKB, storageTotalK
 	return b
 }
 
+// EncodeTuningParams builds a RESP_CODE_TUNING_PARAMS payload (reply to
+// CMD_GET_TUNING_PARAMS): [code][rx_delay u32][airtime_factor u32], both x1000.
+func EncodeTuningParams(rxDelay, airtimeFactor uint32) []byte {
+	b := make([]byte, 9)
+	b[0] = RespCodeTuningParams
+	binary.LittleEndian.PutUint32(b[1:5], rxDelay)
+	binary.LittleEndian.PutUint32(b[5:9], airtimeFactor)
+	return b
+}
+
 // EncodeStatsCore builds a RESP_CODE_STATS / STATS_TYPE_CORE payload:
 // [code][type][battery_mv u16][uptime_secs u32][err_flags u16][queue_len u8].
 func EncodeStatsCore(batteryMilliVolts uint16, uptimeSecs uint32, errFlags uint16, queueLen uint8) []byte {

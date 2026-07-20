@@ -145,6 +145,16 @@ type Server struct {
 	name     string         // current advertised name; SET_ADVERT_NAME updates it
 	channels []channelEntry // group channels by index; [0] is Public
 
+	// Mutable radio/tuning params reported in SELF_INFO and GET_TUNING_PARAMS.
+	// Freq is kHz, Bw is Hz (matching SELF_INFO); rx/airtime are x1000.
+	radioFreqKHz  uint32
+	radioBwHz     uint32
+	radioSF       uint8
+	radioCR       uint8
+	txPower       uint8
+	rxDelay       uint32
+	airtimeFactor uint32
+
 	ackCounter atomic.Uint32 // per-send correlation token for SENT/SEND_CONFIRMED
 
 	msgMu    sync.Mutex            // guards queue and sessions
@@ -204,6 +214,12 @@ func NewServer(cfg Config) *Server {
 	if id.BatteryMilliVolts == 0 {
 		id.BatteryMilliVolts = 4200
 	}
+	if id.MaxTxPower == 0 {
+		id.MaxTxPower = 22
+	}
+	if id.TxPower == 0 {
+		id.TxPower = 20
+	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
@@ -214,16 +230,21 @@ func NewServer(cfg Config) *Server {
 	channels[0] = channelEntry{name: "Public", secret: crypto.DefaultChannelKey}
 
 	s := &Server{
-		node:        cfg.Node,
-		id:          id,
-		sendDM:      cfg.SendDM,
-		sendChannel: cfg.SendChannel,
-		stats:       cfg.Stats,
-		startTime:   time.Now(),
-		log:         log.WithGroup("companion"),
-		name:        id.Name,
-		channels:    channels,
-		sessions:    make(map[*session]struct{}),
+		node:         cfg.Node,
+		id:           id,
+		sendDM:       cfg.SendDM,
+		sendChannel:  cfg.SendChannel,
+		stats:        cfg.Stats,
+		startTime:    time.Now(),
+		log:          log.WithGroup("companion"),
+		name:         id.Name,
+		channels:     channels,
+		radioFreqKHz: uint32(math.Round(id.RadioFreqMHz * 1000)),
+		radioBwHz:    uint32(math.Round(id.RadioBWkHz * 1000)),
+		radioSF:      id.RadioSF,
+		radioCR:      id.RadioCR,
+		txPower:      id.TxPower,
+		sessions:     make(map[*session]struct{}),
 	}
 	if cfg.Events != nil {
 		cfg.Events(s.handleEvent)
@@ -385,6 +406,18 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 	case serial.CmdGetStats:
 		return s.getStats(ss, payload)
 
+	case serial.CmdSetRadioParams:
+		return s.setRadioParams(ss, payload)
+
+	case serial.CmdSetRadioTxPower:
+		return s.setTxPower(ss, payload)
+
+	case serial.CmdSetTuningParams:
+		return s.setTuningParams(ss, payload)
+
+	case serial.CmdGetTuningParams:
+		return s.getTuningParams(ss)
+
 	case serial.CmdSyncNextMessage:
 		return s.sendNextMessage(ss)
 
@@ -413,30 +446,26 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 	}
 }
 
-// selfInfo builds the SELF_INFO reply from the node's key and configured identity.
+// selfInfo builds the SELF_INFO reply from the node's key and the current
+// (mutable) identity: name and radio params may have been changed by SET_*
+// commands since construction.
 func (s *Server) selfInfo() []byte {
+	s.mu.RLock()
 	si := &serial.SelfInfo{
 		AdvType:    s.id.AdvType,
-		TxPower:    s.id.TxPower,
+		TxPower:    s.txPower,
 		MaxTxPower: s.id.MaxTxPower,
 		PublicKey:  s.node.PublicKey(),
 		AdvLat:     degToFixed(s.id.Lat),
 		AdvLon:     degToFixed(s.id.Lon),
-		RadioFreq:  uint32(math.Round(s.id.RadioFreqMHz * 1000)), // MHz -> kHz
-		RadioBw:    uint32(math.Round(s.id.RadioBWkHz * 1000)),   // kHz -> Hz
-		RadioSf:    s.id.RadioSF,
-		RadioCr:    s.id.RadioCR,
-		Name:       s.currentName(),
+		RadioFreq:  s.radioFreqKHz,
+		RadioBw:    s.radioBwHz,
+		RadioSf:    s.radioSF,
+		RadioCr:    s.radioCR,
+		Name:       s.name,
 	}
+	s.mu.RUnlock()
 	return si.Encode()
-}
-
-// currentName returns the node's advertised name, which SET_ADVERT_NAME may have
-// updated since construction.
-func (s *Server) currentName() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.name
 }
 
 // setName updates the advertised name reported in subsequent SELF_INFO replies.
@@ -865,6 +894,58 @@ func (s *Server) getContactByKey(ss *session, payload []byte) error {
 		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 	}
 	return ss.send(contactToWire(ct).Encode())
+}
+
+// setRadioParams handles CMD_SET_RADIO_PARAMS, validating and storing the radio
+// parameters reported in SELF_INFO. It uses the firmware's validation ranges.
+func (s *Server) setRadioParams(ss *session, payload []byte) error {
+	rp, err := serial.ParseSetRadioParams(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	if rp.Freq < 150000 || rp.Freq > 2500000 || rp.Bw < 7000 || rp.Bw > 500000 ||
+		rp.SF < 5 || rp.SF > 12 || rp.CR < 5 || rp.CR > 8 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	s.mu.Lock()
+	s.radioFreqKHz, s.radioBwHz, s.radioSF, s.radioCR = rp.Freq, rp.Bw, rp.SF, rp.CR
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
+}
+
+// setTxPower handles CMD_SET_RADIO_TX_POWER.
+func (s *Server) setTxPower(ss *session, payload []byte) error {
+	power, err := serial.ParseSetTxPower(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	if power < -9 || power > int8(s.id.MaxTxPower) {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	s.mu.Lock()
+	s.txPower = uint8(power)
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
+}
+
+// setTuningParams handles CMD_SET_TUNING_PARAMS.
+func (s *Server) setTuningParams(ss *session, payload []byte) error {
+	rx, af, err := serial.ParseSetTuningParams(payload)
+	if err != nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	s.mu.Lock()
+	s.rxDelay, s.airtimeFactor = rx, af
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
+}
+
+// getTuningParams handles CMD_GET_TUNING_PARAMS.
+func (s *Server) getTuningParams(ss *session) error {
+	s.mu.RLock()
+	rx, af := s.rxDelay, s.airtimeFactor
+	s.mu.RUnlock()
+	return ss.send(serial.EncodeTuningParams(rx, af))
 }
 
 // getStats handles CMD_GET_STATS. The sub-type byte selects core, radio, or

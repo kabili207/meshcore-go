@@ -702,3 +702,76 @@ func TestSetChannel256BitUnsupported(t *testing.T) {
 		t.Fatalf("expected UnsupportedCmd, got %v", resp[0])
 	}
 }
+
+func selfInfoAfter(t *testing.T, s *Server, setup []byte) []byte {
+	t.Helper()
+	appStart := cmd(append([]byte{serial.CmdAppStart, 0, 0, 0, 0, 0, 0, 0}, 'x')...)
+	resp := collectResponses(t, s, append(setup, appStart...))
+	return resp[len(resp)-1] // the SELF_INFO reply
+}
+
+func TestSetRadioParams(t *testing.T) {
+	s, _ := newTestServer()
+	pl := []byte{serial.CmdSetRadioParams}
+	pl = binary.LittleEndian.AppendUint32(pl, 868000) // 868 MHz
+	pl = binary.LittleEndian.AppendUint32(pl, 125000) // 125 kHz
+	pl = append(pl, 9, 6)                             // sf=9 cr=6
+
+	resp := collectResponses(t, s, cmd(pl...))
+	if resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("expected OK, got %v", resp[0])
+	}
+
+	si := selfInfoAfter(t, s, cmd(pl...)) // apply again, then read SELF_INFO
+	if binary.LittleEndian.Uint32(si[48:52]) != 868000 || binary.LittleEndian.Uint32(si[52:56]) != 125000 {
+		t.Errorf("radio freq/bw not reflected in SELF_INFO")
+	}
+	if si[56] != 9 || si[57] != 6 {
+		t.Errorf("sf/cr = %d/%d, want 9/6", si[56], si[57])
+	}
+}
+
+func TestSetRadioParamsInvalid(t *testing.T) {
+	s, _ := newTestServer()
+	pl := []byte{serial.CmdSetRadioParams}
+	pl = binary.LittleEndian.AppendUint32(pl, 100) // freq far too low
+	pl = binary.LittleEndian.AppendUint32(pl, 125000)
+	pl = append(pl, 9, 6)
+	resp := collectResponses(t, s, cmd(pl...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeIllegalArg {
+		t.Fatalf("expected IllegalArg, got %v", resp[0])
+	}
+}
+
+func TestSetTxPower(t *testing.T) {
+	s, _ := newTestServer()
+	if resp := collectResponses(t, s, cmd(serial.CmdSetRadioTxPower, 15)); resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("set tx power: expected OK, got %v", resp[0])
+	}
+	si := selfInfoAfter(t, s, nil)
+	if si[2] != 15 {
+		t.Errorf("SELF_INFO tx power = %d, want 15", si[2])
+	}
+	// Out of range.
+	resp := collectResponses(t, s, cmd(serial.CmdSetRadioTxPower, 100))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeIllegalArg {
+		t.Errorf("tx=100: expected IllegalArg, got %v", resp[0])
+	}
+}
+
+func TestTuningParamsRoundtrip(t *testing.T) {
+	s, _ := newTestServer()
+	pl := []byte{serial.CmdSetTuningParams}
+	pl = binary.LittleEndian.AppendUint32(pl, 1500)
+	pl = binary.LittleEndian.AppendUint32(pl, 2500)
+	if resp := collectResponses(t, s, cmd(pl...)); resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("set tuning: expected OK, got %v", resp[0])
+	}
+	resp := collectResponses(t, s, cmd(serial.CmdGetTuningParams))
+	if resp[0][0] != serial.RespCodeTuningParams || len(resp[0]) != 9 {
+		t.Fatalf("get tuning: got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][1:5]) != 1500 || binary.LittleEndian.Uint32(resp[0][5:9]) != 2500 {
+		t.Errorf("tuning params mismatch: %x", resp[0][1:9])
+	}
+}

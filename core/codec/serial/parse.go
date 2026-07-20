@@ -43,6 +43,47 @@ func ParseGetContactsSince(payload []byte) (since uint32, hasSince bool) {
 	return 0, false
 }
 
+// RadioParams is a parsed CMD_SET_RADIO_PARAMS frame. Freq is in kHz
+// (freq_MHz*1000) and Bw in Hz (bw_kHz*1000), matching SELF_INFO.
+type RadioParams struct {
+	Freq uint32
+	Bw   uint32
+	SF   uint8
+	CR   uint8
+}
+
+// ParseSetRadioParams parses a CMD_SET_RADIO_PARAMS frame:
+// [code][freq u32][bw u32][sf u8][cr u8][repeat u8?]. The optional repeat byte
+// (a repeater feature) is ignored.
+func ParseSetRadioParams(payload []byte) (*RadioParams, error) {
+	if len(payload) < 1+4+4+1+1 || payload[0] != CmdSetRadioParams {
+		return nil, ErrShortFrame
+	}
+	return &RadioParams{
+		Freq: binary.LittleEndian.Uint32(payload[1:5]),
+		Bw:   binary.LittleEndian.Uint32(payload[5:9]),
+		SF:   payload[9],
+		CR:   payload[10],
+	}, nil
+}
+
+// ParseSetTxPower reads the signed tx power (dBm) from a CMD_SET_RADIO_TX_POWER frame.
+func ParseSetTxPower(payload []byte) (int8, error) {
+	if len(payload) < 2 || payload[0] != CmdSetRadioTxPower {
+		return 0, ErrShortFrame
+	}
+	return int8(payload[1]), nil
+}
+
+// ParseSetTuningParams reads rx-delay and airtime-factor (both x1000) from a
+// CMD_SET_TUNING_PARAMS frame.
+func ParseSetTuningParams(payload []byte) (rxDelay, airtimeFactor uint32, err error) {
+	if len(payload) < 1+4+4 || payload[0] != CmdSetTuningParams {
+		return 0, 0, ErrShortFrame
+	}
+	return binary.LittleEndian.Uint32(payload[1:5]), binary.LittleEndian.Uint32(payload[5:9]), nil
+}
+
 // ParseSetDeviceTime reads the epoch seconds from a CMD_SET_DEVICE_TIME frame.
 // The firmware only accepts a time at or after its current clock.
 func ParseSetDeviceTime(payload []byte) (epochSecs uint32, err error) {
