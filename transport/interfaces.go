@@ -70,6 +70,8 @@ const (
 	PacketSourceSerial
 	// PacketSourceLocal indicates the packet was originated by this node (TX).
 	PacketSourceLocal
+	// PacketSourceUDP indicates the packet came from a UDP multicast connection.
+	PacketSourceUDP
 )
 
 func (s PacketSource) String() string {
@@ -80,6 +82,8 @@ func (s PacketSource) String() string {
 		return "serial"
 	case PacketSourceLocal:
 		return "local"
+	case PacketSourceUDP:
+		return "udp"
 	default:
 		return "unknown"
 	}

@@ -39,6 +39,7 @@ import (
 	"github.com/kabili207/meshcore-go/transport"
 	mqtttransport "github.com/kabili207/meshcore-go/transport/mqtt"
 	serialtransport "github.com/kabili207/meshcore-go/transport/serial"
+	udptransport "github.com/kabili207/meshcore-go/transport/udp"
 )
 
 func main() {
@@ -64,6 +65,11 @@ func run() error {
 		mqttPass   = flag.String("mqtt-pass", "", "MQTT password (optional)")
 		mqttTLS    = flag.Bool("mqtt-tls", false, "use TLS for the MQTT connection")
 
+		udpEnable = flag.Bool("udp", false, "enable the UDP multicast bridge transport")
+		udpGroup  = flag.String("udp-group", udptransport.DefaultGroupAddress, "UDP multicast group address")
+		udpPort   = flag.Int("udp-port", udptransport.DefaultPort, "UDP multicast port")
+		udpIface  = flag.String("udp-iface", "", "network interface for UDP multicast (optional, e.g. eth0)")
+
 		freq = flag.Float64("freq", 915.0, "radio frequency in MHz (reported to the app)")
 		bw   = flag.Float64("bw", 250, "radio bandwidth in kHz (reported to the app)")
 		sf   = flag.Int("sf", 11, "radio spreading factor (reported to the app)")
@@ -79,13 +85,22 @@ func run() error {
 	pub := priv.Public().(ed25519.PublicKey)
 	nodeID := hex.EncodeToString(pub)
 
+	var udpCfg *udptransport.Config
+	if *udpEnable {
+		udpCfg = &udptransport.Config{
+			GroupAddress: *udpGroup,
+			Port:         *udpPort,
+			Interface:    *udpIface,
+		}
+	}
+
 	transports, err := buildTransports(*serialPort, *baud, mqtttransport.Config{
 		Broker:   *mqttBroker,
 		Topic:    *mqttTopic,
 		Username: *mqttUser,
 		Password: *mqttPass,
 		UseTLS:   *mqttTLS,
-	}, nodeID)
+	}, udpCfg, nodeID)
 	if err != nil {
 		slog.Error("Failed to configure transport", "error", err)
 		return err
@@ -211,7 +226,7 @@ func run() error {
 // empty result is valid: the node then serves the companion protocol without a
 // live mesh connection. mqttCfg is used only when its Broker is set; NodeID and
 // Logger are filled in here.
-func buildTransports(serialPort string, baud int, mqttCfg mqtttransport.Config, nodeID string) ([]node.TransportOption, error) {
+func buildTransports(serialPort string, baud int, mqttCfg mqtttransport.Config, udpCfg *udptransport.Config, nodeID string) ([]node.TransportOption, error) {
 	var transports []node.TransportOption
 
 	if serialPort != "" {
@@ -235,6 +250,16 @@ func buildTransports(serialPort string, baud int, mqttCfg mqtttransport.Config, 
 			Transport: mt,
 			Source:    transport.PacketSourceMQTT,
 			Name:      "mqtt",
+		})
+	}
+
+	if udpCfg != nil {
+		udpCfg.Logger = slog.Default()
+		ut := udptransport.New(*udpCfg)
+		transports = append(transports, node.TransportOption{
+			Transport: ut,
+			Source:    transport.PacketSourceUDP,
+			Name:      "udp",
 		})
 	}
 
