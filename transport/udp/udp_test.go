@@ -2,6 +2,7 @@ package udp
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"sync"
 	"testing"
@@ -196,5 +197,21 @@ func TestMulticastRoundTrip(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Skip("multicast datagram not delivered in this environment")
+	}
+}
+
+func TestLoggerNilSafe(t *testing.T) {
+	// The tests here build &Transport{} directly, bypassing New's logger
+	// default, so every log call on the receive path must tolerate a nil
+	// t.log. A regression makes processDatagram panic on malformed input.
+	tr := &Transport{}
+	if tr.logger() == nil {
+		t.Fatal("logger() returned nil for a zero-value Transport")
+	}
+
+	// A configured logger must be returned as-is, not replaced by the default.
+	built := New(Config{Logger: slog.New(slog.DiscardHandler)})
+	if built.logger() != built.log {
+		t.Error("logger() did not return the configured logger")
 	}
 }

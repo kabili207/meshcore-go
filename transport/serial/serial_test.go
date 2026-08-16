@@ -1,6 +1,7 @@
 package serial
 
 import (
+	"log/slog"
 	"sync"
 	"testing"
 
@@ -254,5 +255,20 @@ func TestNew_Defaults(t *testing.T) {
 	}
 	if tr.log == nil {
 		t.Error("expected logger to be set")
+	}
+}
+
+func TestLoggerNilSafe(t *testing.T) {
+	// The tests here build &Transport{} directly, bypassing New's logger
+	// default, so every log call on the receive path must tolerate a nil t.log.
+	tr := &Transport{}
+	if tr.logger() == nil {
+		t.Fatal("logger() returned nil for a zero-value Transport")
+	}
+
+	// A configured logger must be returned as-is, not replaced by the default.
+	built := New(Config{Logger: slog.New(slog.DiscardHandler)})
+	if built.logger() != built.log {
+		t.Error("logger() did not return the configured logger")
 	}
 }

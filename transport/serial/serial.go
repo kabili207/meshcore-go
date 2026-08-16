@@ -67,6 +67,16 @@ func New(cfg Config) *Transport {
 	}
 }
 
+// logger returns the configured logger, falling back to the default. A
+// zero-value Transport has no logger, so the receive path must not assume New
+// was used to build it.
+func (t *Transport) logger() *slog.Logger {
+	if t.log == nil {
+		return slog.Default()
+	}
+	return t.log
+}
+
 // Start opens the serial port and begins reading packets.
 func (t *Transport) Start(ctx context.Context) error {
 	if t.cfg.Port == "" {
@@ -94,7 +104,7 @@ func (t *Transport) Start(ctx context.Context) error {
 
 	go t.readLoop(readCtx)
 
-	t.log.Info("connected to serial port", "port", t.cfg.Port, "baud", t.cfg.BaudRate)
+	t.logger().Info("connected to serial port", "port", t.cfg.Port, "baud", t.cfg.BaudRate)
 
 	if handler != nil {
 		handler(t, transport.EventConnected)
@@ -206,7 +216,7 @@ func (t *Transport) readLoop(ctx context.Context) {
 				t.handleDisconnect(err)
 				return
 			}
-			t.log.Error("serial read error", "error", err)
+			t.logger().Error("serial read error", "error", err)
 			t.handleDisconnect(err)
 			return
 		}
@@ -242,7 +252,7 @@ func (t *Transport) processFrames(data []byte) []byte {
 
 		var packet codec.Packet
 		if err := packet.ReadFrom(frame.Payload); err != nil {
-			t.log.Debug("failed to parse MeshCore packet from frame", "error", err)
+			t.logger().Debug("failed to parse MeshCore packet from frame", "error", err)
 			continue
 		}
 
@@ -277,7 +287,7 @@ func (t *Transport) handleDisconnect(err error) {
 	t.mu.Unlock()
 
 	if err != nil {
-		t.log.Error("serial disconnected", "error", err)
+		t.logger().Error("serial disconnected", "error", err)
 	}
 
 	if handler != nil {

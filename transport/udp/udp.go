@@ -84,6 +84,16 @@ func New(cfg Config) *Transport {
 	}
 }
 
+// logger returns the configured logger, falling back to the default. A
+// zero-value Transport has no logger, so the receive path must not assume New
+// was used to build it.
+func (t *Transport) logger() *slog.Logger {
+	if t.log == nil {
+		return slog.Default()
+	}
+	return t.log
+}
+
 // Start joins the multicast group and begins reading packets.
 func (t *Transport) Start(ctx context.Context) error {
 	groupIP := net.ParseIP(t.cfg.GroupAddress)
@@ -124,7 +134,7 @@ func (t *Transport) Start(ctx context.Context) error {
 	if err := conn.SetMulticastLoopback(false); err != nil {
 		// Not fatal: the router still drops echoes via source exclusion and
 		// packet dedup. Log and continue.
-		t.log.Warn("failed to disable multicast loopback", "error", err)
+		t.logger().Warn("failed to disable multicast loopback", "error", err)
 	}
 
 	t.mu.Lock()
@@ -140,7 +150,7 @@ func (t *Transport) Start(ctx context.Context) error {
 
 	go t.readLoop(readCtx)
 
-	t.log.Info("joined multicast group", "group", t.cfg.GroupAddress, "port", t.cfg.Port, "interface", t.cfg.Interface)
+	t.logger().Info("joined multicast group", "group", t.cfg.GroupAddress, "port", t.cfg.Port, "interface", t.cfg.Interface)
 
 	if handler != nil {
 		handler(t, transport.EventConnected)
@@ -248,7 +258,7 @@ func (t *Transport) readLoop(ctx context.Context) {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return // context cancelled or connection closed, clean shutdown
 			}
-			t.log.Error("udp read error", "error", err)
+			t.logger().Error("udp read error", "error", err)
 			t.handleDisconnect(err)
 			return
 		}
@@ -268,14 +278,14 @@ func (t *Transport) processDatagram(data []byte) {
 	for len(data) >= codec.MinFrameSize {
 		frame, remaining, err := codec.DecodeRS232Frame(data)
 		if err != nil {
-			t.log.Debug("dropping malformed datagram", "error", err)
+			t.logger().Debug("dropping malformed datagram", "error", err)
 			return
 		}
 		data = remaining
 
 		var packet codec.Packet
 		if err := packet.ReadFrom(frame.Payload); err != nil {
-			t.log.Debug("failed to parse MeshCore packet from frame", "error", err)
+			t.logger().Debug("failed to parse MeshCore packet from frame", "error", err)
 			continue
 		}
 
@@ -296,7 +306,7 @@ func (t *Transport) handleDisconnect(err error) {
 	t.mu.Unlock()
 
 	if err != nil {
-		t.log.Error("udp disconnected", "error", err)
+		t.logger().Error("udp disconnected", "error", err)
 	}
 
 	if handler != nil {
