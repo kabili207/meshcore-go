@@ -79,6 +79,12 @@ type ReplyContext struct {
 	// PathHashSize is the hash size (1, 2, or 3 bytes) from the incoming
 	// flood packet. Used when building PATH return packets.
 	PathHashSize uint8
+
+	// ReplyScope is the transport key a flooded reply should be scoped with,
+	// already resolved from the request (see router.ResolveReplyScope). A zero
+	// value means send un-scoped. It is a raw key rather than a router type so
+	// this package stays free of a dependency on the router.
+	ReplyScope [16]byte
 }
 
 // HasFloodPath returns true if the original packet arrived via flood routing

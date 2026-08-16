@@ -42,7 +42,7 @@ func (s *Server) sendEncryptedResponse(origPkt *codec.Packet, recipientID core.M
 	if ct != nil && ct.HasDirectPath() {
 		s.cfg.Router.SendDirect(pkt, ct.OutPath)
 	} else {
-		s.cfg.Router.SendFloodScoped(pkt)
+		s.cfg.Router.SendFloodReply(pkt, origPkt)
 	}
 }
 
@@ -83,7 +83,7 @@ func (s *Server) sendPathReturn(origPkt *codec.Packet, recipientID core.MeshCore
 		Header:  codec.PayloadTypePath << codec.PHTypeShift,
 		Payload: payload,
 	}
-	s.cfg.Router.SendFloodPathScoped(pkt)
+	s.cfg.Router.SendFloodPathReply(pkt, origPkt)
 
 	s.log.Debug("sent path return",
 		"peer", recipientID.String(),

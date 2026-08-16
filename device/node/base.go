@@ -271,7 +271,7 @@ func (b *BaseNode) sendEncryptedResponse(reply event.ReplyContext, to core.MeshC
 	if reply.HasDirectPath() {
 		b.Router.SendDirect(pkt, reply.DirectPath)
 	} else {
-		b.Router.SendFloodScoped(pkt)
+		b.Router.SendFloodWithKey(pkt, reply.ReplyScope)
 	}
 	return nil
 }
@@ -294,7 +294,7 @@ func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, 
 	payload := codec.BuildAddressedPayload(to.Hash(), b.id.Hash(), mac, ciphertext)
 	pkt := codec.NewPacket(codec.PayloadTypePath, codec.RouteTypeFlood, payload)
 
-	b.Router.SendFloodPathScoped(pkt)
+	b.Router.SendFloodPathWithKey(pkt, reply.ReplyScope)
 	return nil
 }
 
@@ -387,6 +387,9 @@ func (b *BaseNode) buildReplyContext(pkt *codec.Packet, ct *contact.ContactInfo,
 	reply := event.ReplyContext{
 		SharedSecret:  secret,
 		DirectPathLen: ct.OutPathLen,
+		// Resolve here, while the request packet is in hand: the transport code
+		// is an HMAC over its payload and cannot be matched later.
+		ReplyScope: b.Router.ResolveReplyScope(pkt),
 	}
 	if ct.HasDirectPath() {
 		reply.DirectPath = make([]byte, len(ct.OutPath))

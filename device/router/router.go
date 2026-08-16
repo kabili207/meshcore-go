@@ -132,6 +132,17 @@ type Config struct {
 	// send_scope. Default: null key (unscoped).
 	SendScope TransportKey
 
+	// DefaultReplyScope is the fallback scope for a flooded reply whose request
+	// scope cannot be determined: the request arrived DIRECT (no transport
+	// codes), or its code matched no configured region. Without it such a reply
+	// goes out un-scoped and is dropped at hop 0 by any repeater running
+	// flood.max.unscoped=0. Mirrors the firmware's default_scope.
+	//
+	// A reply to a request that arrived on a known scope always mirrors that
+	// scope instead, and a request that was deliberately un-scoped is answered
+	// un-scoped. Falls back to SendScope when null. See ResolveReplyScope.
+	DefaultReplyScope TransportKey
+
 	// RegionMap, when set, applies region policy to flood forwarding: a scoped
 	// TRANSPORT_FLOOD is forwarded only if it matches a flood-permitting region,
 	// and an unscoped FLOOD is forwarded only if the wildcard region permits
@@ -785,13 +796,47 @@ func (r *Router) SendFloodPathScoped(pkt *codec.Packet) {
 	r.sendScopedFlood(pkt, PriorityFloodPath, PathSendDelay)
 }
 
+// SendFloodReply floods a reply, scoping it to match the request in origPkt
+// (see ResolveReplyScope). Use this instead of SendFloodScoped whenever the
+// packet answers a received request, so the reply reaches the requester through
+// the same region the request came from.
+//
+// Mirrors the firmware's sendFloodReply.
+func (r *Router) SendFloodReply(pkt *codec.Packet, origPkt *codec.Packet) {
+	r.sendFloodWithScope(pkt, r.ResolveReplyScope(origPkt), PriorityFloodData, 0)
+}
+
+// SendFloodPathReply is the PATH counterpart of SendFloodReply: a PATH return
+// scoped to match the request that prompted it.
+func (r *Router) SendFloodPathReply(pkt *codec.Packet, origPkt *codec.Packet) {
+	r.sendFloodWithScope(pkt, r.ResolveReplyScope(origPkt), PriorityFloodPath, PathSendDelay)
+}
+
+// SendFloodWithKey floods a packet scoped to an already-resolved key, for
+// callers that resolved the reply scope earlier (see event.ReplyContext). A
+// zero key sends un-scoped.
+func (r *Router) SendFloodWithKey(pkt *codec.Packet, key [16]byte) {
+	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodData, 0)
+}
+
+// SendFloodPathWithKey is the PATH counterpart of SendFloodWithKey.
+func (r *Router) SendFloodPathWithKey(pkt *codec.Packet, key [16]byte) {
+	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodPath, PathSendDelay)
+}
+
 // sendScopedFlood is the shared implementation for the scoped flood senders.
 // With a null scope it produces an ordinary RouteTypeFlood packet; with a scope
 // set it produces a RouteTypeTransportFlood packet whose transport_codes[0] is
 // the scope's code for this packet and transport_codes[1] is 0 (matching the
 // firmware, which reserves [1] as the reply-region hint, currently unused).
 func (r *Router) sendScopedFlood(pkt *codec.Packet, priority uint8, delay time.Duration) {
-	scope := r.cfg.SendScope
+	r.sendFloodWithScope(pkt, r.cfg.SendScope, priority, delay)
+}
+
+// sendFloodWithScope is sendScopedFlood with the scope supplied by the caller,
+// used by the reply senders to mirror a request's scope instead of this node's
+// configured send scope.
+func (r *Router) sendFloodWithScope(pkt *codec.Packet, scope TransportKey, priority uint8, delay time.Duration) {
 	scoped := !scope.IsNull()
 
 	routeType := uint8(codec.RouteTypeFlood)
