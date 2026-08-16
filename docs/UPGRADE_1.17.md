@@ -28,8 +28,8 @@ plus one routing fix (below).
 
 Five findings, ordered by how much they matter here.
 
-> **Status:** items 1, 2, and 4 are done (commits `c9ce9da`, `8e1f0fc`, `3178c50`).
-> Item 3 (scoped reply routing) and item 5 (anon-slot review) are still open.
+> **Status:** all five items are done. See "Remaining work" at the end for the
+> commit list and what was deliberately left out.
 
 ### 1. Dedup split into `wasSeen()` / `markSeen()` — we already did this
 
@@ -116,10 +116,19 @@ stored path, then flood — which matches `chooseReplyRoute` for the flood and
 supplied-path cases. The gap is the `REPLY_ROUTE_DIRECT_OUT_PATH` case for anon
 requests.
 
-**Action:** the reply-scope work is the larger of the two and the more visible on a
-real mesh with scoped regions. Needs a `DefaultScope` config, plumbing the request's
-resolved region into the reply context, and a `chooseReplyScope` equivalent. Worth
-scheduling, but it is a design change, not a patch.
+**Done** (`315bf6a`), reply-scope half only. Added `Config.DefaultReplyScope`,
+a `ChooseReplyScope` port, and `SendFloodReply`/`SendFloodPathReply`.
+
+One implementation constraint shaped the design: the transport code is an HMAC over
+the request's own payload, so it can only be matched against the original packet, not
+reconstructed later from a stored code. The room server resolves from the packet
+directly; `BaseNode` resolves in `buildReplyContext` while the request is in hand and
+carries the resolved key on `ReplyContext`. `matchScopeKey` deliberately applies no
+flag mask, since a region that denies forwarding is still the region a request arrived
+on. `DefaultReplyScope` falls back to `SendScope`, so existing configs are unaffected.
+
+The reply-route half (`REPLY_ROUTE_DIRECT_OUT_PATH` for anon requests) is still open;
+our precedence already matches upstream for the flood and supplied-path cases.
 
 Note our hop-limit semantics already match: firmware `hops >= flood_max` versus our
 `hopCount + 1 > MaxFloodHops` are equivalent, and the check ordering is the same. The
@@ -195,25 +204,35 @@ which we may not do today. Low priority.
 
 ## Remaining work
 
-Done so far, each in its own commit:
+All five items are done, each in its own commit:
 
-1. Inner-PATH `path_len` validation — `c9ce9da`
-2. UTF-8 advert name truncation — `8e1f0fc`
-3. Dedup `WasSeen`/`MarkSeen` split — `3178c50`
+| Item | Commit |
+|---|---|
+| Inner-PATH `path_len` validation | `c9ce9da` |
+| UTF-8 advert name truncation | `8e1f0fc` |
+| Dedup `WasSeen`/`MarkSeen` split | `3178c50` |
+| Anon contact pool | `add9f49` |
+| Scoped reply routing | `315bf6a` |
 
-Still open:
+Two transport bugs were fixed along the way, both pre-existing and unrelated to 1.17:
 
-- **Scoped reply routing (item 3).** The real 1.17 feature gap, and the one most
-  visible on a mesh with scoped regions. Needs a `DefaultScope` config, the request's
-  resolved region plumbed into the reply context, and a `chooseReplyScope` equivalent.
-  Deserves its own design pass rather than a patch.
-- **Anon contact slots (item 5).** Verify the `allocateSlot` nil-return is intentional
-  and decide whether to adopt firmware's "clear the anon slot when a real advert
-  arrives" behavior. Low priority.
+| Fix | Commit |
+|---|---|
+| Nil-logger panic on the transport receive paths | `306fd26` |
+| `readLoop`/`Stop` data race (UDP and serial) | `a82ae2e` |
 
-Note the pre-existing `transport/udp` test failure (`TestProcessDatagram_Malformed`
-panics on a nil logger). It is unrelated to any of this work and was failing before
-these changes; the rest of the suite is green.
+The nil-logger panic had been masking the race: once `TestProcessDatagram_Malformed`
+stopped crashing, `-race` surfaced an unguarded read of `t.conn`/`t.port` that `Stop`
+nils under the mutex. The whole suite now passes under `-race`.
+
+Deliberately left open:
+
+- **`REPLY_ROUTE_DIRECT_OUT_PATH`** for anon requests, the reply-route half of PR
+  #3106. Our precedence already matches upstream for the flood and supplied-path cases.
+- **Clearing an anon slot when a real advert arrives** for that pubkey, which firmware
+  added in v1.17 (`onAdvertRecv`).
+- **`truncateName`** in `device/router/region.go`, left byte-wise on purpose. See
+  item 4.
 
 ## Unrelated: firmware checkout state
 
