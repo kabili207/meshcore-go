@@ -160,9 +160,10 @@ type Server struct {
 	cancel context.CancelFunc
 	cli    *cli.Dispatcher
 
-	// sender is the event-based response sender. When set, the event-based
-	// handler methods (HandleLogin, HandleTextMessage, etc.) use this for
-	// sending responses. When nil, only the legacy HandlePacket path works.
+	// sender routes responses back to clients. The handler methods (HandleLogin,
+	// HandleTextMessage, and so on) need it to reply at all; with it nil the
+	// server processes packets and silently produces no output. RoomNode wires
+	// BaseNode in via SetSender.
 	sender NodeSender
 
 	// Sync loop state

@@ -124,7 +124,7 @@ func newTestHarness(t *testing.T) *testHarness {
 		ACKTracker:    tracker,
 	})
 
-	return &testHarness{
+	h := &testHarness{
 		server:    srv,
 		transport: mt,
 		router:    r,
@@ -135,6 +135,12 @@ func newTestHarness(t *testing.T) *testHarness {
 		clk:       clk,
 		serverKey: serverKey,
 	}
+
+	// RoomNode wires BaseNode as the sender in production; without an equivalent
+	// here the event path would produce no output at all.
+	srv.SetSender(&testSender{h: h})
+
+	return h
 }
 
 // makeClientKeyAndContact generates a client key pair and registers it as a
@@ -264,7 +270,7 @@ func TestHandlePacket_UnhandledType(t *testing.T) {
 		Payload: []byte{0x00},
 	}
 	// Should not panic
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 }
 
 func TestHandlePacket_ACK_Resolves(t *testing.T) {
@@ -281,7 +287,7 @@ func TestHandlePacket_ACK_Resolves(t *testing.T) {
 		Payload: ackPayload,
 	}
 
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if !resolved {
 		t.Error("ACK should have resolved the pending entry")
@@ -296,7 +302,7 @@ func TestHandlePacket_ACK_TooShort(t *testing.T) {
 		Payload: []byte{0x01, 0x02}, // too short for ACK (need 4 bytes)
 	}
 	// Should not panic
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 }
 
 // --- Login tests ---
@@ -305,7 +311,7 @@ func TestLogin_AdminPassword(t *testing.T) {
 	h := newTestHarness(t)
 
 	pkt := h.buildAnonReqPacket(t, 100, 0, "admin123")
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.clients.Count() != 1 {
 		t.Fatalf("expected 1 client, got %d", h.clients.Count())
@@ -332,7 +338,7 @@ func TestLogin_GuestPassword(t *testing.T) {
 	h := newTestHarness(t)
 
 	pkt := h.buildAnonReqPacket(t, 100, 0, "guest123")
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.clients.Count() != 1 {
 		t.Fatalf("expected 1 client, got %d", h.clients.Count())
@@ -355,7 +361,7 @@ func TestLogin_OpenRoom_Guest(t *testing.T) {
 	// No password → AllowReadOnly gives Guest (matching firmware: open-room
 	// logins get PERM_ACL_GUEST, which is blocked from posting).
 	pkt := h.buildAnonReqPacket(t, 100, 0, "")
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.clients.Count() != 1 {
 		t.Fatalf("expected 1 client, got %d", h.clients.Count())
@@ -377,7 +383,7 @@ func TestLogin_WrongPassword_ClosedRoom(t *testing.T) {
 	h.server.cfg.AllowReadOnly = false
 
 	pkt := h.buildAnonReqPacket(t, 100, 0, "wrong")
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.clients.Count() != 0 {
 		t.Errorf("expected 0 clients (rejected), got %d", h.clients.Count())
@@ -395,7 +401,7 @@ func TestLogin_ReplayRejected(t *testing.T) {
 
 	// First login succeeds
 	pkt1 := h.buildAnonReqPacketWithKey(t, clientKey, 100, 0, "admin123")
-	h.server.HandlePacket(pkt1, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt1, transport.PacketSourceMQTT)
 
 	if h.clients.Count() != 1 {
 		t.Fatalf("expected 1 client after first login, got %d", h.clients.Count())
@@ -405,7 +411,7 @@ func TestLogin_ReplayRejected(t *testing.T) {
 
 	// Re-login with same timestamp from same identity should be rejected
 	pkt2 := h.buildAnonReqPacketWithKey(t, clientKey, 100, 0, "admin123")
-	h.server.HandlePacket(pkt2, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt2, transport.PacketSourceMQTT)
 
 	// Client count should still be 1 (no new client added)
 	if h.clients.Count() != 1 {
@@ -429,7 +435,7 @@ func TestLogin_ReloginHigherTimestamp(t *testing.T) {
 
 	// First login
 	pkt1 := h.buildAnonReqPacketWithKey(t, clientKey, 100, 0, "admin123")
-	h.server.HandlePacket(pkt1, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt1, transport.PacketSourceMQTT)
 
 	if h.clients.Count() != 1 {
 		t.Fatalf("expected 1 client, got %d", h.clients.Count())
@@ -439,7 +445,7 @@ func TestLogin_ReloginHigherTimestamp(t *testing.T) {
 
 	// Re-login with higher timestamp from same identity — should succeed
 	pkt2 := h.buildAnonReqPacketWithKey(t, clientKey, 200, 50, "")
-	h.server.HandlePacket(pkt2, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt2, transport.PacketSourceMQTT)
 
 	// Should still be 1 client (same identity re-logged)
 	if h.clients.Count() != 1 {
@@ -515,7 +521,7 @@ func TestTextMessage_PlainPost(t *testing.T) {
 	content := codec.BuildTxtMsgContent(200, codec.TxtTypePlain<<2, 0, "hello world", nil)
 
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeTxtMsg, content)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	// Post should have been stored
 	if h.posts.Count() != 1 {
@@ -546,7 +552,7 @@ func TestTextMessage_ReplayRejected(t *testing.T) {
 	// Send message with timestamp <= LastTimestamp
 	content := codec.BuildTxtMsgContent(200, codec.TxtTypePlain<<2, 0, "replay", nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeTxtMsg, content)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	// No post stored
 	if h.posts.Count() != 0 {
@@ -566,7 +572,7 @@ func TestTextMessage_GuestCantPost(t *testing.T) {
 
 	content := codec.BuildTxtMsgContent(200, codec.TxtTypePlain<<2, 0, "blocked", nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeTxtMsg, content)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.posts.Count() != 0 {
 		t.Errorf("expected 0 posts (guest), got %d", h.posts.Count())
@@ -585,7 +591,7 @@ func TestTextMessage_ReadOnlyCantPost(t *testing.T) {
 
 	content := codec.BuildTxtMsgContent(200, codec.TxtTypePlain<<2, 0, "blocked", nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeTxtMsg, content)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	// ReadOnly can't write but is not guest, so the function falls through.
 	// The firmware behavior: if !canWrite but not guest, the message goes through
@@ -605,7 +611,7 @@ func TestTextMessage_AdminCanPost(t *testing.T) {
 
 	content := codec.BuildTxtMsgContent(200, codec.TxtTypePlain<<2, 0, "admin msg", nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeTxtMsg, content)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.posts.Count() != 1 {
 		t.Errorf("expected 1 post from admin, got %d", h.posts.Count())
@@ -625,7 +631,7 @@ func TestTextMessage_UnknownSender(t *testing.T) {
 
 	content := codec.BuildTxtMsgContent(200, codec.TxtTypePlain<<2, 0, "mystery", nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeTxtMsg, content)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	// No post stored (unknown sender)
 	if h.posts.Count() != 0 {
@@ -641,7 +647,7 @@ func TestTextMessage_ContactButNotClient(t *testing.T) {
 
 	content := codec.BuildTxtMsgContent(200, codec.TxtTypePlain<<2, 0, "no session", nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeTxtMsg, content)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	// No post stored (not a registered client)
 	if h.posts.Count() != 0 {
@@ -944,9 +950,16 @@ func TestRequest_Keepalive(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Firmware only answers a keep-alive over a direct path, so the contact
+	// needs one for this to produce a response at all. See
+	// TestHandleRequest_KeepaliveNoDirectPathSkips for the other half.
+	ct := h.contacts.GetByPubKey(clientID)
+	ct.OutPathLen = 1
+	ct.OutPath = []byte{0x42}
+
 	content := codec.BuildRequestContent(200, codec.ReqTypeKeepalive, nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, content)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	// LastActivity should have been updated
 	if client.LastActivity == 0 {
@@ -977,7 +990,7 @@ func TestRequest_GetStatus(t *testing.T) {
 
 	reqContent := codec.BuildRequestContent(300, codec.ReqTypeGetStats, nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.transport.sentCount() == 0 {
 		t.Fatal("expected a response packet")
@@ -1030,7 +1043,7 @@ func TestRequest_GetStatus_NoProvider(t *testing.T) {
 
 	reqContent := codec.BuildRequestContent(300, codec.ReqTypeGetStats, nil)
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	// No response should be sent when provider is nil
 	if h.transport.sentCount() != 0 {
@@ -1053,7 +1066,7 @@ func TestRequest_GetTelemetry(t *testing.T) {
 	// Request data: byte[0] = inverted perm mask. ~0xFE = 0x01
 	reqContent := codec.BuildRequestContent(400, codec.ReqTypeGetTelemetry, []byte{0xFE})
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.transport.sentCount() == 0 {
 		t.Fatal("expected a response packet")
@@ -1101,7 +1114,7 @@ func TestRequest_GetTelemetry_GuestRestricted(t *testing.T) {
 	// Even though request asks for all sensors (~0x00 = 0xFF), guest gets 0x00
 	reqContent := codec.BuildRequestContent(400, codec.ReqTypeGetTelemetry, []byte{0x00})
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.transport.sentCount() == 0 {
 		t.Fatal("expected a response packet")
@@ -1124,7 +1137,7 @@ func TestRequest_GetTelemetry_NoProvider(t *testing.T) {
 
 	reqContent := codec.BuildRequestContent(400, codec.ReqTypeGetTelemetry, []byte{0x00})
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.transport.sentCount() != 0 {
 		t.Errorf("expected no response without telemetry provider, got %d packets", h.transport.sentCount())
@@ -1167,7 +1180,7 @@ func TestRequest_GetAccessList_Admin(t *testing.T) {
 	// Reserved bytes must be 0
 	reqContent := codec.BuildRequestContent(500, codec.ReqTypeGetAccessList, []byte{0x00, 0x00})
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.transport.sentCount() == 0 {
 		t.Fatal("expected a response packet")
@@ -1209,7 +1222,7 @@ func TestRequest_GetAccessList_NonAdminRejected(t *testing.T) {
 
 	reqContent := codec.BuildRequestContent(500, codec.ReqTypeGetAccessList, []byte{0x00, 0x00})
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	// Non-admin should get no response
 	if h.transport.sentCount() != 0 {
@@ -1229,7 +1242,7 @@ func TestRequest_GetAccessList_ReservedNonZero(t *testing.T) {
 	// Reserved bytes are non-zero — should be rejected
 	reqContent := codec.BuildRequestContent(500, codec.ReqTypeGetAccessList, []byte{0x01, 0x00})
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.transport.sentCount() != 0 {
 		t.Errorf("expected no response with non-zero reserved bytes, got %d packets", h.transport.sentCount())
@@ -1248,7 +1261,7 @@ func TestRequest_GetAccessList_EmptyACL(t *testing.T) {
 
 	reqContent := codec.BuildRequestContent(500, codec.ReqTypeGetAccessList, []byte{0x00, 0x00})
 	pkt := h.buildAddressedPacket(t, clientKey, clientID, codec.PayloadTypeReq, reqContent)
-	h.server.HandlePacket(pkt, transport.PacketSourceMQTT)
+	h.dispatchPacket(t, pkt, transport.PacketSourceMQTT)
 
 	if h.transport.sentCount() == 0 {
 		t.Fatal("expected a response packet")

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"time"
 
-	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/ack"
@@ -172,14 +171,13 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 
 	client.PushPostTimestamp = postTimestamp
 
-	// Use event-based sender if available, otherwise fall back to legacy
-	if s.sender != nil {
-		if err := s.sender.SendToContact(client.ID, codec.PayloadTypeTxtMsg, payload); err != nil {
-			s.log.Debug("failed to push post", "peer", client.ID.String(), "error", err)
-			return
-		}
-	} else {
-		s.pushPostLegacy(client, payload)
+	if s.sender == nil {
+		s.log.Warn("no sender configured, cannot push post", "peer", client.ID.String())
+		return
+	}
+	if err := s.sender.SendToContact(client.ID, codec.PayloadTypeTxtMsg, payload); err != nil {
+		s.log.Debug("failed to push post", "peer", client.ID.String(), "error", err)
+		return
 	}
 
 	if s.cfg.PostCounter != nil {
@@ -189,37 +187,4 @@ func (s *Server) pushPostToClient(client *ClientInfo, post *PostInfo) {
 	s.log.Debug("pushed post to client",
 		"peer", client.ID.String(),
 		"post_ts", postTimestamp)
-}
-
-// pushPostLegacy sends a pre-built post payload using the legacy Router-based path.
-// Deprecated: Use NodeSender via SetSender instead.
-func (s *Server) pushPostLegacy(client *ClientInfo, plaintext []byte) {
-	secret, err := s.cfg.Contacts.GetSharedSecret(client.ID)
-	if err != nil {
-		s.log.Debug("no shared secret for client", "peer", client.ID.String())
-		return
-	}
-
-	encrypted, err := crypto.EncryptAddressedWithSecret(plaintext, secret)
-	if err != nil {
-		s.log.Warn("failed to encrypt post for push", "error", err)
-		return
-	}
-
-	mac, ciphertext := codec.SplitMAC(encrypted)
-	destHash := client.ID.Hash()
-	srcHash := core.MeshCoreID(s.cfg.PublicKey).Hash()
-	payload := codec.BuildAddressedPayload(destHash, srcHash, mac, ciphertext)
-
-	pkt := &codec.Packet{
-		Header:  codec.PayloadTypeTxtMsg << codec.PHTypeShift,
-		Payload: payload,
-	}
-
-	ct := s.cfg.Contacts.GetByPubKey(client.ID)
-	if ct != nil && ct.HasDirectPath() {
-		s.cfg.Router.SendDirect(pkt, ct.OutPath)
-	} else {
-		s.cfg.Router.SendFloodScoped(pkt)
-	}
 }

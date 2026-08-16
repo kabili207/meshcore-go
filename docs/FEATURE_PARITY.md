@@ -31,7 +31,7 @@ Two structural facts shape everything:
 |---|---|---|---|
 | Companion / chat | `companion_radio` | `device/node/companion.go` + `device/companion` | Strong, both mesh and frame protocol |
 | Repeater | `simple_repeater` | `device/node/repeater.go` | Strong; no airtime/CSMA |
-| Room server | `simple_room_server` | `device/room/*` | Strong; dead legacy dispatch path to remove |
+| Room server | `simple_room_server` | `device/room/*` | Strong |
 | Sensor | `simple_sensor` | none | Wire format + telemetry only |
 | KISS modem | `kiss_modem` | none | Missing entirely |
 | Secure chat demo | `simple_secure_chat` | (companion covers it) | Reference app, not a gap |
@@ -172,13 +172,12 @@ prefix and original timestamp), adverts, path management, ACK receive, active-pa
 replay protection, open-room posting rights, 52-byte `ServerStats`, and a keep-alive
 that is direct-only, honors `forceSince`, and appends the unsynced-count byte.
 
-**Maintenance hazard: two dispatch paths.** `device/room/dispatch.go` holds a legacy
-`HandlePacket` switch that nothing in production calls — `RoomNode` wires only the
-event path (`device/room/handlers.go`) via `dispatchToServer`. The legacy path is not
-a feature reservoir; it is *behind*. Its keep-alive is a bare ACK missing all three
-features the event path implements, so rewiring anything to it would silently regress
-behavior. It should be deleted. The stale comment at `device/room/server.go` claiming
-"only the legacy HandlePacket path works" is wrong and should go with it.
+**Single dispatch path.** The legacy `HandlePacket` switch was removed; the event path
+(`device/room/handlers.go`, driven by `RoomNode.dispatchToServer`) is the only one. The
+room tests now drive that path through a shim (`device/room/eventbridge_test.go`) that
+reproduces `BaseNode`'s packet-to-event conversion, since `device/room` cannot import
+`device/node`. If a room test passes while the real node misbehaves, suspect that shim
+first.
 
 **Still open:**
 - On-demand `advert` CLI command. `RoomNode` does build an advert scheduler and wire
@@ -225,8 +224,7 @@ KISS TNC).
   offline queue and make `CMD_SEND_SELF_ADVERT` actually advertise.
 - Repeater: good forwarder with a working admin/config/stats surface, rate limiting,
   discovery, and opt-in persistence.
-- Room server: functionally close to firmware. Delete the dead legacy dispatch path
-  before it causes a regression.
+- Room server: functionally close to firmware, on a single dispatch path.
 - Sensor and KISS modem: not started.
 - Systemic: no airtime/duty-cycle/CSMA anywhere. This is the one gap that would matter
   immediately if a LoRa radio transport were ever added.
