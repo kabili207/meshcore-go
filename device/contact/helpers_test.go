@@ -278,6 +278,9 @@ func TestProcessAdvert_OverwriteWhenFull(t *testing.T) {
 		MaxContacts:       1,
 		OverwriteWhenFull: true,
 	})
+	// No anon headroom, so the single regular slot is the whole capacity and
+	// the second advert has to evict rather than grow.
+	m.cfg.MaxAnonContacts = 0
 
 	existingKP := generateTestKeyPair(t)
 	newKP := generateTestKeyPair(t)

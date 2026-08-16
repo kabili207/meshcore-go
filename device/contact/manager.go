@@ -323,37 +323,66 @@ func (m *ContactManager) ForEach(fn func(c *ContactInfo) bool) {
 
 // allocateSlot returns a pointer to an available contact slot.
 //
-// Transient (ADV_TYPE_NONE) and regular contacts share the same backing array
-// (capacity MaxContacts+MaxAnonContacts) but evict from separate pools: a
-// transientOnly add recycles the oldest transient contact, while a regular add
-// evicts the oldest non-favorite, non-transient contact (only when
-// OverwriteWhenFull is enabled). Returns nil if no slot is available.
+// Transient (ADV_TYPE_NONE) and regular contacts share one backing array of
+// MaxContacts+MaxAnonContacts, but allocate differently. A transientOnly add
+// recycles the oldest transient slot and only grows the array if none exists,
+// so anon traffic cannot crowd out real contacts. A regular add grows into any
+// free slot, then evicts the oldest non-favorite, non-transient contact when
+// OverwriteWhenFull is set. Returns nil if no slot is available.
+//
+// Firmware reserves the first MAX_ANON_CONTACTS array indices for the transient
+// pool; here the pools are separated by contact type instead, since the
+// persisted format is per-contact records and does not depend on slot order.
 //
 // Must be called with m.mu held for writing.
 func (m *ContactManager) allocateSlot(transientOnly bool) *ContactInfo {
-	// Case 1: space available. Matches firmware, where num_contacts is gated by
-	// MAX_CONTACTS; the +MaxAnonContacts only sizes the backing array headroom.
-	if len(m.contacts) < m.cfg.MaxContacts {
+	oldestIdx := -1
+	var oldestMod uint32 = 0xFFFFFFFF
+
+	// A transient add is confined to the anon pool: it fills the pool first,
+	// then recycles its own oldest entry. It never grows past the pool, so a
+	// burst of anon requests cannot crowd out real contacts. Firmware confines
+	// the same allocation to its reserved MAX_ANON_CONTACTS prefix.
+	if transientOnly {
+		anonCount := 0
+		for i, c := range m.contacts {
+			if !c.IsTransient() {
+				continue
+			}
+			anonCount++
+			if c.LastMod < oldestMod {
+				oldestMod = c.LastMod
+				oldestIdx = i
+			}
+		}
+
+		if anonCount < m.cfg.MaxAnonContacts && len(m.contacts) < m.cfg.MaxContacts+m.cfg.MaxAnonContacts {
+			c := &ContactInfo{}
+			m.contacts = append(m.contacts, c)
+			return c
+		}
+		if oldestIdx < 0 {
+			return nil
+		}
+		// Recycling an anon slot does not fire onContactOverwrite: the entry was
+		// never a real contact. Firmware notes the same exemption.
+		m.contacts[oldestIdx] = &ContactInfo{}
+		return m.contacts[oldestIdx]
+	}
+
+	// A regular add may use the whole array, anon headroom included.
+	if len(m.contacts) < m.cfg.MaxContacts+m.cfg.MaxAnonContacts {
 		c := &ContactInfo{}
 		m.contacts = append(m.contacts, c)
 		return c
 	}
 
-	// Case 2: evict. Transient adds always recycle within the anon pool;
-	// regular adds only overwrite when OverwriteWhenFull is enabled.
-	if !transientOnly && !m.cfg.OverwriteWhenFull {
+	if !m.cfg.OverwriteWhenFull {
 		return nil
 	}
 
-	oldestIdx := -1
-	var oldestMod uint32 = 0xFFFFFFFF
-
 	for i, c := range m.contacts {
-		if transientOnly {
-			if !c.IsTransient() {
-				continue
-			}
-		} else if c.IsFavorite() || c.IsTransient() {
+		if c.IsFavorite() || c.IsTransient() {
 			continue
 		}
 		if c.LastMod < oldestMod {
@@ -363,7 +392,7 @@ func (m *ContactManager) allocateSlot(transientOnly bool) *ContactInfo {
 	}
 
 	if oldestIdx < 0 {
-		// No evictable contact in the target pool.
+		// Everything left is a favorite or a transient slot.
 		return nil
 	}
 
@@ -371,7 +400,6 @@ func (m *ContactManager) allocateSlot(transientOnly bool) *ContactInfo {
 		m.onContactOverwrite(m.contacts[oldestIdx].ID)
 	}
 
-	// Reset the slot
 	m.contacts[oldestIdx] = &ContactInfo{}
 	return m.contacts[oldestIdx]
 }

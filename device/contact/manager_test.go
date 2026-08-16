@@ -34,11 +34,30 @@ func makeContactWithID(id core.MeshCoreID, name string, lastMod uint32) *Contact
 	}
 }
 
+// newTestManager builds a manager whose capacity is exactly maxContacts, with
+// no anon headroom, so eviction tests can reason about a single budget. Tests
+// that exercise the transient pool use newTestManagerWithAnon instead.
 func newTestManager(t *testing.T, maxContacts int, overwrite bool) *ContactManager {
+	t.Helper()
+	kp := generateTestKeyPair(t)
+	m := NewManager(kp.PrivateKey, ManagerConfig{
+		MaxContacts:       maxContacts,
+		OverwriteWhenFull: overwrite,
+	})
+	// MaxAnonContacts cannot be configured to zero (NewManager treats <= 0 as
+	// "use the default"), so clear it here to isolate the regular budget.
+	m.cfg.MaxAnonContacts = 0
+	return m
+}
+
+// newTestManagerWithAnon builds a manager with both budgets set explicitly.
+// Total capacity is maxContacts+maxAnon, matching firmware.
+func newTestManagerWithAnon(t *testing.T, maxContacts, maxAnon int, overwrite bool) *ContactManager {
 	t.Helper()
 	kp := generateTestKeyPair(t)
 	return NewManager(kp.PrivateKey, ManagerConfig{
 		MaxContacts:       maxContacts,
+		MaxAnonContacts:   maxAnon,
 		OverwriteWhenFull: overwrite,
 	})
 }
@@ -599,7 +618,8 @@ func TestManager_OverwriteEvictsCorrectContact(t *testing.T) {
 // A transient add recycles the oldest transient even when OverwriteWhenFull is
 // off; transient contacts always churn within their own pool.
 func TestManager_TransientEvictsOnlyTransients(t *testing.T) {
-	m := newTestManager(t, 2, false) // overwrite off
+	// Two anon slots, so the third transient must recycle the oldest of the two.
+	m := newTestManagerWithAnon(t, 2, 2, false) // overwrite off
 
 	t1 := makeIDWithHash(0x01)
 	t2 := makeIDWithHash(0x02)
@@ -608,33 +628,75 @@ func TestManager_TransientEvictsOnlyTransients(t *testing.T) {
 	m.AddContact(makeTransientContact(t1, "Anon1", 100)) // oldest
 	m.AddContact(makeTransientContact(t2, "Anon2", 200))
 
-	var evicted core.MeshCoreID
-	m.SetOnContactOverwrite(func(id core.MeshCoreID) { evicted = id })
+	// Recycling an anon slot must NOT fire onContactOverwrite: the entry was
+	// never a real contact. Firmware skips the callback here explicitly.
+	overwriteFired := false
+	m.SetOnContactOverwrite(func(core.MeshCoreID) { overwriteFired = true })
 
 	if _, err := m.AddContact(makeTransientContact(t3, "Anon3", 300)); err != nil {
 		t.Fatalf("transient add should recycle the oldest transient, got %v", err)
 	}
-	if evicted != t1 {
-		t.Error("oldest transient (t1) should have been evicted")
+	if overwriteFired {
+		t.Error("onContactOverwrite should not fire when recycling an anon slot")
 	}
 	if m.GetByPubKey(t1) != nil {
-		t.Error("evicted transient should be gone")
+		t.Error("oldest transient (t1) should have been evicted")
 	}
 	if m.GetByPubKey(t2) == nil || m.GetByPubKey(t3) == nil {
 		t.Error("t2 and t3 should be present")
 	}
 }
 
+// The anon pool fills before it recycles: with room left, a transient add must
+// not evict an existing transient.
+func TestManager_TransientFillsPoolBeforeRecycling(t *testing.T) {
+	m := newTestManagerWithAnon(t, 2, 3, false)
+
+	t1 := makeIDWithHash(0x01)
+	t2 := makeIDWithHash(0x02)
+	t3 := makeIDWithHash(0x03)
+
+	m.AddContact(makeTransientContact(t1, "Anon1", 100))
+	m.AddContact(makeTransientContact(t2, "Anon2", 200))
+	m.AddContact(makeTransientContact(t3, "Anon3", 300))
+
+	for _, id := range []core.MeshCoreID{t1, t2, t3} {
+		if m.GetByPubKey(id) == nil {
+			t.Errorf("transient %v should still be present", id[0])
+		}
+	}
+}
+
+// A transient burst must never consume the regular contact budget.
+func TestManager_TransientBurstLeavesRegularBudget(t *testing.T) {
+	m := newTestManagerWithAnon(t, 2, 2, false)
+
+	for i := range 10 {
+		m.AddContact(makeTransientContact(makeIDWithHash(byte(0x10+i)), "Anon", uint32(100+i)))
+	}
+
+	// Both regular slots must still be free.
+	if _, err := m.AddContact(makeContactWithID(makeIDWithHash(0x01), "Reg1", 500)); err != nil {
+		t.Fatalf("regular add 1 after transient burst: %v", err)
+	}
+	if _, err := m.AddContact(makeContactWithID(makeIDWithHash(0x02), "Reg2", 600)); err != nil {
+		t.Fatalf("regular add 2 after transient burst: %v", err)
+	}
+}
+
 // A regular add never evicts a transient, even if the transient is the oldest.
 func TestManager_RegularAddNeverEvictsTransient(t *testing.T) {
-	m := newTestManager(t, 2, true) // overwrite on
+	// Capacity 3 (2 regular + 1 anon), filled, so the next add must evict.
+	m := newTestManagerWithAnon(t, 2, 1, true) // overwrite on
 
 	tid := makeIDWithHash(0x01)
 	r1 := makeIDWithHash(0x02)
+	r0 := makeIDWithHash(0x04)
 	r2 := makeIDWithHash(0x03)
 
 	m.AddContact(makeTransientContact(tid, "Anon", 50)) // oldest overall
-	m.AddContact(makeContactWithID(r1, "Reg1", 100))
+	m.AddContact(makeContactWithID(r1, "Reg1", 100))    // oldest regular
+	m.AddContact(makeContactWithID(r0, "Reg0", 200))
 
 	var evicted core.MeshCoreID
 	m.SetOnContactOverwrite(func(id core.MeshCoreID) { evicted = id })
