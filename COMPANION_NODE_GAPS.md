@@ -1,5 +1,21 @@
 # meshcore-go: Companion/Chat Node Implementation Gaps
 
+> **Historical (2026-06-23). Superseded — do not use as a status reference.**
+>
+> This was a wishlist written while building a companion node against a library that
+> had no companion support. Nearly all of it has since been built: `device/node`
+> (`CompanionNode`) is the mesh/chat engine and `device/companion` is the frame-protocol
+> server. Of the nine numbered gaps, eight are resolved — the auto-ACK, packet handler,
+> DM helper, flood path reversal, contact path management, header helpers, contact
+> persistence, and the exported `codec.MaxTextLen`.
+>
+> **Item 6 (direct routing over MQTT bridges) is the one entry still worth reading.**
+> It documents a field-level delivery problem, not a missing API, and was never closed
+> out here.
+>
+> For current status see `docs/FEATURE_PARITY.md`; for remaining work see
+> `docs/PARITY_PLAN.md`.
+
 This document catalogs everything that had to be built from scratch, worked around,
 or manually reimplemented when building a companion node (NodeTypeChat) using
 meshcore-go. The library currently provides good support for room servers

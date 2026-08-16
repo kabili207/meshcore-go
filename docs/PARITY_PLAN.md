@@ -1,9 +1,15 @@
 # meshcore-go Parity Plan
 
-Prioritized plan to close the remaining gaps found in `docs/FEATURE_PARITY.md`
-(firmware baseline v1.16.0). Four correctness bugs are already fixed (room stats
-size, open-room posting rights, active-path replay protection, companion
-nil-contacts panic); those are recorded in the parity doc and not repeated here.
+Prioritized plan to close the gaps found in `docs/FEATURE_PARITY.md`.
+
+**Status (2026-08-16): 20 of 24 items are done.** Only Phase 5 (airtime / duty-cycle /
+CSMA) and Phase 6 (sensor role, KISS modem) remain open. Phases 1 through 4 are
+complete. The v1.17.1 firmware upgrade is tracked separately in `UPGRADE_1.17.md`.
+
+Four correctness bugs found during the original analysis were fixed before this plan
+was written (room stats size, open-room posting rights, active-path replay protection,
+companion nil-contacts panic); those are recorded in the parity doc and not repeated
+here.
 
 Effort tags: **S** = a few hours, **M** = a day or two, **L** = multi-day.
 "N/A (radio)" marks firmware features that only make sense on a node driving a LoRa

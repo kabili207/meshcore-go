@@ -1,5 +1,12 @@
 # meshcore-go: Event System & Node Abstraction Plan
 
+> **Historical (2026-04). Implemented — kept for design rationale.**
+>
+> This plan has been carried out: `device/event` holds the typed events and
+> `device/node` holds `BaseNode` plus the `CompanionNode`, `RoomNode`, and
+> `RepeaterNode` abstractions. Read it for the reasoning behind the design, not for
+> current status. See `docs/FEATURE_PARITY.md` for where things stand.
+
 This document is the implementation plan for adding a typed event system and
 node-type abstractions to meshcore-go. The goal is to bring the library to
 parity with meshtastic-go in developer experience while supporting the three

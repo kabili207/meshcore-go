@@ -1,7 +1,7 @@
 # Upgrading meshcore-go to firmware v1.17.1
 
-Analysis of upstream `meshcore-dev/MeshCore` between `companion-v1.16.0` (the current
-Go baseline) and `companion-v1.17.1`, and what it means for this repo.
+Analysis of upstream `meshcore-dev/MeshCore` between `companion-v1.16.0` (the
+previous Go baseline) and `companion-v1.17.1`, and what it means for this repo.
 
 Local firmware checkout: `~/Projects/PlatformIO/MeshCore`, now at `d9296435`
 (`* version 1.17.1`).
@@ -198,9 +198,32 @@ which we may not do today. Low priority.
 - **MCU temperature in telemetry.** Firmware now adds `board.getMCUTemperature()` to
   self-telemetry. Our `telemetry.Provider` is pluggable and the host app populates it,
   so this is an app-level choice, not a library gap.
-- **Ethernet interfaces, `MultiSerialInterface`, display drivers, board pin fixes,
-  nRF52 CC310 crypto.** All firmware-only.
+- **Display drivers, board pin fixes, nRF52 CC310 crypto.** Firmware-only.
 - **`poweroff`/`shutdown` CLI commands.** Hardware; N/A.
+
+### Ethernet and `MultiSerialInterface` — no port needed, but worth knowing
+
+The drivers are firmware-only, but the interface they expose is not new to us.
+`SerialEthernetInterface` runs a TCP server (port 5000) speaking **the companion frame
+protocol, byte-for-byte identical to USB serial**: `'>'`/`'<'` marker, uint16-LE
+length, no checksum. That is exactly what `core/codec/serial` implements and what
+`device/companion`'s `ListenAndServe` already serves, so the same phone-app client
+works against a firmware node over Ethernet or a Go node over TCP. Nothing to port.
+
+`MultiSerialInterface` is a composite over `BaseSerialInterface` (up to 4 of BLE, USB,
+WiFi, Ethernet). Writes broadcast to every enabled interface; reads poll in
+registration order and return the first frame, so slot order acts as a priority. The
+separate `enableBluetooth`/`disableBluetooth` helpers let the CLI toggle BLE while
+leaving wired transports up.
+
+Two behaviors to keep in mind if you ever talk to an Ethernet-equipped node:
+
+- **`FRAME_QUEUE_SIZE` is 4.** `writeFrame` returns 0 when the queue is full, and the
+  queue drains one frame per `checkRecvFrame` call, so a burst of pushes can silently
+  drop frames.
+- **`ETHERNET_RAW_LINE=1`** is a build-time flag that replaces framing with CRLF
+  delimited lines for raw CLI use. A node built that way does not speak the frame
+  protocol at all, so frame-protocol clients cannot talk to it.
 
 ## Remaining work
 
