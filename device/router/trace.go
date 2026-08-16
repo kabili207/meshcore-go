@@ -58,7 +58,7 @@ func (r *Router) handleTrace(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Mark the forwarded packet as seen (TRACE dedup includes PathLen in
 	// the hash, so the forwarded packet has a different hash than the received one)
-	r.dedup.HasSeen(fwd)
+	r.dedup.MarkSeen(fwd)
 
 	r.enqueue(fwd, PriorityTrace, 0, src, false)
 }

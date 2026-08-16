@@ -50,28 +50,65 @@ func NewWithCapacity(maxHashes int) *PacketDeduplicator {
 	}
 }
 
-// HasSeen checks if a packet has been seen before. If not, it records the
-// packet and returns false. If it has been seen, it returns true.
+// WasSeen reports whether a packet has been seen before, without recording it.
+// Pair it with MarkSeen to gate forwarding; use HasSeen when the check and the
+// record must be a single atomic step.
 //
 // All packets, including ACKs, are tracked by a truncated SHA256 hash of their
 // content.
+func (d *PacketDeduplicator) WasSeen(packet *codec.Packet) bool {
+	hash := CalculatePacketHash(packet)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.wasSeenLocked(hash)
+}
+
+// MarkSeen records a packet as seen. Marking a packet that is already recorded
+// stores a second copy of the hash, matching firmware's markSeen.
+func (d *PacketDeduplicator) MarkSeen(packet *codec.Packet) {
+	hash := CalculatePacketHash(packet)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.markSeenLocked(hash)
+}
+
+// HasSeen checks if a packet has been seen before. If not, it records the
+// packet and returns false. If it has been seen, it returns true.
+//
+// The check and the record happen under a single lock acquisition, so callers
+// that are not otherwise serialized should prefer this over a WasSeen/MarkSeen
+// pair.
 func (d *PacketDeduplicator) HasSeen(packet *codec.Packet) bool {
 	hash := CalculatePacketHash(packet)
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.wasSeenLocked(hash) {
+		return true
+	}
+	d.markSeenLocked(hash)
+	return false
+}
+
+func (d *PacketDeduplicator) wasSeenLocked(hash [PacketHashSize]byte) bool {
 	for i := range d.maxHashes {
 		offset := i * PacketHashSize
 		if sliceEqual(hash[:], d.hashes[offset:offset+PacketHashSize]) {
 			return true
 		}
 	}
+	return false
+}
 
+func (d *PacketDeduplicator) markSeenLocked(hash [PacketHashSize]byte) {
 	offset := d.nextHash * PacketHashSize
 	copy(d.hashes[offset:offset+PacketHashSize], hash[:])
 	d.nextHash = (d.nextHash + 1) % d.maxHashes
-	return false
 }
 
 // Clear resets the deduplicator, forgetting all previously seen packets.

@@ -225,3 +225,52 @@ func TestHasSeen_ConcurrentDistinct(t *testing.T) {
 		t.Fatalf("%d distinct packets were falsely reported as duplicates", falseDup)
 	}
 }
+
+func TestWasSeenDoesNotRecord(t *testing.T) {
+	d := New()
+	pkt := makePacket(codec.PayloadTypeTxtMsg, []byte{0x01, 0x02, 0x03})
+
+	// WasSeen is a pure query: repeated calls must keep reporting false.
+	for i := range 3 {
+		if d.WasSeen(pkt) {
+			t.Fatalf("call %d: WasSeen = true, want false (nothing recorded yet)", i)
+		}
+	}
+
+	d.MarkSeen(pkt)
+	if !d.WasSeen(pkt) {
+		t.Error("after MarkSeen: WasSeen = false, want true")
+	}
+}
+
+func TestMarkSeenGatesHasSeen(t *testing.T) {
+	d := New()
+	pkt := makePacket(codec.PayloadTypeTxtMsg, []byte{0xAA, 0xBB})
+
+	// The send path marks without checking; a packet looping back must then be
+	// recognized as a duplicate by the receive gate.
+	d.MarkSeen(pkt)
+	if !d.HasSeen(pkt) {
+		t.Error("HasSeen = false after MarkSeen, want true")
+	}
+}
+
+func TestWasSeenMarkSeenMatchesHasSeen(t *testing.T) {
+	// A WasSeen/MarkSeen pair should behave like the combined HasSeen for a
+	// caller that is externally serialized (the router holds recvMu).
+	split := New()
+	combined := New()
+
+	for i := range 5 {
+		pkt := makePacket(codec.PayloadTypeTxtMsg, []byte{byte(i)})
+		for range 2 {
+			seen := split.WasSeen(pkt)
+			if !seen {
+				split.MarkSeen(pkt)
+			}
+			if got := combined.HasSeen(pkt); got != seen {
+				t.Errorf("packet %d: split = %v, combined = %v", i, seen, got)
+			}
+		}
+	}
+}

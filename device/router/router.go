@@ -447,9 +447,11 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 	// reject malformed or foreign-scoped packets that never should be reported.
 	r.notifyMonitor(pkt, src)
 
-	// Gate 3: deduplication (also inserts the packet into the seen table).
-	// Dedup gates forwarding and application processing only, NOT observer
-	// capture (which happened above).
+	// Gate 3: deduplication. HasSeen checks and records in one step; firmware
+	// splits this into wasSeen/markSeen, but the whole receive path here runs
+	// under recvMu, so the combined call is equivalent and avoids a second
+	// lock acquisition. Dedup gates forwarding and application processing
+	// only, NOT observer capture (which happened above).
 	if r.dedup.HasSeen(pkt) {
 		if pkt.IsFlood() {
 			r.counters.FloodDups.Add(1)
@@ -730,8 +732,8 @@ func (r *Router) SendFlood(pkt *codec.Packet) {
 	pkt.PathHashSize = hashSize
 	pkt.Path = nil
 
-	// Mark as seen so we don't process it again if it loops back
-	r.dedup.HasSeen(pkt)
+	// Mark before enqueue, so a loop-back copy is recognized as a duplicate.
+	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentFlood.Add(1)
 	r.enqueue(pkt, PriorityFloodData, 0, 0, true)
@@ -747,7 +749,7 @@ func (r *Router) SendTrace(pkt *codec.Packet) {
 	pkt.PathHashSize = r.cfg.PathHashMode + 1
 	pkt.Path = nil
 
-	r.dedup.HasSeen(pkt)
+	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentDirect.Add(1)
 	r.enqueue(pkt, PriorityTrace, 0, 0, true)
@@ -810,8 +812,8 @@ func (r *Router) sendScopedFlood(pkt *codec.Packet, priority uint8, delay time.D
 		pkt.TransportCodes[1] = 0
 	}
 
-	// Mark as seen so we don't process it again if it loops back.
-	r.dedup.HasSeen(pkt)
+	// Mark before enqueue, so a loop-back copy is recognized as a duplicate.
+	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentFlood.Add(1)
 	r.enqueue(pkt, priority, delay, 0, true)
@@ -851,8 +853,8 @@ func (r *Router) SendFloodAsRelay(pkt *codec.Packet) {
 		pkt.TransportCodes[1] = 0
 	}
 
-	// Mark as seen so we don't process it again if it loops back.
-	r.dedup.HasSeen(pkt)
+	// Mark before enqueue, so a loop-back copy is recognized as a duplicate.
+	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentFlood.Add(1)
 	r.enqueue(pkt, PriorityFloodData, 0, 0, true)
@@ -873,7 +875,7 @@ func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
 	pkt.Path = make([]byte, len(path))
 	copy(pkt.Path, path)
 
-	r.dedup.HasSeen(pkt)
+	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentDirect.Add(1)
 	r.enqueue(pkt, PriorityDirect, 0, 0, true)
@@ -891,7 +893,7 @@ func (r *Router) SendFloodPath(pkt *codec.Packet) {
 	pkt.PathHashSize = hashSize
 	pkt.Path = nil
 
-	r.dedup.HasSeen(pkt)
+	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentFlood.Add(1)
 	r.enqueue(pkt, PriorityFloodPath, PathSendDelay, 0, true)
@@ -907,7 +909,7 @@ func (r *Router) SendZeroHop(pkt *codec.Packet) {
 	pkt.PathHashSize = hashSize
 	pkt.Path = nil
 
-	r.dedup.HasSeen(pkt)
+	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentDirect.Add(1)
 	r.enqueue(pkt, PriorityDirect, 0, 0, true)
