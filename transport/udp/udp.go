@@ -244,6 +244,17 @@ func (t *Transport) SendPacket(packet *codec.Packet) error {
 func (t *Transport) readLoop(ctx context.Context) {
 	defer close(t.done)
 
+	// Capture the connection once. Stop() nils t.conn under the mutex, so
+	// re-reading the field here would race; closing the conn is what unblocks
+	// the pending ReadFrom, which is the actual stop signal.
+	t.mu.RLock()
+	conn := t.conn
+	t.mu.RUnlock()
+
+	if conn == nil {
+		return
+	}
+
 	buf := make([]byte, readBufSize)
 
 	for {
@@ -253,7 +264,7 @@ func (t *Transport) readLoop(ctx context.Context) {
 		default:
 		}
 
-		n, _, _, err := t.conn.ReadFrom(buf)
+		n, _, _, err := conn.ReadFrom(buf)
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return // context cancelled or connection closed, clean shutdown

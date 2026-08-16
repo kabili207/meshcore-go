@@ -197,6 +197,17 @@ func (t *Transport) SendPacket(packet *codec.Packet) error {
 func (t *Transport) readLoop(ctx context.Context) {
 	defer close(t.done)
 
+	// Capture the port once. Stop() nils t.port under the mutex, so re-reading
+	// the field here would race; closing the port is what unblocks the pending
+	// Read, which is the actual stop signal.
+	t.mu.RLock()
+	port := t.port
+	t.mu.RUnlock()
+
+	if port == nil {
+		return
+	}
+
 	buf := make([]byte, readBufSize)
 	var assemblyBuf []byte
 
@@ -207,7 +218,7 @@ func (t *Transport) readLoop(ctx context.Context) {
 		default:
 		}
 
-		n, err := t.port.Read(buf)
+		n, err := port.Read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return // context cancelled, clean shutdown
