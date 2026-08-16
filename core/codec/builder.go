@@ -71,11 +71,8 @@ func BuildAdvertAppData(appData *AdvertAppData) []byte {
 	if appData.Feature2 != nil {
 		flags |= FlagHasFeature2
 	}
-	if appData.Name != "" {
-		flags |= FlagHasName
-	}
 
-	// Calculate size
+	// Fixed fields come first, so whatever budget is left is the name's.
 	size := 1 // flags byte
 	if flags&FlagHasLocation != 0 {
 		size += 8
@@ -86,8 +83,15 @@ func BuildAdvertAppData(appData *AdvertAppData) []byte {
 	if flags&FlagHasFeature2 != 0 {
 		size += 2
 	}
-	if flags&FlagHasName != 0 {
-		size += len(appData.Name)
+
+	// Truncate the name to fit, at a rune boundary. Firmware does the same in
+	// AdvertDataBuilder::encodeTo via validUtf8PrefixLength; a byte-wise cut
+	// would advertise a partial rune that renders as a replacement character.
+	// The flag is only set when something survives, matching firmware.
+	name := validUTF8Prefix(appData.Name, MaxAdvertAppDataSize-size)
+	if name != "" {
+		flags |= FlagHasName
+		size += len(name)
 	}
 
 	data := make([]byte, size)
@@ -113,14 +117,7 @@ func BuildAdvertAppData(appData *AdvertAppData) []byte {
 	}
 
 	if flags&FlagHasName != 0 {
-		copy(data[offset:], appData.Name)
-	}
-
-	// Cap total app data to MaxAdvertAppDataSize, matching firmware, which
-	// truncates to MAX_ADVERT_DATA_SIZE before signing and verifying. Without
-	// this, a long name would produce a signature firmware cannot verify.
-	if len(data) > MaxAdvertAppDataSize {
-		data = data[:MaxAdvertAppDataSize]
+		copy(data[offset:], name)
 	}
 
 	return data

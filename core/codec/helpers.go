@@ -1,6 +1,9 @@
 package codec
 
-import "bytes"
+import (
+	"bytes"
+	"unicode/utf8"
+)
 
 // NewPacket creates a packet with the header correctly constructed from
 // the payload type and route type, avoiding manual bit shifting.
@@ -75,4 +78,33 @@ func TrimRequestContent(plaintext []byte, content *RequestContent) []byte {
 		return bytes.TrimRight(plaintext, "\x00")
 	}
 	return plaintext
+}
+
+// validUTF8Prefix returns the longest prefix of s that is at most maxBytes long
+// and ends on a rune boundary, dropping any trailing partial rune. Runes that
+// are already invalid in s (surrogates, overlong forms, bad continuation bytes)
+// terminate the prefix, matching firmware's validUtf8PrefixLength rather than
+// Go's usual replacement-character behavior.
+func validUTF8Prefix(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if maxBytes > len(s) {
+		maxBytes = len(s)
+	}
+
+	end := 0
+	for end < maxBytes {
+		r, size := utf8.DecodeRuneInString(s[end:])
+		// RuneError with size 1 means the bytes at end are not valid UTF-8.
+		// A real U+FFFD in the input decodes with size 3 and is kept.
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		if end+size > maxBytes {
+			break
+		}
+		end += size
+	}
+	return s[:end]
 }

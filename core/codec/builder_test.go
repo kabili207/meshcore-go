@@ -3,7 +3,9 @@ package codec
 import (
 	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // -----------------------------------------------------------------------------
@@ -164,6 +166,137 @@ func TestBuildAdvertAppDataNameOnly(t *testing.T) {
 	}
 	if parsed.Lat != nil || parsed.Lon != nil {
 		t.Errorf("Location should be nil")
+	}
+}
+
+func TestBuildAdvertAppDataTruncatesAtRuneBoundary(t *testing.T) {
+	// Each rocket is 4 bytes. With only the flags byte ahead of the name the
+	// budget is 31, so 7 rockets (28 bytes) fit and the 8th must be dropped
+	// whole rather than cut after 3 bytes.
+	appData := &AdvertAppData{
+		NodeType: NodeTypeRepeater,
+		Name:     strings.Repeat("\U0001F680", 8),
+	}
+
+	data := BuildAdvertAppData(appData)
+	if len(data) > MaxAdvertAppDataSize {
+		t.Fatalf("len(data) = %d, want <= %d", len(data), MaxAdvertAppDataSize)
+	}
+
+	parsed, err := ParseAdvertAppData(data)
+	if err != nil {
+		t.Fatalf("ParseAdvertAppData() error = %v", err)
+	}
+	if !utf8.ValidString(parsed.Name) {
+		t.Errorf("Name = %q, not valid UTF-8", parsed.Name)
+	}
+	if want := strings.Repeat("\U0001F680", 7); parsed.Name != want {
+		t.Errorf("Name = %q, want %q", parsed.Name, want)
+	}
+}
+
+func TestBuildAdvertAppDataNameBudgetShrinksWithLocation(t *testing.T) {
+	// Location (8 bytes) and both feature fields (2 each) crowd the name, which
+	// sits at the tail. Budget: 32 - 1 - 8 - 2 - 2 = 19 bytes, so 4 rockets.
+	lat, lon := 40.0, -74.0
+	f1, f2 := uint16(1), uint16(2)
+	appData := &AdvertAppData{
+		NodeType: NodeTypeRepeater,
+		Lat:      &lat,
+		Lon:      &lon,
+		Feature1: &f1,
+		Feature2: &f2,
+		Name:     strings.Repeat("\U0001F680", 8),
+	}
+
+	data := BuildAdvertAppData(appData)
+	if len(data) > MaxAdvertAppDataSize {
+		t.Fatalf("len(data) = %d, want <= %d", len(data), MaxAdvertAppDataSize)
+	}
+
+	parsed, err := ParseAdvertAppData(data)
+	if err != nil {
+		t.Fatalf("ParseAdvertAppData() error = %v", err)
+	}
+	if !utf8.ValidString(parsed.Name) {
+		t.Errorf("Name = %q, not valid UTF-8", parsed.Name)
+	}
+	if want := strings.Repeat("\U0001F680", 4); parsed.Name != want {
+		t.Errorf("Name = %q, want %q", parsed.Name, want)
+	}
+}
+
+func TestBuildAdvertAppDataAsciiNameCutToBudget(t *testing.T) {
+	lat, lon := 40.0, -74.0
+	f1, f2 := uint16(1), uint16(2)
+	appData := &AdvertAppData{
+		NodeType: NodeTypeRepeater,
+		Lat:      &lat,
+		Lon:      &lon,
+		Feature1: &f1,
+		Feature2: &f2,
+		Name:     strings.Repeat("x", 40),
+	}
+
+	data := BuildAdvertAppData(appData)
+	if len(data) > MaxAdvertAppDataSize {
+		t.Fatalf("len(data) = %d, want <= %d", len(data), MaxAdvertAppDataSize)
+	}
+	parsed, err := ParseAdvertAppData(data)
+	if err != nil {
+		t.Fatalf("ParseAdvertAppData() error = %v", err)
+	}
+	if want := strings.Repeat("x", 19); parsed.Name != want {
+		t.Errorf("Name = %q, want %q", parsed.Name, want)
+	}
+}
+
+func TestBuildAdvertAppDataNameFlagClearedWhenNothingSurvives(t *testing.T) {
+	// FlagHasName must track what actually got written, not what was requested.
+	// Firmware guards this the same way (ADV_NAME_MASK only when name_len > 0).
+	empty := BuildAdvertAppData(&AdvertAppData{NodeType: NodeTypeRepeater})
+	if empty[0]&FlagHasName != 0 {
+		t.Errorf("empty name: flags = 0x%02x, FlagHasName should be clear", empty[0])
+	}
+	if len(empty) != 1 {
+		t.Errorf("empty name: len = %d, want 1 (flags byte only)", len(empty))
+	}
+
+	// A lone invalid byte yields an empty prefix, so the flag stays clear.
+	bad := BuildAdvertAppData(&AdvertAppData{NodeType: NodeTypeRepeater, Name: "\xff"})
+	if bad[0]&FlagHasName != 0 {
+		t.Errorf("invalid name: flags = 0x%02x, FlagHasName should be clear", bad[0])
+	}
+	if len(bad) != 1 {
+		t.Errorf("invalid name: len = %d, want 1 (flags byte only)", len(bad))
+	}
+}
+
+func TestValidUTF8Prefix(t *testing.T) {
+	cases := []struct {
+		name     string
+		in       string
+		maxBytes int
+		want     string
+	}{
+		{"fits exactly", "abc", 3, "abc"},
+		{"room to spare", "abc", 10, "abc"},
+		{"ascii cut", "abcdef", 3, "abc"},
+		{"zero budget", "abc", 0, ""},
+		{"negative budget", "abc", -1, ""},
+		{"empty input", "", 5, ""},
+		{"drops partial rune", "a\U0001F680", 3, "a"},
+		{"keeps whole rune", "a\U0001F680", 5, "a\U0001F680"},
+		{"multibyte exact", "éé", 4, "éé"},
+		{"multibyte cut", "éé", 3, "é"},
+		{"stops at invalid byte", "ab\xffcd", 5, "ab"},
+	}
+
+	for _, c := range cases {
+		if got := validUTF8Prefix(c.in, c.maxBytes); got != c.want {
+			t.Errorf("%s: validUTF8Prefix(%q, %d) = %q, want %q",
+				c.name, c.in, c.maxBytes, got, c.want)
+		}
 	}
 }
 
