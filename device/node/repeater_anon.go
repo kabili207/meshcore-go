@@ -99,7 +99,11 @@ func parseAnonReplyPath(data []byte) ([]byte, bool) {
 	if len(data) < 1 {
 		return nil, false
 	}
-	need := codec.PathInfoFromWireByte(data[0]).ByteLen()
+	info := codec.PathInfoFromWireByte(data[0])
+	if !info.IsValid() { // reserved mode 3, or a path longer than MaxPathSize
+		return nil, false
+	}
+	need := info.ByteLen()
 	if len(data) < 1+need {
 		return nil, false
 	}

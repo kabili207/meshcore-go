@@ -145,3 +145,38 @@ func TestRepeaterAnon_FloodIgnored(t *testing.T) {
 		t.Errorf("responses = %d, want 0 (flood ignored)", got)
 	}
 }
+
+func TestParseAnonReplyPath(t *testing.T) {
+	// mode 0, 2 hops
+	path, ok := parseAnonReplyPath([]byte{0x02, 0xAA, 0xBB})
+	if !ok {
+		t.Fatal("parseAnonReplyPath() ok = false, want true")
+	}
+	if len(path) != 2 {
+		t.Errorf("path length = %d, want 2", len(path))
+	}
+
+	// Zero hops is a valid encoding (reply zero-hop direct).
+	if _, ok := parseAnonReplyPath([]byte{0x00}); !ok {
+		t.Error("zero-hop path: ok = false, want true")
+	}
+
+	// Truncated: claims 3 hops but only 1 byte follows.
+	if _, ok := parseAnonReplyPath([]byte{0x03, 0xAA}); ok {
+		t.Error("truncated path: ok = true, want false")
+	}
+
+	// Reserved mode 3, with enough bytes to satisfy a naive length check.
+	reserved := make([]byte, 1+4)
+	reserved[0] = 0xC1
+	if _, ok := parseAnonReplyPath(reserved); ok {
+		t.Error("reserved mode 3: ok = true, want false")
+	}
+
+	// Mode 2, 63 hops = 189 bytes, over MaxPathSize even though the buffer fits.
+	overlong := make([]byte, 1+189)
+	overlong[0] = 0xBF
+	if _, ok := parseAnonReplyPath(overlong); ok {
+		t.Error("overlong path: ok = true, want false")
+	}
+}

@@ -42,3 +42,14 @@ func (p PathInfo) ToWireByte() uint8 {
 func (p PathInfo) ByteLen() int {
 	return int(p.HopCount) * int(p.HashSize)
 }
+
+// IsValid reports whether the encoding is one firmware would accept. It mirrors
+// Packet::isValidPathLen: mode 3 (4-byte hashes) is reserved, and the path must
+// fit in MaxPathSize bytes.
+//
+// Callers parsing a path out of decrypted content must run this before trusting
+// ByteLen, since a decrypted payload can be longer than MaxPathSize and so a
+// bounds check against the buffer alone will not reject a bad encoding.
+func (p PathInfo) IsValid() bool {
+	return p.HashSize <= MaxPathHashSize && p.ByteLen() <= MaxPathSize
+}

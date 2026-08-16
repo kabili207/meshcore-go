@@ -2,6 +2,7 @@ package codec
 
 import (
 	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -623,5 +624,65 @@ func TestTxtTypeName(t *testing.T) {
 		if got := TxtTypeName(tt.typ); got != tt.want {
 			t.Errorf("TxtTypeName(%d) = %s, want %s", tt.typ, got, tt.want)
 		}
+	}
+}
+
+func TestParsePathContent(t *testing.T) {
+	// mode 0, 3 hops, then extra_type + extra
+	data := []byte{0x03, 0xAA, 0xBB, 0xCC, PayloadTypeAck, 0x01, 0x02}
+
+	pc, err := ParsePathContent(data)
+	if err != nil {
+		t.Fatalf("ParsePathContent() error = %v", err)
+	}
+	if pc.PathLen != 0x03 {
+		t.Errorf("PathLen = 0x%02x, want 0x03", pc.PathLen)
+	}
+	if len(pc.Path) != 3 {
+		t.Errorf("Path length = %d, want 3", len(pc.Path))
+	}
+	if pc.ExtraType != PayloadTypeAck {
+		t.Errorf("ExtraType = %d, want %d", pc.ExtraType, PayloadTypeAck)
+	}
+	if len(pc.Extra) != 2 {
+		t.Errorf("Extra length = %d, want 2", len(pc.Extra))
+	}
+}
+
+func TestParsePathContentRejectsReservedMode(t *testing.T) {
+	// path_len 0xC1 = mode 3 (reserved, 4-byte hashes), 1 hop. Firmware's
+	// isValidPathLen drops these; a long enough buffer must not make it parse.
+	data := make([]byte, 64)
+	data[0] = 0xC1
+
+	if _, err := ParsePathContent(data); !errors.Is(err, ErrReservedPathMode) {
+		t.Errorf("ParsePathContent() error = %v, want ErrReservedPathMode", err)
+	}
+}
+
+func TestParsePathContentRejectsOverlongPath(t *testing.T) {
+	// path_len 0xBF = mode 2 (3-byte hashes), 63 hops = 189 bytes > MaxPathSize.
+	// Decrypted content can be this long (MaxPacketPayload is 184), so the
+	// buffer-length check alone would not reject it.
+	data := make([]byte, 1+189+1)
+	data[0] = 0xBF
+
+	if _, err := ParsePathContent(data); !errors.Is(err, ErrPathTooLong) {
+		t.Errorf("ParsePathContent() error = %v, want ErrPathTooLong", err)
+	}
+}
+
+func TestParsePathContentAcceptsMaxPath(t *testing.T) {
+	// mode 1 (2-byte hashes), 32 hops = 64 bytes, exactly MaxPathSize.
+	data := make([]byte, 1+64+1)
+	data[0] = 0x40 | 32
+	data[65] = PayloadTypeAck
+
+	pc, err := ParsePathContent(data)
+	if err != nil {
+		t.Fatalf("ParsePathContent() error = %v", err)
+	}
+	if len(pc.Path) != 64 {
+		t.Errorf("Path length = %d, want 64", len(pc.Path))
 	}
 }

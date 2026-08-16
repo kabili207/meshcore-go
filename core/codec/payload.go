@@ -467,8 +467,17 @@ func ParsePathContent(data []byte) (*PathContent, error) {
 		return nil, fmt.Errorf("path content too short: expected at least 2 bytes, got %d", len(data))
 	}
 
+	// Validate the encoding before trusting ByteLen. Decrypted content can be
+	// longer than MaxPathSize, so the buffer-length check below would not on its
+	// own reject a path_len that firmware's isValidPathLen drops.
 	info := PathInfoFromWireByte(data[0])
+	if info.HashSize > MaxPathHashSize {
+		return nil, fmt.Errorf("%w: path_len 0x%02x", ErrReservedPathMode, data[0])
+	}
 	pathByteLen := info.ByteLen()
+	if pathByteLen > MaxPathSize {
+		return nil, fmt.Errorf("%w: %d bytes", ErrPathTooLong, pathByteLen)
+	}
 
 	if len(data) < 1+pathByteLen+1 { // wire_byte + path_bytes + extra_type
 		return nil, fmt.Errorf("path content too short for %d hops at %d-byte hashes",

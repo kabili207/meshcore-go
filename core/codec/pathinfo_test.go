@@ -149,4 +149,44 @@ func TestPathInfo_Mode3Rejected(t *testing.T) {
 	if info.HopCount != 3 {
 		t.Errorf("mode 3: HopCount = %d, want 3", info.HopCount)
 	}
+	if info.IsValid() {
+		t.Error("mode 3: IsValid = true, want false (reserved)")
+	}
+}
+
+func TestPathInfo_IsValid(t *testing.T) {
+	// Every mode 0-2 encoding fits: 63 hops * 3 bytes = 189 > MaxPathSize, so
+	// the byte-length cap is what rejects the wide-and-long combinations.
+	for mode := uint8(0); mode <= 2; mode++ {
+		for hops := uint8(0); hops <= MaxHopCount; hops++ {
+			info := PathInfoFromWireByte(mode<<PathHashModeShift | hops)
+			want := info.ByteLen() <= MaxPathSize
+			if got := info.IsValid(); got != want {
+				t.Errorf("mode=%d hops=%d: IsValid = %v, want %v (ByteLen %d)",
+					mode, hops, got, want, info.ByteLen())
+			}
+		}
+	}
+}
+
+func TestPathInfo_IsValidBoundary(t *testing.T) {
+	// Mode 0 tops out at 63 bytes, always valid. Mode 1 crosses MaxPathSize at
+	// 33 hops (66 bytes); mode 2 crosses at 22 hops (66 bytes).
+	cases := []struct {
+		mode, hops uint8
+		want       bool
+	}{
+		{0, 63, true},  // 63 bytes
+		{1, 32, true},  // 64 bytes, exactly MaxPathSize
+		{1, 33, false}, // 66 bytes
+		{2, 21, true},  // 63 bytes
+		{2, 22, false}, // 66 bytes
+	}
+	for _, c := range cases {
+		info := PathInfoFromWireByte(c.mode<<PathHashModeShift | c.hops)
+		if got := info.IsValid(); got != c.want {
+			t.Errorf("mode=%d hops=%d (%d bytes): IsValid = %v, want %v",
+				c.mode, c.hops, info.ByteLen(), got, c.want)
+		}
+	}
 }
