@@ -36,6 +36,21 @@ contain breaking changes; those are called out explicitly below.
   `github.com/TheThingsNetwork/go-cayenne-lib`. The permission mask semantics are
   unchanged (guests get base telemetry only).
 
+- **The MQTT transport defaults to the EastMesh firmware's bridge format.**
+  `mqtt.Config` gained `Framing` and `Secret`. The zero value, `FramingBridge`,
+  wraps each packet in a magic + Fletcher-16 frame XORed with `Secret` and
+  defaults the topic to `meshcore/bridge/packets`, matching the MQTT bridge in
+  [xJARiD/MeshCore-EastMesh](https://github.com/xJARiD/MeshCore-EastMesh).
+
+  *Why:* the [vrybdpkt/MeshCore](https://github.com/vrybdpkt/MeshCore) fork the
+  transport was aligned with has had no commits since February 2026. EastMesh
+  is actively maintained by the Eastern Australia mesh network.
+
+  *Migration:* to keep talking to vrybdpkt repeaters, set
+  `Framing: mqtt.FramingRaw`. That restores bare-packet payloads and the
+  `meshcore/bridge` default topic. The two formats can't share a topic: each
+  side drops the other's messages.
+
 ### Added
 
 - Firmware-format `ver`/`version` CLI reply: `cli.FirmwareVersion` (the targeted
@@ -71,6 +86,8 @@ contain breaking changes; those are called out explicitly below.
   and the room `Server` expose `SetConfig`/`LoadConfig`/`GetConfig`. `LoadConfig`
   lets an app restore settings from its own store at startup without writing them
   straight back. Unknown or read-only keys return `cli.ErrUnknownKey`.
+- `codec.EncodeBridgeFrame` / `codec.DecodeBridgeFrame`, the datagram framing the
+  firmware's ESP-NOW bridge and the EastMesh MQTT bridge share.
 
 ### Fixed
 

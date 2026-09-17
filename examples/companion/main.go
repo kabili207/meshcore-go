@@ -60,7 +60,9 @@ func run() error {
 		serialPort = flag.String("serial", "", "serial port for the LoRa radio (optional, e.g. /dev/ttyUSB0)")
 		baud       = flag.Int("baud", 115200, "serial baud rate")
 		mqttBroker = flag.String("mqtt", "", "MQTT bridge broker URL (optional, e.g. tcp://host:1883)")
-		mqttTopic  = flag.String("mqtt-topic", "meshcore/bridge", "MQTT bridge topic")
+		mqttTopic  = flag.String("mqtt-topic", "", "MQTT bridge topic (default: the firmware's topic for the framing in use)")
+		mqttSecret = flag.String("mqtt-secret", "", "bridge.secret shared with the EastMesh repeaters (optional)")
+		mqttRaw    = flag.Bool("mqtt-raw", false, "publish bare packets, for the vrybdpkt firmware fork")
 		mqttUser   = flag.String("mqtt-user", "", "MQTT username (optional)")
 		mqttPass   = flag.String("mqtt-pass", "", "MQTT password (optional)")
 		mqttTLS    = flag.Bool("mqtt-tls", false, "use TLS for the MQTT connection")
@@ -94,9 +96,16 @@ func run() error {
 		}
 	}
 
+	mqttFraming := mqtttransport.FramingBridge
+	if *mqttRaw {
+		mqttFraming = mqtttransport.FramingRaw
+	}
+
 	transports, err := buildTransports(*serialPort, *baud, mqtttransport.Config{
 		Broker:   *mqttBroker,
 		Topic:    *mqttTopic,
+		Framing:  mqttFraming,
+		Secret:   *mqttSecret,
 		Username: *mqttUser,
 		Password: *mqttPass,
 		UseTLS:   *mqttTLS,

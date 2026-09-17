@@ -1,7 +1,7 @@
 // Package mqtt provides an MQTT transport for connecting to MeshCore mesh networks.
 //
-// MeshCore packets are transmitted directly over MQTT topics as raw bytes.
-// A single topic is used for both publishing and subscribing.
+// A single topic is used for both publishing and subscribing. What goes in each
+// message depends on the firmware fork at the other end. See [Framing].
 package mqtt
 
 import (
@@ -21,6 +21,20 @@ import (
 // Compile-time interface check.
 var _ transport.Transport = (*Transport)(nil)
 
+// Framing selects the MQTT payload format. The firmware forks that bridge over
+// MQTT disagree on it, and a node only hears peers using the same one.
+type Framing int
+
+const (
+	// FramingBridge wraps each packet with codec.EncodeBridgeFrame, matching the
+	// xJARiD/MeshCore-EastMesh MQTTBridge. The default topic is
+	// "meshcore/bridge/packets", which that firmware hardcodes.
+	FramingBridge Framing = iota
+	// FramingRaw publishes the bare packet bytes, matching the vrybdpkt/MeshCore
+	// MQTTBridge. The default topic is "meshcore/bridge".
+	FramingRaw
+)
+
 // Config holds the configuration for an MQTT transport.
 type Config struct {
 	// Broker is the MQTT broker URL (e.g., "tcp://broker.example.com:1883").
@@ -33,8 +47,14 @@ type Config struct {
 	UseTLS bool
 	// ClientID is the MQTT client identifier. If empty, defaults to "mc-bridge-{NodeID}".
 	ClientID string
-	// Topic is the MQTT topic for publishing and subscribing.
+	// Topic is the MQTT topic for publishing and subscribing. If empty, defaults
+	// to the topic the firmware for the selected Framing uses.
 	Topic string
+	// Framing is the payload format. The zero value is FramingBridge.
+	Framing Framing
+	// Secret is the XOR key for FramingBridge, the firmware's "bridge.secret"
+	// pref (at most 15 bytes there). Ignored by FramingRaw.
+	Secret string
 	// NodeID uniquely identifies this node on the MQTT broker.
 	NodeID string
 	// Logger is the logger to use. If nil, slog.Default() is used.
@@ -55,7 +75,11 @@ type Transport struct {
 // New creates a new MQTT transport with the given configuration.
 func New(cfg Config) *Transport {
 	if cfg.Topic == "" {
-		cfg.Topic = "meshcore/bridge"
+		if cfg.Framing == FramingRaw {
+			cfg.Topic = "meshcore/bridge"
+		} else {
+			cfg.Topic = "meshcore/bridge/packets"
+		}
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -161,6 +185,12 @@ func (t *Transport) SendPacket(packet *codec.Packet) error {
 	}
 
 	data := packet.WriteTo()
+	if t.cfg.Framing == FramingBridge {
+		var err error
+		if data, err = codec.EncodeBridgeFrame(data, t.cfg.Secret); err != nil {
+			return err
+		}
+	}
 
 	token := t.client.Publish(t.cfg.Topic, 0, false, data)
 	if !token.WaitTimeout(10 * time.Second) {
@@ -183,8 +213,17 @@ func (t *Transport) handleMessage(_ paho.Client, message paho.Message) {
 		return
 	}
 
+	data := message.Payload()
+	if t.cfg.Framing == FramingBridge {
+		var err error
+		if data, err = codec.DecodeBridgeFrame(data, t.cfg.Secret); err != nil {
+			t.log.Debug("failed to decode bridge frame", "error", err)
+			return
+		}
+	}
+
 	var packet codec.Packet
-	if err := packet.ReadFrom(message.Payload()); err != nil {
+	if err := packet.ReadFrom(data); err != nil {
 		t.log.Debug("failed to parse MeshCore packet", "error", err)
 		return
 	}

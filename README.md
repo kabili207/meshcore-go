@@ -59,7 +59,14 @@ cfg := serial.Config{
 tr := serial.New(cfg)
 ```
 
-The MQTT transport aligns with the [MQTTBridge firmware fork](https://github.com/vrybdpkt/MeshCore) which adds MQTT bridging support to MeshCore repeaters.
+The MQTT transport speaks to firmware forks that add MQTT bridging to MeshCore repeaters. The forks use different payload formats, so pick the one your repeaters run:
+
+| `Framing` | Firmware | Payload | Default topic |
+|-----------|----------|---------|---------------|
+| `mqtt.FramingBridge` (default) | [xJARiD/MeshCore-EastMesh](https://github.com/xJARiD/MeshCore-EastMesh) | magic + Fletcher-16 + packet, XORed with `Secret` | `meshcore/bridge/packets` |
+| `mqtt.FramingRaw` | [vrybdpkt/MeshCore](https://github.com/vrybdpkt/MeshCore) | bare packet bytes | `meshcore/bridge` |
+
+For EastMesh, `Secret` is the repeater's `bridge.secret`. That firmware's bridge connects over plain TCP only, so the broker needs a non-TLS listener for the repeaters even if this side uses `UseTLS`.
 
 ## Protocol
 
