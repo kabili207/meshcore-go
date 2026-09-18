@@ -72,6 +72,8 @@ const (
 	PacketSourceLocal
 	// PacketSourceUDP indicates the packet came from a UDP multicast connection.
 	PacketSourceUDP
+	// PacketSourceKISS indicates the packet came off the air via a KISS TNC.
+	PacketSourceKISS
 )
 
 func (s PacketSource) String() string {
@@ -84,6 +86,8 @@ func (s PacketSource) String() string {
 		return "local"
 	case PacketSourceUDP:
 		return "udp"
+	case PacketSourceKISS:
+		return "kiss"
 	default:
 		return "unknown"
 	}

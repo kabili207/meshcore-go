@@ -2,9 +2,10 @@
 
 Prioritized plan to close the gaps found in `docs/FEATURE_PARITY.md`.
 
-**Status (2026-08-16): 20 of 24 items are done.** Only Phase 5 (airtime / duty-cycle /
-CSMA) and Phase 6 (sensor role, KISS modem) remain open. Phases 1 through 4 are
-complete. The v1.17.1 firmware upgrade is tracked separately in `UPGRADE_1.17.md`.
+**Status (2026-09-07): 21 of 24 items are done.** Phases 1 through 4 are complete, and
+the KISS modem half of Phase 6 shipped. Still open: Phase 5 (airtime / duty-cycle
+budgeting in the router) and the sensor role. The v1.17.1 firmware upgrade is tracked
+separately in `UPGRADE_1.17.md`.
 
 Four correctness bugs found during the original analysis were fixed before this plan
 was written (room stats size, open-room posting rights, active-path replay protection,
@@ -315,8 +316,12 @@ transport is ever added:
    pushes TXT alerts to clients holding the alert-subscription permission bits
    (`PERM_RECV_ALERTS_LO`=1<<6, `HI`=1<<7), with ACK-tracked retry and
    `MAX_CONCURRENT_ALERTS`, plus subscribe-on-login. Self-contained; larger.
-2. **KISS modem (M, optional).** KISS TNC serial framing + raw packet passthrough.
-   Niche; only build if a raw-modem use case appears. Files: new `device/kiss`.
+2. **KISS modem — done (2026-09-07).** Wire format in `core/codec/kiss` (FEND/FESC
+   framing, the 26 SetHardware sub-commands, and the composite payload shapes), the
+   host side in `transport/kiss`, and the modem side in `device/kiss` with the
+   p-persistent CSMA state machine. The host half is what lets a Go node front a real
+   radio; the modem half needs a `Radio` from the caller, so it doubles as a bridge
+   exposing an existing transport to standard KISS clients.
 
 ## Suggested ordering
 

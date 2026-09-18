@@ -1,5 +1,6 @@
 # Extensionless binaries
 companion
+kiss
 
 # Re-allow directories
 !*/

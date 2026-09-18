@@ -7,8 +7,8 @@ A Go implementation of the MeshCore protocol for mesh networking over LoRa radio
 This library provides Go packages for building MeshCore mesh networking applications:
 
 - **Core protocol** - Packet encoding/decoding, routing, crypto
-- **Device implementations** - Room server, repeater, companion node
-- **Transports** - Serial (RS232), MQTT
+- **Device implementations** - Room server, repeater, companion node, KISS modem
+- **Transports** - Serial (RS232), MQTT, UDP multicast, KISS TNC
 
 ## Packages
 
@@ -36,6 +36,7 @@ Device role implementations:
 - **node** - Repeater and companion node logic
 - **contact** - Contact list management
 - **router** - Packet routing with loop detection
+- **kiss** - KISS TNC server presenting a radio to KISS clients
 
 ### transport
 
@@ -43,6 +44,8 @@ Network transports:
 
 - **serial** - RS232 serial connection
 - **mqtt** - MQTT bridge for extending networks
+- **udp** - UDP multicast for local mesh links
+- **kiss** - KISS modem, the one path to a real LoRa radio
 
 ## Usage
 
@@ -67,6 +70,17 @@ The MQTT transport speaks to firmware forks that add MQTT bridging to MeshCore r
 | `mqtt.FramingRaw` | [vrybdpkt/MeshCore](https://github.com/vrybdpkt/MeshCore) | bare packet bytes | `meshcore/bridge` |
 
 For EastMesh, `Secret` is the repeater's `bridge.secret`. That firmware's bridge connects over plain TCP only, so the broker needs a non-TLS listener for the repeaters even if this side uses `UseTLS`.
+
+To put a node on real RF, point the KISS transport at a MeshCore KISS modem:
+
+```go
+tr := kiss.New(kiss.Config{Port: "/dev/ttyUSB0"})
+```
+
+It carries raw packets both ways and exposes the modem's SetHardware extensions
+(radio settings, RSSI and noise floor, telemetry, crypto) as methods. `device/kiss`
+is the other half, serving KISS clients over a stream or TCP. See
+`examples/kiss` for both.
 
 ## Protocol
 

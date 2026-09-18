@@ -53,6 +53,28 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **KISS modem support, both halves.** `core/codec/kiss` holds the wire format:
+  FEND/FESC framing with a resyncing `FrameReader`, the 26 SetHardware sub-commands,
+  and the `RadioConfig`/`Stats`/`RxMeta` payload shapes.
+
+  `transport/kiss` is the host side, a `transport.Transport` that drives a modem over
+  a serial port (`Config.Port`) or any stream (`Config.Stream`, for KISS over TCP).
+  It exposes every SetHardware operation as a method, from `SetRadio` and
+  `GetNoiseFloor` through the crypto offload. It is the first transport in this repo
+  to populate `Packet.SNR`, which it does by briefly holding each received packet so
+  the `RxMeta` frame that follows can fill it in. `SendPacket` waits for the modem's
+  `TxDone` before returning, giving callers real airtime backpressure; set a negative
+  `TxTimeout` to opt out. Packets arrive tagged `transport.PacketSourceKISS`.
+
+  `device/kiss` is the modem side: `Modem.Serve` speaks KISS to a host over a stream,
+  `ListenAndServe` does the same over TCP, and `Receive` pushes packets heard off the
+  air to every connected host. The physical layer comes from the caller as a `Radio`,
+  so the same code fronts real hardware or bridges an existing mesh transport to
+  standard KISS clients. Optional hooks (`IsChannelBusy`, `NoiseFloor`, `Battery`,
+  `Telemetry`, and the rest) mirror the firmware's callbacks and answer `NoCallback`
+  when left nil. It runs the firmware's p-persistent CSMA state machine, so this is
+  the first place in the repo with any channel-access discipline.
+
 - Firmware-format `ver`/`version` CLI reply: `cli.FirmwareVersion` (the targeted
   firmware version, e.g. `v1.16.0`) plus `cli.FormatVersion` build the
   `"<version> (Build: <date>)"` string the phone apps parse to gate editing. Both

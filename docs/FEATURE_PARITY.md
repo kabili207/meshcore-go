@@ -17,9 +17,11 @@ this file.
 
 Two structural facts shape everything:
 
-1. The Go node is **transport-attached** (MQTT / serial / UDP), not a LoRa radio
-   driver. Radio tuning, TX power, CAD, GPS, display/UI, and sleep have no target in
-   Go. These are **N/A by design**, not gaps.
+1. The Go node is **transport-attached** (MQTT / serial / UDP / KISS), not a LoRa
+   radio driver. GPS, display/UI, and sleep have no target in Go and are **N/A by
+   design**, not gaps. Radio tuning and TX power are no longer in that bucket:
+   `transport/kiss` sets them on the modem it drives, and `device/kiss` accepts them
+   from a host. CAD is still out of reach, since the modem does its own sensing.
 2. The firmware companion is a **phone bridge**: it exposes a serial/BLE frame
    protocol, and the real chat client is a phone app. Go implements **both** sides —
    `device/node` is the mesh/chat engine, and `device/companion` is a frame-protocol
@@ -33,7 +35,7 @@ Two structural facts shape everything:
 | Repeater | `simple_repeater` | `device/node/repeater.go` | Strong; no airtime/CSMA |
 | Room server | `simple_room_server` | `device/room/*` | Strong |
 | Sensor | `simple_sensor` | none | Wire format + telemetry only |
-| KISS modem | `kiss_modem` | none | Missing entirely |
+| KISS modem | `kiss_modem` | `transport/kiss` + `device/kiss` | Full, both halves |
 | Secure chat demo | `simple_secure_chat` | (companion covers it) | Reference app, not a gap |
 
 ---
@@ -47,11 +49,15 @@ append/remove/reverse, region map including the exact `/regions2` binary format,
 transport keys (Go implements the private-region keystore that firmware stubs as a
 hardware TODO), trace forwarding, multipart ACK handling, packet dedup.
 
-**Biggest gap: airtime / duty-cycle / CSMA is entirely missing.** Firmware's
-`Dispatcher` runs a token-bucket airtime budget (~50% duty cycle, 1-hour window),
-defers TX when budget is low, does CAD/channel sensing, applies SNR-weighted RX flood
-delay (better-SNR nodes rebroadcast first), and randomizes flood rebroadcast jitter.
-Go has none of it: the router drains its queue every 10ms
+**Biggest gap: airtime and duty-cycle budgeting is still missing from the router.**
+Firmware's `Dispatcher` runs a token-bucket airtime budget (~50% duty cycle, 1-hour
+window), defers TX when budget is low, does CAD/channel sensing, applies SNR-weighted
+RX flood delay (better-SNR nodes rebroadcast first), and randomizes flood rebroadcast
+jitter. Go has p-persistent CSMA in `device/kiss` (carrier sense, persistence draw,
+slot backoff, stuck-channel timeout) and `transport/kiss` blocks a send until the
+modem reports it finished, so a node fronting a KISS radio does get channel access
+control and TX backpressure. None of the rest exists: the router drains its queue
+every 10ms
 (`DefaultDrainInterval`) and almost always sends with `delay=0`. The queue does
 support per-packet delay (`device/router/queue.go`) and uses it for
 `PathSendDelay` (300ms on PATH packets), so the mechanism exists and is simply never
@@ -206,13 +212,32 @@ Still missing: the sensor node type itself, drivers, GPS, time-series storage
 
 ---
 
-## KISS modem (missing entirely)
+## KISS modem (full parity, both halves)
 
 Firmware `KissModem` is a raw radio pipe: KISS TNC serial framing (FEND/FESC), raw
-packet in/out, a CSMA TX state machine, and a `SETHARDWARE` sub-protocol (~26
-crypto/radio ops). `grep` for kiss/tnc across the Go tree returns zero hits. The
-companion protocol's `CmdSendRawData` is unrelated (app-frame packet injection, not a
-KISS TNC).
+packet in/out, a CSMA TX state machine, and a `SETHARDWARE` sub-protocol (26
+crypto/radio/telemetry ops). Go implements the wire format in `core/codec/kiss` and
+both sides on top of it.
+
+`transport/kiss` is the **host** half, a `transport.Transport` that drives a modem
+over a serial port or any stream. It is the first path by which a Go node reaches
+real RF. All 26 SetHardware sub-commands are exposed as methods. Received packets are
+held briefly so the `RxMeta` frame that follows can populate `Packet.SNR`, which no
+other transport in this repo sets. `SendPacket` waits for the modem's `TxDone`, so
+the caller gets genuine airtime backpressure from a radio that holds one pending
+packet.
+
+`device/kiss` is the **modem** half: a server that presents a `Radio` to KISS hosts
+over a stream or TCP. Since Go has no LoRa driver, the caller supplies the physical
+layer, which makes the same code usable as a bridge that exposes an existing mesh
+transport to standard KISS clients. Optional hardware hooks mirror the firmware's
+callbacks and answer `NoCallback` when absent. It implements the p-persistent CSMA
+state machine (TXDELAY / persistence / slot time / TXtail, carrier sense, and the
+stuck-channel timeout), which is the one place airtime discipline exists in this
+repo.
+
+The companion protocol's `CmdSendRawData` remains unrelated (app-frame packet
+injection, not a KISS TNC).
 
 ---
 
@@ -225,6 +250,9 @@ KISS TNC).
 - Repeater: good forwarder with a working admin/config/stats surface, rate limiting,
   discovery, and opt-in persistence.
 - Room server: functionally close to firmware, on a single dispatch path.
-- Sensor and KISS modem: not started.
-- Systemic: no airtime/duty-cycle/CSMA anywhere. This is the one gap that would matter
-  immediately if a LoRa radio transport were ever added.
+- KISS modem: complete on both sides, and the only route by which a Go node touches
+  real RF.
+- Sensor: not started.
+- Systemic: no airtime or duty-cycle budget in the router. CSMA now exists, but only
+  inside `device/kiss`; a node whose radio hangs off `transport/kiss` gets channel
+  access control from the modem it is talking to, and nothing else does.
