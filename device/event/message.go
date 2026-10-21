@@ -36,8 +36,13 @@ type GroupTextReceived struct {
 	Event
 
 	// ChannelHash is the first byte of the SHA256 hash of the channel's
-	// shared key, identifying which group channel this message belongs to.
+	// shared key. Distinct channels can share a hash, so use ChannelKey to
+	// tell them apart.
 	ChannelHash uint8
+
+	// ChannelKey is a copy of the registered key that decrypted the message.
+	// It identifies the channel exactly.
+	ChannelKey []byte
 
 	// Message is the decrypted text content.
 	Message string
@@ -49,8 +54,13 @@ type GroupDataReceived struct {
 	Event
 
 	// ChannelHash is the first byte of the SHA256 hash of the channel's
-	// shared key, identifying which group channel this data belongs to.
+	// shared key. Distinct channels can share a hash, so use ChannelKey to
+	// tell them apart.
 	ChannelHash uint8
+
+	// ChannelKey is a copy of the registered key that decrypted the data. It
+	// identifies the channel exactly.
+	ChannelKey []byte
 
 	// DataType identifies the kind of payload (firmware GRP_DATA data_type),
 	// letting consumers dispatch on the format of Data.

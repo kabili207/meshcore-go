@@ -117,6 +117,14 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **Channel messages could be attributed to the wrong channel.** Group events
+  carried only the 1-byte channel hash, which two channels share about 1 time in
+  256. `event.GroupTextReceived` and `event.GroupDataReceived` now also carry
+  `ChannelKey`, a copy of the key that decrypted the message. The companion
+  server uses it to pick the channel slot, so a message on one channel no longer
+  shows up under another channel with the same hash. Code that maps channels by
+  `ChannelHash` should switch to `ChannelKey`.
+
 - **Back-to-back CLI commands lost their replies.** `CompanionNode.SendText`
   stamped CLI messages with the plain clock, so two commands in the same second
   shared a timestamp and the admin node treated the second as a retry. CLI

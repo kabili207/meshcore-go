@@ -355,17 +355,18 @@ func (b *BaseNode) handlePath(pkt *codec.Packet, src transport.PacketSource) {
 }
 
 // decryptGroup tries every key registered under the channel hash and returns
-// the first plaintext whose MAC verifies. This mirrors firmware's
-// searchChannelsByHash + try-each-decrypt loop: a 1-byte hash can collide across
-// channels, so MAC verification is what actually selects the right key.
-func (b *BaseNode) decryptGroup(hash uint8, mac uint16, ciphertext []byte) ([]byte, bool) {
-	for _, key := range b.channelKeys(hash) {
-		plaintext, err := crypto.DecryptGroupMessage(codec.PrependMAC(mac, ciphertext), key)
+// the first plaintext whose MAC verifies, along with that key. This mirrors
+// firmware's searchChannelsByHash + try-each-decrypt loop: a 1-byte hash can
+// collide across channels, so MAC verification is what actually selects the
+// right key.
+func (b *BaseNode) decryptGroup(hash uint8, mac uint16, ciphertext []byte) (plaintext, key []byte, ok bool) {
+	for _, k := range b.channelKeys(hash) {
+		pt, err := crypto.DecryptGroupMessage(codec.PrependMAC(mac, ciphertext), k)
 		if err == nil {
-			return plaintext, true
+			return pt, append([]byte(nil), k...), true
 		}
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 // handleGrpTxt processes a group text message.
@@ -376,7 +377,7 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 		return
 	}
 
-	plaintext, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
+	plaintext, key, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
 	if !ok {
 		return // no registered key for this hash decrypted (MAC failed on all)
 	}
@@ -394,6 +395,7 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 	b.emitEvent(&event.GroupTextReceived{
 		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
 		ChannelHash: grp.ChannelHash,
+		ChannelKey:  key,
 		Message:     message,
 	})
 }
@@ -406,7 +408,7 @@ func (b *BaseNode) handleGrpData(pkt *codec.Packet, src transport.PacketSource) 
 		return
 	}
 
-	plaintext, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
+	plaintext, key, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
 	if !ok {
 		return // no registered key for this hash decrypted (MAC failed on all)
 	}
@@ -419,6 +421,7 @@ func (b *BaseNode) handleGrpData(pkt *codec.Packet, src transport.PacketSource) 
 	b.emitEvent(&event.GroupDataReceived{
 		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
 		ChannelHash: grp.ChannelHash,
+		ChannelKey:  key,
 		DataType:    content.DataType,
 		Data:        content.Data,
 	})

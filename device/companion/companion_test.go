@@ -475,7 +475,7 @@ func TestIncomingChannelDrain(t *testing.T) {
 	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
 
 	publicHash := crypto.ComputeChannelHash(crypto.DefaultChannelKey)
-	handler(&event.GroupTextReceived{Event: event.Event{}, ChannelHash: publicHash, Message: "hey"})
+	handler(&event.GroupTextReceived{ChannelHash: publicHash, ChannelKey: crypto.DefaultChannelKey, Message: "hey"})
 
 	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
 	if resp[0][0] != serial.RespCodeChannelMsgRecv {
@@ -494,8 +494,8 @@ func TestIncomingChannelUnknownDropped(t *testing.T) {
 	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
 	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
 
-	badHash := crypto.ComputeChannelHash(crypto.DefaultChannelKey) + 1
-	handler(&event.GroupTextReceived{Event: event.Event{}, ChannelHash: badHash, Message: "x"})
+	unknown := bytes.Repeat([]byte{0x5A}, 16)
+	handler(&event.GroupTextReceived{ChannelHash: crypto.ComputeChannelHash(unknown), ChannelKey: unknown, Message: "x"})
 
 	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
 	if resp[0][0] != serial.RespCodeNoMoreMessages {
@@ -797,7 +797,7 @@ func TestIncomingNullKeyChannelDropped(t *testing.T) {
 	collectResponses(t, s, setChannelCmd(1, "Team", bytes.Repeat([]byte{0xAB}, 16)))
 	collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
 
-	handler(&event.GroupTextReceived{ChannelHash: crypto.ComputeChannelHash(zeroSecret), Message: "x"})
+	handler(&event.GroupTextReceived{ChannelHash: crypto.ComputeChannelHash(zeroSecret), ChannelKey: zeroSecret, Message: "x"})
 	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
 	if resp[0][0] != serial.RespCodeNoMoreMessages {
 		t.Errorf("null-key message was delivered to a deleted slot: %v", resp[0])
@@ -819,6 +819,43 @@ func TestSendChannelMsgDeletedSlotNotFound(t *testing.T) {
 	}
 	if sent {
 		t.Error("sent a channel message with the all-zero key")
+	}
+}
+
+// collidingKey returns a 16-byte key with the same channel hash as key.
+func collidingKey(t *testing.T, key []byte) []byte {
+	t.Helper()
+	target := crypto.ComputeChannelHash(key)
+	k := make([]byte, 16)
+	for i := uint32(1); i != 0; i++ {
+		binary.LittleEndian.PutUint32(k, i)
+		if crypto.ComputeChannelHash(k) == target && !bytes.Equal(k, key) {
+			return k
+		}
+	}
+	t.Fatal("no colliding key found")
+	return nil
+}
+
+// Two channels can share a 1-byte hash. A message must land on the slot whose
+// key decrypted it, not the first slot with a matching hash.
+func TestIncomingChannelHashCollision(t *testing.T) {
+	var handler func(any)
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
+
+	keyA := bytes.Repeat([]byte{0xAB}, 16)
+	keyB := collidingKey(t, keyA)
+	collectResponses(t, s, setChannelCmd(1, "A", keyA))
+	collectResponses(t, s, setChannelCmd(2, "B", keyB))
+
+	handler(&event.GroupTextReceived{ChannelHash: crypto.ComputeChannelHash(keyB), ChannelKey: keyB, Message: "on B"})
+	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
+	if resp[0][0] != serial.RespCodeChannelMsgRecv {
+		t.Fatalf("expected ChannelMsgRecv, got %v", resp[0])
+	}
+	if resp[0][1] != 2 {
+		t.Errorf("channel index = %d, want 2 (the slot holding the decrypting key)", resp[0][1])
 	}
 }
 

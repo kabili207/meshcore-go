@@ -219,6 +219,9 @@ func TestBaseNode_GroupDataReceive(t *testing.T) {
 	if gd.ChannelHash != hash {
 		t.Errorf("channel hash = %02x, want %02x", gd.ChannelHash, hash)
 	}
+	if !bytes.Equal(gd.ChannelKey, key) {
+		t.Errorf("channel key = %x, want %x", gd.ChannelKey, key)
+	}
 	if gd.DataType != 0x1234 {
 		t.Errorf("data type = %#x, want 0x1234", gd.DataType)
 	}
@@ -246,6 +249,9 @@ func TestBaseNode_GroupTextHashCollision(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(events))
 	}
+	// The hash can't tell the channels apart, so each event must carry the key
+	// that actually decrypted it.
+	wantKey := map[string][]byte{"from A": keyA, "from B": keyB}
 	got := map[string]bool{}
 	for _, e := range events {
 		gt, ok := e.(*event.GroupTextReceived)
@@ -254,6 +260,9 @@ func TestBaseNode_GroupTextHashCollision(t *testing.T) {
 		}
 		if gt.ChannelHash != hash {
 			t.Errorf("channel hash = %02x, want %02x", gt.ChannelHash, hash)
+		}
+		if !bytes.Equal(gt.ChannelKey, wantKey[gt.Message]) {
+			t.Errorf("%q: channel key = %x, want %x", gt.Message, gt.ChannelKey, wantKey[gt.Message])
 		}
 		got[gt.Message] = true
 	}

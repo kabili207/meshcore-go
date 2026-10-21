@@ -636,13 +636,14 @@ func (s *Server) channelKey(idx uint8) []byte {
 	return s.channels[idx].secret
 }
 
-// channelIndexForHash finds the index of the configured channel whose key hashes
-// to hash.
-func (s *Server) channelIndexForHash(hash uint8) (uint8, bool) {
+// channelIndexForKey finds the index of the active channel whose key is key.
+// Matching on the key, not its 1-byte hash, keeps two channels that share a
+// hash apart.
+func (s *Server) channelIndexForKey(key []byte) (uint8, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i, ch := range s.channels {
-		if ch.active() && crypto.ComputeChannelHash(ch.secret) == hash {
+		if ch.active() && bytes.Equal(ch.secret, key) {
 			return uint8(i), true
 		}
 	}
@@ -953,10 +954,10 @@ func (s *Server) enqueueDM(e *event.TextMessageReceived) {
 	s.enqueue(qm)
 }
 
-// enqueueChannel queues an incoming group message, mapping its channel hash to a
-// configured channel index. Messages on unknown channels are dropped.
+// enqueueChannel queues an incoming group message under the channel index whose
+// key decrypted it. Messages on unknown channels are dropped.
 func (s *Server) enqueueChannel(e *event.GroupTextReceived) {
-	idx, ok := s.channelIndexForHash(e.ChannelHash)
+	idx, ok := s.channelIndexForKey(e.ChannelKey)
 	if !ok {
 		s.log.Debug("dropping message for unknown channel", "hash", e.ChannelHash)
 		return
