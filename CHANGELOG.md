@@ -100,6 +100,10 @@ contain breaking changes; those are called out explicitly below.
 - `acl.DefaultMaxClients` and `room.DefaultMaxClients` go from 20 to 32,
   matching firmware v1.18's `MAX_CLIENTS`.
 
+- Repeaters no longer answer node discovery when forwarding is off, or when both
+  advert intervals are 0. Firmware v1.18 treats the latter as a node that
+  doesn't want to be found.
+
 ### Fixed
 
 - **A crafted packet could crash any node.** Decryption panicked when the

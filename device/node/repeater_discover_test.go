@@ -77,6 +77,44 @@ func TestRepeaterDiscover_IgnoresNonRepeaterFilter(t *testing.T) {
 	}
 }
 
+func sendDiscoverReq(n *RepeaterNode) {
+	data := codec.BuildNodeDiscoverReqPayload(1<<codec.NodeTypeRepeater, 1, 0)
+	n.base.processPacket(codec.NewPacket(codec.PayloadTypeControl, codec.RouteTypeDirect, data), transport.PacketSourceMQTT)
+}
+
+// Firmware v1.18: a node with both advert intervals at 0 doesn't want to be
+// discoverable.
+func TestRepeaterDiscover_HiddenNodeIgnores(t *testing.T) {
+	n, ct := newTestRepeater(t, "adminpw", "guestpw")
+	n.advertSched.UpdateIntervals(0, 0)
+
+	sendDiscoverReq(n)
+	if countControl(ct) != 0 {
+		t.Error("hidden repeater answered a discover request")
+	}
+}
+
+func TestRepeaterDiscover_OneIntervalSetStillAnswers(t *testing.T) {
+	n, ct := newTestRepeater(t, "adminpw", "guestpw")
+	n.advertSched.UpdateIntervals(0, 47)
+
+	sendDiscoverReq(n)
+	if countControl(ct) != 1 {
+		t.Error("repeater with flood adverts on should answer a discover request")
+	}
+}
+
+// Firmware only answers discovery when forwarding is enabled.
+func TestRepeaterDiscover_ForwardingOffIgnores(t *testing.T) {
+	n, ct := newTestRepeater(t, "adminpw", "guestpw")
+	n.base.Router.SetForwardPackets(false)
+
+	sendDiscoverReq(n)
+	if countControl(ct) != 0 {
+		t.Error("repeater with forwarding off answered a discover request")
+	}
+}
+
 func TestRepeaterDiscover_RateLimited(t *testing.T) {
 	n, ct := newTestRepeater(t, "adminpw", "guestpw")
 
