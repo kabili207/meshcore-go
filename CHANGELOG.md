@@ -104,6 +104,11 @@ contain breaking changes; those are called out explicitly below.
   advert intervals are 0. Firmware v1.18 treats the latter as a node that
   doesn't want to be found.
 
+- Repeaters default to `loop.detect minimal`, as in firmware v1.18. Firmware
+  applies this to new installs only. Here it applies to any repeater that has no
+  persisted `loop.detect`, since only changed settings are persisted. To keep the
+  old behavior, load `loop.detect off` with `LoadConfig`.
+
 ### Fixed
 
 - **A crafted packet could crash any node.** Decryption panicked when the

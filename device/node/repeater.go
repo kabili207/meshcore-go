@@ -15,6 +15,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/router"
 	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
@@ -155,6 +156,9 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create base node: %w", err)
 	}
+	// Firmware v1.18 repeater default. A persisted loop.detect, applied with
+	// LoadConfig, overrides it.
+	base.Router.SetLoopDetect(router.LoopDetectMinimal)
 
 	// Build advert scheduler. Keep the AppData pointer so CLI "set name/lat/lon"
 	// takes effect on subsequent adverts.
