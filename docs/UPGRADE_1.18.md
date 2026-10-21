@@ -31,6 +31,24 @@ one should be fixed before anything else.
 
 Ordered by priority.
 
+> **Status:**
+>
+> | Item | Commit |
+> |---|---|
+> | 1. Unaligned ciphertext | `b4ca856` |
+> | 2. Channel delete | `5cd8161` |
+> | 3. Type 3 on repeater, room server and companion send | `6dc917a` |
+> | 7. `MAX_CLIENTS` 32 | `1d716a1` |
+> | 8. Discovery gates | `5abad07` |
+> | 8. `loop.detect minimal` | `f512380` |
+>
+> `6dc917a` also gives CLI messages unique timestamps, as firmware does.
+> Without that, a second command in the same second was taken as a retry and
+> got no reply.
+>
+> Still open: items 4, 5, 6 and 9, the optional parts of 8, and the 1.17
+> leftovers.
+
 ### 1. Unaligned ciphertext panics `macThenDecrypt` (critical)
 
 Upstream `Utils::MACThenDecrypt` now rejects ciphertext whose length is not a
