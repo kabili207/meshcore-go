@@ -95,6 +95,11 @@ contain breaking changes; those are called out explicitly below.
 - `codec.EncodeBridgeFrame` / `codec.DecodeBridgeFrame`, the datagram framing the
   firmware's ESP-NOW bridge and the EastMesh MQTT bridge share.
 
+### Changed
+
+- `acl.DefaultMaxClients` and `room.DefaultMaxClients` go from 20 to 32,
+  matching firmware v1.18's `MAX_CLIENTS`.
+
 ### Fixed
 
 - **A crafted packet could crash any node.** Decryption panicked when the

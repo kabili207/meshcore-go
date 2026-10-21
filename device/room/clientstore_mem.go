@@ -9,8 +9,8 @@ import (
 
 const (
 	// DefaultMaxClients is the default maximum number of clients.
-	// Firmware uses MAX_CLIENTS = 20.
-	DefaultMaxClients = 20
+	// Firmware uses MAX_CLIENTS = 32.
+	DefaultMaxClients = 32
 )
 
 // Compile-time assertion that MemoryClientStore implements ClientStore.

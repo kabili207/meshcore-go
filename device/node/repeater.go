@@ -36,7 +36,7 @@ type RepeaterConfig struct {
 	// GuestPassword grants guest access on login. Empty disables guest login.
 	GuestPassword string
 
-	// MaxClients caps the ACL client table. Default: acl.DefaultMaxClients (20).
+	// MaxClients caps the ACL client table. Default: acl.DefaultMaxClients (32).
 	MaxClients int
 
 	// MaxNeighbors caps the directly-heard neighbor table. Default: 32.
