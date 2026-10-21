@@ -91,6 +91,12 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **A crafted packet could crash any node.** Decryption panicked when the
+  ciphertext wasn't a whole number of AES blocks. A sender can produce a valid MAC
+  for any length on an anonymous request (they pick the ephemeral key) or on a
+  public channel, so one packet was enough. Such ciphertext is now rejected with
+  `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
+
 - **Group channels that share a 1-byte hash now all decode.** `BaseNode` keeps
   every key registered under a hash and tries each on inbound `GRP_TXT`/`GRP_DATA`,
   letting MAC verification select the right one. This matches firmware's
