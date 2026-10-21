@@ -53,6 +53,12 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **`TXT_TYPE_CLI_COMMAND` (3)**, the explicit CLI command text type from
+  firmware v1.18, as `codec.TxtTypeCLICommand` and `serial.TxtTypeCLICommand`.
+  Repeaters and room servers run it as an admin CLI command, exactly like type 1,
+  and reply with type 1. Newer apps send it, and previously got no answer. The
+  companion server accepts it from the app and sends it without ACK tracking.
+
 - Firmware-format `ver`/`version` CLI reply: `cli.FirmwareVersion` (the targeted
   firmware version, e.g. `v1.16.0`) plus `cli.FormatVersion` build the
   `"<version> (Build: <date>)"` string the phone apps parse to gate editing. Both
@@ -96,6 +102,15 @@ contain breaking changes; those are called out explicitly below.
   for any length on an anonymous request (they pick the ephemeral key) or on a
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
+
+- **Back-to-back CLI commands lost their replies.** `CompanionNode.SendText`
+  stamped CLI messages with the plain clock, so two commands in the same second
+  shared a timestamp and the admin node treated the second as a retry. CLI
+  messages now use the unique clock, as firmware does.
+
+- **The companion server now rejects text types firmware doesn't allow.**
+  `CMD_SEND_TXT_MSG` with any type other than plain (0), CLI (1) or CLI command
+  (3) returns `ERR_CODE_UNSUPPORTED_CMD`. Signed (2) used to be sent as is.
 
 - **Deleting a channel from the app turned its slot into a null-key sink.** Apps
   delete a channel with `CMD_SET_CHANNEL`, an empty name and an all-zero secret.

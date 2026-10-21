@@ -1,9 +1,12 @@
 package node
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kabili207/meshcore-go/core/codec"
+	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/contact"
 )
 
 func TestSplitMessage_Short(t *testing.T) {
@@ -70,5 +73,59 @@ func TestSplitMessage_Empty(t *testing.T) {
 	}
 	if chunks[0] != "" {
 		t.Errorf("expected empty string, got %q", chunks[0])
+	}
+}
+
+// Admin nodes treat a repeated sender timestamp as a retry and don't reply, so
+// back-to-back CLI commands must carry distinct timestamps.
+func TestSendText_CLITimestampsUnique(t *testing.T) {
+	for _, txtType := range []uint8{codec.TxtTypeCLI, codec.TxtTypeCLICommand} {
+		t.Run(codec.TxtTypeName(txtType), func(t *testing.T) {
+			comp, ct := newTestCompanion(t)
+			peer, _ := crypto.GenerateKeyPair()
+			peerID := clientID(peer)
+			if _, err := comp.base.Contacts().AddContact(&contact.ContactInfo{
+				ID: peerID, Type: codec.NodeTypeRepeater, OutPathLen: contact.PathUnknown,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, cmd := range []string{"get name", "get role"} {
+				if err := comp.SendText(context.Background(), peerID, cmd, WithTxtType(txtType)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			compPub := comp.base.PublicKey()
+			secret, err := crypto.ComputeSharedSecret(peer.PrivateKey, compPub[:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stamps []uint32
+			for _, p := range ct.sent {
+				if p.PayloadType() != codec.PayloadTypeTxtMsg {
+					continue
+				}
+				addr, err := codec.ParseAddressedPayload(p.Payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pt, err := crypto.DecryptAddressedWithSecret(codec.PrependMAC(addr.MAC, addr.Ciphertext), secret)
+				if err != nil {
+					t.Fatal(err)
+				}
+				content, err := codec.ParseTxtMsgContent(pt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stamps = append(stamps, content.Timestamp)
+			}
+			if len(stamps) != 2 {
+				t.Fatalf("captured %d text messages, want 2", len(stamps))
+			}
+			if stamps[0] == stamps[1] {
+				t.Errorf("both CLI commands used timestamp %d", stamps[0])
+			}
+		})
 	}
 }

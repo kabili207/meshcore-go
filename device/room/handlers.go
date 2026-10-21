@@ -176,7 +176,7 @@ func (s *Server) HandleTextMessage(evt *event.TextMessageReceived) {
 		// Note: ACK is already sent by BaseNode's auto-ACK for TxtTypePlain.
 		// The room server does NOT need to send ACK separately.
 
-	case codec.TxtTypeCLI:
+	case codec.TxtTypeCLI, codec.TxtTypeCLICommand:
 		if !client.IsAdmin() {
 			return
 		}

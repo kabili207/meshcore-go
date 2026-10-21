@@ -706,6 +706,40 @@ func TestHandleTextMessage_ReplayRejected(t *testing.T) {
 	}
 }
 
+// Firmware v1.18 added TXT_TYPE_CLI_COMMAND (3) and handles it like type 1.
+func TestHandleTextMessage_AdminCLITypes(t *testing.T) {
+	for _, txtType := range []uint8{codec.TxtTypeCLI, codec.TxtTypeCLICommand} {
+		t.Run(codec.TxtTypeName(txtType), func(t *testing.T) {
+			h := newTestHarness(t)
+			sender := &mockSender{}
+			h.server.SetSender(sender)
+
+			_, clientID := h.makeClientKeyAndContact(t)
+			if _, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLAdmin}}); err != nil {
+				t.Fatal(err)
+			}
+
+			h.server.HandleTextMessage(&event.TextMessageReceived{
+				Event:     event.Event{From: clientID},
+				Message:   "ver",
+				TxtType:   txtType,
+				Timestamp: 200,
+			})
+
+			if len(sender.replies) != 1 {
+				t.Fatalf("got %d replies, want 1", len(sender.replies))
+			}
+			content, err := codec.ParseTxtMsgContent(sender.replies[0].plaintext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if content.TxtType != codec.TxtTypeCLI {
+				t.Errorf("reply type = %d, want CLI (1)", content.TxtType)
+			}
+		})
+	}
+}
+
 func TestHandleLogin_FloodResetsOutPath(t *testing.T) {
 	h := newTestHarness(t)
 	h.server.SetSender(&mockSender{})
@@ -742,6 +776,7 @@ func TestHandleLogin_FloodResetsOutPath(t *testing.T) {
 type mockSender struct {
 	ackPayloads  [][]byte
 	contactSends []mockContactSend
+	replies      []mockContactSend
 }
 
 type mockContactSend struct {
@@ -750,7 +785,12 @@ type mockContactSend struct {
 	plaintext   []byte
 }
 
-func (m *mockSender) SendReply(_ event.ReplyContext, _ core.MeshCoreID, _ uint8, _ []byte) error {
+func (m *mockSender) SendReply(_ event.ReplyContext, to core.MeshCoreID, payloadType uint8, plaintext []byte) error {
+	m.replies = append(m.replies, mockContactSend{
+		to:          to,
+		payloadType: payloadType,
+		plaintext:   append([]byte(nil), plaintext...),
+	})
 	return nil
 }
 func (m *mockSender) SendACK(_ core.MeshCoreID, _ uint32) {}

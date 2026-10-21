@@ -109,8 +109,14 @@ func (n *CompanionNode) sendTextChunk(to core.MeshCoreID, message string, o send
 		return fmt.Errorf("get shared secret for %s: %w", to, err)
 	}
 
+	ts := n.clk.GetCurrentTime()
+	if o.txtType == codec.TxtTypeCLI || o.txtType == codec.TxtTypeCLICommand {
+		// Admin nodes treat a repeated timestamp as a retry and don't reply, so
+		// two commands in the same second would lose the second reply.
+		ts = n.clk.GetCurrentTimeUnique()
+	}
 	plaintext := codec.BuildTxtMsgContent(
-		n.clk.GetCurrentTime(),
+		ts,
 		o.txtType,
 		o.attempt,
 		message,

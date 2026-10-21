@@ -617,6 +617,7 @@ func TestTxtTypeName(t *testing.T) {
 		{TxtTypePlain, "plain"},
 		{TxtTypeCLI, "cli"},
 		{TxtTypeSigned, "signed"},
+		{TxtTypeCLICommand, "cli-command"},
 		{0x0F, "unknown(15)"},
 	}
 

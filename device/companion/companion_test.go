@@ -1134,6 +1134,59 @@ func TestCliSendZeroAck(t *testing.T) {
 	}
 }
 
+// Firmware v1.18 accepts TXT_TYPE_CLI_COMMAND (3) from the app and sends it like
+// type 1: no ACK tracking, expected_ack 0.
+func TestCliCommandSendZeroAck(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x11
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	var gotType uint8
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendDM: func(_ context.Context, _ core.MeshCoreID, _ string, txtType, _ uint8, onAck func()) (bool, error) {
+			gotType = txtType
+			if onAck != nil {
+				t.Error("CLI command send should not register an ACK callback")
+			}
+			return false, nil
+		},
+	})
+	payload := append([]byte{serial.CmdSendTxtMsg, serial.TxtTypeCLICommand, 0, 0, 0, 0, 0}, id[:6]...)
+	payload = append(payload, []byte("get role")...)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent {
+		t.Fatalf("expected SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 0 {
+		t.Errorf("expected_ack should be 0, got %d", binary.LittleEndian.Uint32(resp[0][2:6]))
+	}
+	if gotType != serial.TxtTypeCLICommand {
+		t.Errorf("txtType = %d, want CLI command (3)", gotType)
+	}
+}
+
+// Firmware only lets the app send plain, CLI data and CLI command text.
+func TestSendTxtMsgUnsupportedType(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x11
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendDM: func(context.Context, core.MeshCoreID, string, uint8, uint8, func()) (bool, error) {
+			t.Error("unsupported text type was sent")
+			return false, nil
+		},
+	})
+	for _, txtType := range []uint8{serial.TxtTypeSigned, 4} {
+		payload := append([]byte{serial.CmdSendTxtMsg, txtType, 0, 0, 0, 0, 0}, id[:6]...)
+		payload = append(payload, 'x')
+		resp := collectResponses(t, s, cmd(payload...))
+		if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeUnsupportedCmd {
+			t.Errorf("txt type %d: expected UnsupportedCmd, got %v", txtType, resp[0])
+		}
+	}
+}
+
 func TestSendStatusReq(t *testing.T) {
 	var id core.MeshCoreID
 	id[0] = 0x22

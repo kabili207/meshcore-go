@@ -19,7 +19,7 @@ import (
 // and replies with the result. Non-admin senders and non-CLI text are ignored
 // (firmware only accepts CLI from admin clients and sends no ACK).
 func (n *RepeaterNode) handleCLIMessage(evt *event.TextMessageReceived) {
-	if evt.TxtType != codec.TxtTypeCLI {
+	if evt.TxtType != codec.TxtTypeCLI && evt.TxtType != codec.TxtTypeCLICommand {
 		return
 	}
 	client := n.acl.GetClient(evt.From)

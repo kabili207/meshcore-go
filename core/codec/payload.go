@@ -69,9 +69,10 @@ const (
 	ControlFlagNodeDiscover = 0x80
 
 	// Text message types (upper 6 bits of txt_type field)
-	TxtTypePlain  = 0x00 // Plain text message
-	TxtTypeCLI    = 0x01 // CLI command
-	TxtTypeSigned = 0x02 // Signed plain text message
+	TxtTypePlain      = 0x00 // Plain text message
+	TxtTypeCLI        = 0x01 // CLI command or reply (firmware TXT_TYPE_CLI_DATA)
+	TxtTypeSigned     = 0x02 // Signed plain text message
+	TxtTypeCLICommand = 0x03 // CLI command, explicitly (firmware v1.18); replies use TxtTypeCLI
 
 	// Request types (inner type byte in decrypted REQ content)
 	ReqTypeLogin         = 0x00
@@ -362,6 +363,8 @@ func TxtTypeName(t uint8) string {
 		return "cli"
 	case TxtTypeSigned:
 		return "signed"
+	case TxtTypeCLICommand:
+		return "cli-command"
 	default:
 		return fmt.Sprintf("unknown(%d)", t)
 	}

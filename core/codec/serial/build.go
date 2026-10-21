@@ -14,9 +14,10 @@ const (
 
 // Text message types (firmware TXT_TYPE_*) in SEND_TXT_MSG and CONTACT_MSG_RECV.
 const (
-	TxtTypePlain  = 0
-	TxtTypeCLI    = 1 // remote-admin CLI command / reply
-	TxtTypeSigned = 2
+	TxtTypePlain      = 0
+	TxtTypeCLI        = 1 // remote-admin CLI command / reply
+	TxtTypeSigned     = 2
+	TxtTypeCLICommand = 3 // CLI command, explicitly (firmware v1.18)
 )
 
 // CompanionFirmwareVerCode is the FIRMWARE_VER_CODE the device reports as byte 1

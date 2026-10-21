@@ -11,7 +11,13 @@ import (
 // buildRepeaterCLI builds an addressed CLI (TXT_TYPE_CLI) message from client.
 func buildRepeaterCLI(t *testing.T, n *RepeaterNode, client *crypto.KeyPair, cmd string) *codec.Packet {
 	t.Helper()
-	content := codec.BuildTxtMsgContent(200, codec.TxtTypeCLI, 0, cmd, nil)
+	return buildRepeaterTxt(t, n, client, codec.TxtTypeCLI, cmd)
+}
+
+// buildRepeaterTxt builds an addressed TXT_MSG of the given text type from client.
+func buildRepeaterTxt(t *testing.T, n *RepeaterNode, client *crypto.KeyPair, txtType uint8, cmd string) *codec.Packet {
+	t.Helper()
+	content := codec.BuildTxtMsgContent(200, txtType, 0, cmd, nil)
 	repeaterPub := n.base.PublicKey()
 	secret, err := crypto.ComputeSharedSecret(client.PrivateKey, repeaterPub[:])
 	if err != nil {
@@ -68,6 +74,23 @@ func TestRepeaterCLI_GetRole(t *testing.T) {
 	reply, ok := lastCLIReply(t, n, client, ct)
 	if !ok {
 		t.Fatal("expected a CLI reply")
+	}
+	if reply != "repeater" {
+		t.Errorf("get role = %q, want repeater", reply)
+	}
+}
+
+// Firmware v1.18 added TXT_TYPE_CLI_COMMAND (3); repeaters treat it like type 1.
+func TestRepeaterCLI_CommandTxtType(t *testing.T) {
+	n, ct := newTestRepeater(t, "adminpw", "guestpw")
+	client, _ := crypto.GenerateKeyPair()
+	loginAdmin(t, n, client)
+
+	n.base.processPacket(buildRepeaterTxt(t, n, client, codec.TxtTypeCLICommand, "get role"), transport.PacketSourceMQTT)
+
+	reply, ok := lastCLIReply(t, n, client, ct)
+	if !ok {
+		t.Fatal("expected a CLI reply to a type 3 command")
 	}
 	if reply != "repeater" {
 		t.Errorf("get role = %q, want repeater", reply)

@@ -665,10 +665,16 @@ func (s *Server) sendTextMsg(ss *session, payload []byte) error {
 		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 	}
 
+	switch req.TxtType {
+	case serial.TxtTypePlain, serial.TxtTypeCLI, serial.TxtTypeCLICommand:
+	default:
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+
 	// Remote-admin CLI commands are not ACKed: reply SENT with a zero
 	// expected-ack and register no confirmation. The reply returns later as a
 	// CONTACT_MSG_RECV with the CLI type, which the app routes as a cli_reply.
-	if req.TxtType == serial.TxtTypeCLI {
+	if req.TxtType == serial.TxtTypeCLI || req.TxtType == serial.TxtTypeCLICommand {
 		flood, err := s.sendDM(ss.ctx, ct.ID, req.Text, req.TxtType, req.Attempt, nil)
 		if err != nil {
 			s.log.Warn("cli send failed", "to", ct.ID.String(), "error", err)
