@@ -27,12 +27,37 @@ type fakeNode struct {
 	pk       [32]byte
 	clk      *clock.Clock
 	contacts contact.ContactStore
+	channels [][]byte // registered channel keys
 }
 
 func (f *fakeNode) PublicKey() [32]byte            { return f.pk }
 func (f *fakeNode) Contacts() contact.ContactStore { return f.contacts }
 func (f *fakeNode) Clock() *clock.Clock            { return f.clk }
-func (f *fakeNode) AddChannel([]byte) uint8        { return 0 }
+
+func (f *fakeNode) AddChannel(key []byte) uint8 {
+	if !f.hasChannel(key) {
+		f.channels = append(f.channels, append([]byte(nil), key...))
+	}
+	return crypto.ComputeChannelHash(key)
+}
+
+func (f *fakeNode) RemoveChannel(key []byte) {
+	for i, k := range f.channels {
+		if bytes.Equal(k, key) {
+			f.channels = append(f.channels[:i], f.channels[i+1:]...)
+			return
+		}
+	}
+}
+
+func (f *fakeNode) hasChannel(key []byte) bool {
+	for _, k := range f.channels {
+		if bytes.Equal(k, key) {
+			return true
+		}
+	}
+	return false
+}
 
 // stubStore is a small in-memory ContactStore for tests, backed by a slice.
 type stubStore struct{ list []*contact.ContactInfo }
@@ -684,6 +709,116 @@ func TestSetChannelRoundtrip(t *testing.T) {
 	}
 	if !bytes.Equal(resp[0][34:50], secret) {
 		t.Error("channel 1 secret mismatch")
+	}
+}
+
+// setChannelCmd builds a CMD_SET_CHANNEL frame. Apps delete a channel by sending
+// an empty name and an all-zero secret.
+func setChannelCmd(idx uint8, name string, secret []byte) []byte {
+	payload := make([]byte, 2+32, 2+32+16)
+	payload[0], payload[1] = serial.CmdSetChannel, idx
+	copy(payload[2:], name)
+	return cmd(append(payload, secret...)...)
+}
+
+var zeroSecret = make([]byte, 16)
+
+func TestSetChannelDeleteUnregistersKey(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+	team := bytes.Repeat([]byte{0xAB}, 16)
+
+	collectResponses(t, s, setChannelCmd(1, "Team", team))
+	if !node.hasChannel(team) {
+		t.Fatal("configured channel key was not registered")
+	}
+
+	resp := collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
+	if resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("delete channel: expected OK, got %v", resp[0])
+	}
+	if node.hasChannel(team) {
+		t.Error("deleted channel's key is still registered")
+	}
+	if node.hasChannel(zeroSecret) {
+		t.Error("deleting a channel registered the all-zero key")
+	}
+}
+
+func TestSetChannelOverwriteUnregistersOldKey(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+	oldKey := bytes.Repeat([]byte{0xAB}, 16)
+	newKey := bytes.Repeat([]byte{0xCD}, 16)
+
+	collectResponses(t, s, setChannelCmd(1, "Old", oldKey))
+	collectResponses(t, s, setChannelCmd(1, "New", newKey))
+
+	if node.hasChannel(oldKey) {
+		t.Error("overwritten channel's key is still registered")
+	}
+	if !node.hasChannel(newKey) {
+		t.Error("new channel key was not registered")
+	}
+}
+
+func TestSetChannelDeleteKeepsKeySharedWithOtherSlot(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+	key := bytes.Repeat([]byte{0xAB}, 16)
+
+	collectResponses(t, s, setChannelCmd(1, "A", key))
+	collectResponses(t, s, setChannelCmd(2, "B", key))
+	collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
+
+	if !node.hasChannel(key) {
+		t.Error("key still used by slot 2 was unregistered")
+	}
+}
+
+func TestSetChannelEmptyNameNotRegistered(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+	key := bytes.Repeat([]byte{0xAB}, 16)
+
+	collectResponses(t, s, setChannelCmd(1, "", key))
+	if node.hasChannel(key) {
+		t.Error("slot with an empty name registered its key")
+	}
+}
+
+// A deleted slot holds an all-zero secret. It must not claim messages from
+// nodes transmitting with an unset (zero) key.
+func TestIncomingNullKeyChannelDropped(t *testing.T) {
+	var handler func(any)
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
+
+	collectResponses(t, s, setChannelCmd(1, "Team", bytes.Repeat([]byte{0xAB}, 16)))
+	collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
+
+	handler(&event.GroupTextReceived{ChannelHash: crypto.ComputeChannelHash(zeroSecret), Message: "x"})
+	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
+	if resp[0][0] != serial.RespCodeNoMoreMessages {
+		t.Errorf("null-key message was delivered to a deleted slot: %v", resp[0])
+	}
+}
+
+func TestSendChannelMsgDeletedSlotNotFound(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	sent := false
+	s := NewServer(Config{
+		Node:        node,
+		SendChannel: func(context.Context, []byte, string) error { sent = true; return nil },
+	})
+
+	collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
+	resp := collectResponses(t, s, cmd(serial.CmdSendChannelTxtMsg, 0, 1, 0, 0, 0, 0, 'h', 'i'))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Errorf("expected NotFound, got %v", resp[0])
+	}
+	if sent {
+		t.Error("sent a channel message with the all-zero key")
 	}
 }
 

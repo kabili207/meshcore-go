@@ -97,6 +97,16 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **Deleting a channel from the app turned its slot into a null-key sink.** Apps
+  delete a channel with `CMD_SET_CHANNEL`, an empty name and an all-zero secret.
+  The companion server registered that zero key with the node, delivered traffic
+  from nodes with an unset key to the app as if it belonged to the deleted slot,
+  and accepted sends on it. It also never unregistered the slot's previous key,
+  so deleted and overwritten channels kept decrypting. A slot now counts only
+  when it has a name and a nonzero secret, the rule firmware v1.18 applies in
+  `searchChannelsByHash`. `companion.Node` gained `RemoveChannel(key []byte)`;
+  `*node.BaseNode` already implements it.
+
 - **Group channels that share a 1-byte hash now all decode.** `BaseNode` keeps
   every key registered under a hash and tries each on inbound `GRP_TXT`/`GRP_DATA`,
   letting MAC verification select the right one. This matches firmware's

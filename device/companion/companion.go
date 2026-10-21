@@ -50,6 +50,9 @@ type Node interface {
 	// messages on it. Returns the channel hash. Called when SET_CHANNEL
 	// configures a channel.
 	AddChannel(key []byte) uint8
+	// RemoveChannel forgets a channel key. Called when SET_CHANNEL deletes or
+	// overwrites a channel.
+	RemoveChannel(key []byte)
 }
 
 // Identity is the static device description the server reports in SELF_INFO and
@@ -204,6 +207,14 @@ type Server struct {
 type channelEntry struct {
 	name   string
 	secret []byte
+}
+
+// active reports whether the slot holds a usable channel. Apps delete a channel
+// by writing an empty name and an all-zero secret, and firmware skips any slot
+// with an empty name. An all-zero key would otherwise match traffic from nodes
+// that never set a key (firmware searchChannelsByHash, v1.18).
+func (c channelEntry) active() bool {
+	return c.name != "" && len(c.secret) > 0 && !bytes.Equal(c.secret, make([]byte, len(c.secret)))
 }
 
 // queuedMessage is an incoming message awaiting CMD_SYNC_NEXT_MESSAGE drain. It
@@ -583,24 +594,43 @@ func (s *Server) setChannel(ss *session, payload []byte) error {
 	if err != nil {
 		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
 	}
+	entry := channelEntry{name: name, secret: secret}
 	s.mu.Lock()
 	if int(idx) >= len(s.channels) {
 		s.mu.Unlock()
 		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 	}
-	s.channels[idx] = channelEntry{name: name, secret: secret}
+	old := s.channels[idx]
+	s.channels[idx] = entry
+	// Another slot may hold the same key; it must keep decrypting.
+	dropOld := old.active() && !s.keyInUseLocked(old.secret)
 	s.mu.Unlock()
 
-	s.node.AddChannel(secret)
+	if dropOld {
+		s.node.RemoveChannel(old.secret)
+	}
+	if entry.active() {
+		s.node.AddChannel(secret)
+	}
 	return ss.send(serial.EncodeOK())
 }
 
+// keyInUseLocked reports whether any active slot holds key. Callers hold s.mu.
+func (s *Server) keyInUseLocked(key []byte) bool {
+	for _, ch := range s.channels {
+		if ch.active() && bytes.Equal(ch.secret, key) {
+			return true
+		}
+	}
+	return false
+}
+
 // channelKey returns the 16-byte key for a channel index, or nil if the index is
-// out of range or unconfigured.
+// out of range or the slot is not active.
 func (s *Server) channelKey(idx uint8) []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if int(idx) >= len(s.channels) || len(s.channels[idx].secret) == 0 {
+	if int(idx) >= len(s.channels) || !s.channels[idx].active() {
 		return nil
 	}
 	return s.channels[idx].secret
@@ -612,7 +642,7 @@ func (s *Server) channelIndexForHash(hash uint8) (uint8, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i, ch := range s.channels {
-		if len(ch.secret) > 0 && crypto.ComputeChannelHash(ch.secret) == hash {
+		if ch.active() && crypto.ComputeChannelHash(ch.secret) == hash {
 			return uint8(i), true
 		}
 	}
