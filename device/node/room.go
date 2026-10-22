@@ -132,7 +132,6 @@ func NewRoom(cfg RoomConfig) (*RoomNode, error) {
 	// Configure and create room server.
 	// Fill in identity fields from our base node.
 	roomCfg := cfg.Room
-	roomCfg.PrivateKey = cfg.PrivateKey
 	roomCfg.PublicKey = base.PublicKey()
 	roomCfg.Clock = clk
 	roomCfg.Contacts = cfg.Contacts

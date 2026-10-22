@@ -111,7 +111,6 @@ func newTestHarness(t *testing.T) *testHarness {
 	clk := clock.New()
 
 	srv := NewServer(ServerConfig{
-		PrivateKey:    serverKey.PrivateKey,
 		PublicKey:     serverPub,
 		Clock:         clk,
 		AdminPassword: "admin123",

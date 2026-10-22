@@ -816,22 +816,6 @@ func (r *Router) SendFloodPathScoped(pkt *codec.Packet) {
 	r.sendScopedFlood(pkt, PriorityFloodPath, PathSendDelay)
 }
 
-// SendFloodReply floods a reply, scoping it to match the request in origPkt
-// (see ResolveReplyScope). Use this instead of SendFloodScoped whenever the
-// packet answers a received request, so the reply reaches the requester through
-// the same region the request came from.
-//
-// Mirrors the firmware's sendFloodReply.
-func (r *Router) SendFloodReply(pkt *codec.Packet, origPkt *codec.Packet) {
-	r.sendFloodWithScope(pkt, r.ResolveReplyScope(origPkt), PriorityFloodData, 0)
-}
-
-// SendFloodPathReply is the PATH counterpart of SendFloodReply: a PATH return
-// scoped to match the request that prompted it.
-func (r *Router) SendFloodPathReply(pkt *codec.Packet, origPkt *codec.Packet) {
-	r.sendFloodWithScope(pkt, r.ResolveReplyScope(origPkt), PriorityFloodPath, PathSendDelay)
-}
-
 // SendFloodWithKey floods a packet scoped to an already-resolved key, for
 // callers that resolved the reply scope earlier (see event.ReplyContext). A
 // zero key sends un-scoped.

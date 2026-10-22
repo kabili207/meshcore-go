@@ -9,6 +9,17 @@ contain breaking changes; those are called out explicitly below.
 
 ### Changed (breaking)
 
+- **Removed APIs left over from the room server's legacy dispatch path.**
+  - `Router.SendFloodReply` and `Router.SendFloodPathReply` are gone. Resolve
+    the scope with `Router.ResolveReplyScope` and send with
+    `SendFloodWithKey` / `SendFloodPathWithKey` (or their `Delayed` forms), as
+    `BaseNode.SendReply` does.
+  - `room.ServerConfig.PrivateKey` is gone. Only the removed packet-based login
+    read it. `BaseNode` decrypts logins before the room server sees them.
+
+  *Migration:* drop `PrivateKey` from a `room.ServerConfig` literal.
+  `node.RoomConfig.PrivateKey` is unchanged.
+
 - **Group channels are identified by their key, not their 1-byte hash.**
   `BaseNode.SendChannelText`, `BaseNode.SendChannelData`, and the
   `CompanionNode.SendChannelText` wrapper now take the channel key (`[]byte`)

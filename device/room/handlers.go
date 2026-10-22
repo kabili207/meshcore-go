@@ -15,7 +15,7 @@ import (
 )
 
 // HandleLogin processes a login attempt from a decrypted AnonRequestReceived
-// event. This is the event-based equivalent of handleAnonReq.
+// event.
 func (s *Server) HandleLogin(evt *event.AnonRequestReceived) {
 	if len(evt.Plaintext) < loginDataMinSize {
 		s.log.Debug("anon req too short", "len", len(evt.Plaintext))
@@ -118,7 +118,6 @@ func (s *Server) sendLoginResponseEvent(reply event.ReplyContext, recipientID co
 }
 
 // HandleTextMessage processes a decrypted text message event from a client.
-// This is the event-based equivalent of handleTextMessage.
 func (s *Server) HandleTextMessage(evt *event.TextMessageReceived) {
 	senderID := evt.From
 
@@ -318,6 +317,19 @@ func (s *Server) handleGetTelemetryEvent(reply event.ReplyContext, tag uint32, c
 		s.sender.SendReply(reply, senderID, codec.PayloadTypeResponse, resp)
 	}
 }
+
+const (
+	// aclEntrySize is the wire size of one ACL entry in GET_ACCESS_LIST responses:
+	// pubkey_prefix(6) + permissions(1).
+	aclEntrySize = 7
+
+	// aclPrefixSize is the number of public key bytes included per ACL entry.
+	aclPrefixSize = 6
+
+	// maxReplySize is the maximum plaintext response size (firmware: sizeof(reply_data)).
+	// The firmware uses a 60-byte buffer: tag(4) + up to 56 bytes of data.
+	maxReplySize = 60
+)
 
 // handleGetAccessListEvent handles GET_ACCESS_LIST using the event-based sender.
 func (s *Server) handleGetAccessListEvent(reply event.ReplyContext, tag uint32, client *ClientInfo, senderID core.MeshCoreID, requestData []byte) {
