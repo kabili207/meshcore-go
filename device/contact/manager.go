@@ -326,9 +326,11 @@ func (m *ContactManager) ForEach(fn func(c *ContactInfo) bool) {
 // Transient (ADV_TYPE_NONE) and regular contacts share one backing array of
 // MaxContacts+MaxAnonContacts, but allocate differently. A transientOnly add
 // recycles the oldest transient slot and only grows the array if none exists,
-// so anon traffic cannot crowd out real contacts. A regular add grows into any
-// free slot, then evicts the oldest non-favorite, non-transient contact when
-// OverwriteWhenFull is set. Returns nil if no slot is available.
+// so anon traffic cannot crowd out real contacts. A regular add grows until
+// there are MaxContacts regular contacts, then evicts the oldest non-favorite,
+// non-transient contact when OverwriteWhenFull is set. The anon slots stay
+// reserved, so a full list of real contacts cannot lock out anonymous requests.
+// Returns nil if no slot is available.
 //
 // Firmware reserves the first MAX_ANON_CONTACTS array indices for the transient
 // pool; here the pools are separated by contact type instead, since the
@@ -370,8 +372,15 @@ func (m *ContactManager) allocateSlot(transientOnly bool) *ContactInfo {
 		return m.contacts[oldestIdx]
 	}
 
-	// A regular add may use the whole array, anon headroom included.
-	if len(m.contacts) < m.cfg.MaxContacts+m.cfg.MaxAnonContacts {
+	// Firmware seeds num_contacts at MAX_ANON_CONTACTS, so regular adds only
+	// ever see MAX_CONTACTS slots.
+	regular := 0
+	for _, c := range m.contacts {
+		if !c.IsTransient() {
+			regular++
+		}
+	}
+	if regular < m.cfg.MaxContacts {
 		c := &ContactInfo{}
 		m.contacts = append(m.contacts, c)
 		return c

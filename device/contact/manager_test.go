@@ -725,3 +725,25 @@ func TestManager_TransientAddFullOfRegulars(t *testing.T) {
 		t.Errorf("expected ErrContactsFull, got %v", err)
 	}
 }
+
+// Regular contacts are capped at MaxContacts and never take the anon slots.
+// Firmware seeds num_contacts at MAX_ANON_CONTACTS, so regular adds only ever
+// see MAX_CONTACTS slots. Otherwise a busy mesh fills every slot with adverts
+// and anonymous requests (repeater logins) can no longer get one.
+func TestManager_RegularsLeaveAnonPoolReserved(t *testing.T) {
+	m := newTestManagerWithAnon(t, 2, 2, true) // overwrite on
+
+	for i := range 5 {
+		if _, err := m.AddContact(makeContactWithID(makeIDWithHash(byte(0x10+i)), "Reg", uint32(100+i))); err != nil {
+			t.Fatalf("regular add %d: %v", i, err)
+		}
+	}
+	if n := m.Count(); n != 2 {
+		t.Errorf("Count() = %d after 5 regular adds, want MaxContacts (2)", n)
+	}
+	for i := range 2 {
+		if _, err := m.AddContact(makeTransientContact(makeIDWithHash(byte(0x40+i)), "Anon", 900)); err != nil {
+			t.Errorf("transient add %d into the reserved pool: %v", i, err)
+		}
+	}
+}
