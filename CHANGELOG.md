@@ -81,6 +81,10 @@ contain breaking changes; those are called out explicitly below.
   goes to the app. Also adds `cli.Ftoa` (firmware's float formatting),
   `codec.IsValidAdvertName`, and the contact telemetry permission flags.
 
+- **Room server `repeat` key.** `get repeat` and `set repeat off` work, and
+  `set repeat on` replies `ERR - repeat now deprecated`, as in firmware v1.18.
+  The `RoomConfig.ForwardPackets` option still controls forwarding at startup.
+
 - **Anonymous requests from the app.** `CompanionNode.SendAnonReq` sends an
   ANON_REQ with a caller-supplied body to any node. A target that isn't a
   contact is first added as a transient contact with a zero-hop path, as

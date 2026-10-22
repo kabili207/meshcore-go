@@ -17,10 +17,18 @@ import (
 func (s *Server) executeCLI(cmd string) string {
 	// Config get/set access is serialized under s.mu (the command handlers use
 	// their own thread-safe stores, so the broader lock is harmless).
+	// Firmware v1.18 intercepts just this form; "set repeat off" and
+	// "get repeat" still reach the repeat key.
+	if strings.HasPrefix(strings.TrimLeft(cmd, " "), "set repeat on") {
+		return "ERR - " + errRepeatDeprecated.Error()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cli.Execute(cmd)
 }
+
+// errRepeatDeprecated is firmware's refusal to turn on repeat for a room server.
+var errRepeatDeprecated = errors.New("repeat now deprecated")
 
 // ExecuteCLI runs a raw CLI command line against the room server's dispatcher
 // and returns the reply text, exactly as a remote admin command would, but
@@ -161,6 +169,21 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 				return errors.New("expected 0, 1, or 2")
 			}
 			s.cfg.Router.SetPathHashMode(uint8(mode))
+			return nil
+		},
+	})
+	d.Key("repeat", cli.ConfigKey{
+		Get: func() string {
+			if s.cfg.Router.GetForwardPackets() {
+				return "on"
+			}
+			return "off"
+		},
+		Set: func(v string) error {
+			if v != "off" {
+				return errRepeatDeprecated
+			}
+			s.cfg.Router.SetForwardPackets(false)
 			return nil
 		},
 	})
