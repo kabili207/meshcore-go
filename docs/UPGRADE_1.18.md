@@ -57,8 +57,8 @@ Ordered by priority.
 > equals the command's. The companion can't, since `SendDM` takes no timestamp
 > (a TODO marks it), and the repeater and room server don't yet.
 >
-> Still open: item 9 (no Go sensor role), the optional parts of 8, and the
-> 1.17 leftovers.
+> Still open: item 9 (no Go sensor role) and the optional parts of 8. The
+> 1.17 leftovers are done (see the end of this file).
 
 ### 1. Unaligned ciphertext panics `macThenDecrypt` (critical)
 
@@ -319,18 +319,20 @@ The sensor also gained a region map, `region load/save`, default and reply scope
   power-management virtuals, WiFi/BLE on RP2040, LR1121, displays, boards.
   Firmware only.
 
-## Still open from 1.17
+## Leftovers from 1.17
 
-All three items left open in `UPGRADE_1.17.md` are still open:
+Done:
 
-- **`REPLY_ROUTE_DIRECT_OUT_PATH` for anon requests**, the reply-route half of PR
-  #3106. `respondAnonInfo` (`device/node/repeater_anon.go:44`) replies via the
-  client-supplied path and has no stored-path fallback.
-- **Clearing the anon slot when a real advert arrives.** `ProcessAdvert`
-  (`device/contact/helpers.go:51`) finds the transient contact as `existing` and
-  updates it in place, which promotes it to a full contact. That happens even with
-  auto-add off, where firmware would clear the slot and not add anything.
-- **`truncateName`** in `device/router/region.go`. Left byte-wise on purpose.
+- **`REPLY_ROUTE_DIRECT_OUT_PATH` for anon requests** (`1d18737`). The
+  repeater picks the reply route like `chooseReplyRoute`. That needed two
+  fixes. `ReplyContext.HasDirectPath` treated a zero-hop path as no path, and
+  `BaseNode` didn't resolve a reply scope for anonymous requests.
+- **Clearing the anon slot when a real advert arrives** (`5e6988a`). Unlike
+  firmware, the learned path carries over, and the slot is left alone when the
+  advert isn't added. The work also turned up `3f2d561`: regular contacts could
+  take the reserved anon slots, which firmware never allows.
+
+Still deliberate: `truncateName` in `device/router/region.go` stays byte-wise.
 
 ## Suggested order
 
