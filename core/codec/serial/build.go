@@ -283,6 +283,12 @@ func EncodeTelemetryResponse(pubKeyPrefix, cayenneData []byte) []byte {
 	return b
 }
 
+// EncodeCLIReply builds a RESP_CODE_CLI_REPLY payload: [code][reply text], with
+// no terminating NUL.
+func EncodeCLIReply(reply string) []byte {
+	return append([]byte{RespCodeCLIReply}, reply...)
+}
+
 // EncodeBinaryResponse builds a PUSH_CODE_BINARY_RESPONSE payload:
 // [code][reserved 1][tag u32 LE][body]. The tag is the request tag from
 // RESP_CODE_SENT, or a push tag for an unsolicited response.

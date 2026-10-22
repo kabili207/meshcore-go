@@ -25,6 +25,16 @@ const (
 	// when the contact list is full.
 	FlagFavorite = 0x01
 
+	// Telemetry permission bits (firmware v1.18 ContactInfo helpers): which
+	// telemetry this contact may request from us.
+	FlagTelemBase = 0x02
+	FlagTelemLoc  = 0x04
+	FlagTelemEnv  = 0x08
+
+	// FlagRemoteCLI lets this contact run CLI commands on us with
+	// TXT_TYPE_CLI_COMMAND messages (firmware v1.18).
+	FlagRemoteCLI = 0x10
+
 	// PathUnknown is the sentinel value for OutPathLen when no direct routing
 	// path is known. The contact can only be reached via flood routing.
 	// Firmware v1.14+ uses 0xFF (unsigned) instead of -1 (signed).
@@ -40,7 +50,7 @@ type ContactInfo struct {
 	Type uint8           // Node type: codec.NodeTypeChat, NodeTypeRepeater, etc.
 
 	// Flags and routing
-	Flags      uint8  // Bit 0 = favorite (FlagFavorite); other bits reserved
+	Flags      uint8  // Flag* bits: favorite, telemetry permissions, remote CLI
 	OutPathLen uint8  // 0xFF = unknown (flood only), else encoded path_len wire byte
 	OutPath    []byte // Direct routing path (up to codec.MaxPathSize bytes)
 
@@ -65,6 +75,11 @@ type ContactInfo struct {
 // Favorite contacts are never evicted when the contact list is full.
 func (c *ContactInfo) IsFavorite() bool {
 	return c.Flags&FlagFavorite != 0
+}
+
+// IsRemoteCLIAllowed reports whether the contact may run CLI commands on us.
+func (c *ContactInfo) IsRemoteCLIAllowed() bool {
+	return c.Flags&FlagRemoteCLI != 0
 }
 
 // SetFavorite sets or clears the favorite flag.

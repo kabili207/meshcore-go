@@ -53,6 +53,16 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **Companion CLI** (firmware v1.18). The companion server answers
+  `CMD_RUN_CLI_COMMAND` with `RESP_CODE_CLI_REPLY`. It supports `get/set name`,
+  `board`, `ver`, `get/set tz.offset`, and the read-only `get radio`, `get freq`
+  and `get tx`, with firmware's reply strings and the optional `NN|` prefix.
+  Hardware commands such as `reboot` and radio setters reply `Unknown command`.
+  A `TXT_TYPE_CLI_COMMAND` from a contact with the new `contact.FlagRemoteCLI`
+  runs the same CLI and is answered over the mesh. From other contacts it still
+  goes to the app. Also adds `cli.Ftoa` (firmware's float formatting),
+  `codec.IsValidAdvertName`, and the contact telemetry permission flags.
+
 - **Binary requests and unhandled responses.** `CompanionNode.SendBinaryReq`
   sends a request with a caller-supplied body and reports the reply as
   `event.BinaryResponse`. A response that matches no pending request, such as

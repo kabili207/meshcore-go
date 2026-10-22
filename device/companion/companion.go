@@ -200,6 +200,8 @@ type Server struct {
 	rxDelay       uint32
 	airtimeFactor uint32
 
+	tzOffset int8 // "tz.offset" CLI setting, hours from UTC
+
 	autoaddConfig  uint8 // CMD_SET/GET_AUTOADD_CONFIG
 	autoaddMaxHops uint8
 
@@ -465,6 +467,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdSendBinaryReq:
 		return s.sendBinaryReqCmd(ss, payload)
+
+	case serial.CmdRunCLICommand:
+		return s.runCLICmd(ss, payload)
 
 	case serial.CmdSendTracePath:
 		return s.sendTracePath(ss, payload)
@@ -789,7 +794,9 @@ func (s *Server) sendNextMessage(ss *session) error {
 func (s *Server) handleEvent(evt any) {
 	switch e := evt.(type) {
 	case *event.TextMessageReceived:
-		s.enqueueDM(e)
+		if !s.handleRemoteCLI(e) {
+			s.enqueueDM(e)
+		}
 	case *event.GroupTextReceived:
 		s.enqueueChannel(e)
 	case *event.AdvertReceived:

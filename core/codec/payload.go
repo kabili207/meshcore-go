@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -168,6 +169,12 @@ func ParseAdvertPayload(data []byte) (*AdvertPayload, error) {
 	}
 
 	return advert, nil
+}
+
+// IsValidAdvertName reports whether name avoids the characters firmware rejects
+// in a node name: [ ] \ : , ? * (AdvertDataParser::isValidName).
+func IsValidAdvertName(name string) bool {
+	return !strings.ContainsAny(name, `[]\:,?*`)
 }
 
 // ParseAdvertAppData parses the optional application data from an advertisement.
