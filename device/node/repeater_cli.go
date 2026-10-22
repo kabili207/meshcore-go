@@ -41,7 +41,8 @@ func (n *RepeaterNode) handleCLIMessage(evt *event.TextMessageReceived) {
 	if reply == "" {
 		return
 	}
-	content := codec.BuildTxtMsgContent(n.base.Clock().GetCurrentTime(), codec.TxtTypeCLI, 0, prefix+reply, nil)
+	ts := cli.ReplyTimestamp(n.base.Clock().GetCurrentTimeUnique(), evt.Timestamp)
+	content := codec.BuildTxtMsgContent(ts, codec.TxtTypeCLI, 0, prefix+reply, nil)
 	rc := evt.Reply
 	rc.Delay = cli.ReplyDelay
 	if err := n.base.SendReply(rc, evt.From, codec.PayloadTypeTxtMsg, content); err != nil {

@@ -165,6 +165,11 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **CLI replies could share their command's timestamp.** The repeater and room
+  server now stamp CLI replies with the unique clock and bump the timestamp by
+  one when it equals the command's, as firmware does, so the apps' CLI view
+  keeps command and reply apart. The rule is `cli.ReplyTimestamp`.
+
 - **Signed messages were ACKed with a bare ACK.** A companion ACKing a room
   post now does what firmware does, as it already did for plain messages: it
   piggybacks the ACK on a path return when the post arrived by flood, and sends

@@ -718,15 +718,21 @@ func TestHandleTextMessage_AdminCLITypes(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			cmdTS := h.clk.GetCurrentTime()
 			h.server.HandleTextMessage(&event.TextMessageReceived{
 				Event:     event.Event{From: clientID},
 				Message:   "ver",
 				TxtType:   txtType,
-				Timestamp: 200,
+				Timestamp: cmdTS,
 			})
 
 			if len(sender.replies) != 1 {
 				t.Fatalf("got %d replies, want 1", len(sender.replies))
+			}
+			// A reply with the command's timestamp can't be told apart in the
+			// apps' CLI view.
+			if ts := binary.LittleEndian.Uint32(sender.replies[0].plaintext); ts == cmdTS {
+				t.Error("CLI reply reused the command's timestamp")
 			}
 			content, err := codec.ParseTxtMsgContent(sender.replies[0].plaintext)
 			if err != nil {

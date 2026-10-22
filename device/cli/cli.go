@@ -30,6 +30,17 @@ const FirmwareBuildDate = "15 Oct 2026"
 // switch back to receive.
 const ReplyDelay = 600 * time.Millisecond
 
+// ReplyTimestamp returns the timestamp for a CLI reply, given the caller's
+// unique current time and the command's own timestamp. The apps' CLI view
+// can't tell a reply from its command when the two match, so firmware bumps
+// the reply by one in that case.
+func ReplyTimestamp(now, commandTS uint32) uint32 {
+	if now == commandTS {
+		return now + 1
+	}
+	return now
+}
+
 // FormatVersion builds the firmware-style "ver" reply: "<version> (Build: <date>)".
 // This matches the firmware's `sprintf(reply, "%s (Build: %s)", ...)` so the apps
 // can parse it. version falls back to FirmwareVersion when empty; buildDate falls

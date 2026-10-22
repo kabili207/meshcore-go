@@ -181,3 +181,39 @@ func TestRepeaterCLI_ReplyDelayed(t *testing.T) {
 		t.Errorf("CLI reply sent after %v, want at least %v", elapsed, cli.ReplyDelay)
 	}
 }
+
+// A CLI reply never reuses the command's timestamp. Firmware bumps it, since
+// the apps' CLI view keeps command and reply apart by timestamp.
+func TestRepeaterCLI_ReplyTimestampDiffers(t *testing.T) {
+	n, ct := newTestRepeater(t, "adminpw", "guestpw")
+	client, _ := crypto.GenerateKeyPair()
+	loginAdmin(t, n, client)
+
+	cmdTS := n.base.Clock().GetCurrentTime()
+	pkt := buildRepeaterTxt(t, n, client, codec.TxtTypeCLI, "get role")
+	// Rebuild with the command stamped at our current time.
+	content := codec.BuildTxtMsgContent(cmdTS, codec.TxtTypeCLI, 0, "get role", nil)
+	repeaterPub := n.base.PublicKey()
+	secret, _ := crypto.ComputeSharedSecret(client.PrivateKey, repeaterPub[:])
+	encrypted, _ := crypto.EncryptAddressedWithSecret(content, secret)
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	pkt.Payload = codec.BuildAddressedPayload(n.base.ID().Hash(), clientID(client).Hash(), mac, ciphertext)
+	n.base.processPacket(pkt, transport.PacketSourceMQTT)
+
+	var reply *codec.Packet
+	for _, p := range ct.snapshot() {
+		if p.PayloadType() == codec.PayloadTypeTxtMsg {
+			reply = p
+		}
+	}
+	if reply == nil {
+		t.Fatal("expected a CLI reply")
+	}
+	got, err := codec.ParseTxtMsgContent(decryptRepeaterResponse(t, n, client, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Timestamp == cmdTS {
+		t.Errorf("reply timestamp %d equals the command's", got.Timestamp)
+	}
+}

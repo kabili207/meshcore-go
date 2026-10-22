@@ -31,3 +31,14 @@ func TestFtoaMatchesFirmware(t *testing.T) {
 		}
 	}
 }
+
+func TestReplyTimestamp(t *testing.T) {
+	if got := ReplyTimestamp(1000, 999); got != 1000 {
+		t.Errorf("ReplyTimestamp(1000, 999) = %d, want 1000", got)
+	}
+	// The apps' CLI view can't show a reply with the same timestamp as its
+	// command, so firmware bumps it.
+	if got := ReplyTimestamp(1000, 1000); got != 1001 {
+		t.Errorf("ReplyTimestamp(1000, 1000) = %d, want 1001", got)
+	}
+}

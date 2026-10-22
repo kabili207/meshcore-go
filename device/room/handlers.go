@@ -8,6 +8,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/acl"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
@@ -180,12 +181,12 @@ func (s *Server) HandleTextMessage(evt *event.TextMessageReceived) {
 		if !client.IsAdmin() {
 			return
 		}
-		s.handleCLICommandEvent(evt.Reply, senderID, evt.Message)
+		s.handleCLICommandEvent(evt.Reply, senderID, evt.Message, evt.Timestamp)
 	}
 }
 
 // handleCLICommandEvent processes a CLI command and sends the reply via the event-based sender.
-func (s *Server) handleCLICommandEvent(reply event.ReplyContext, senderID core.MeshCoreID, cmd string) {
+func (s *Server) handleCLICommandEvent(reply event.ReplyContext, senderID core.MeshCoreID, cmd string, cmdTS uint32) {
 	// Strip optional companion radio prefix
 	prefix := ""
 	if len(cmd) > 4 && cmd[2] == '|' {
@@ -202,7 +203,7 @@ func (s *Server) handleCLICommandEvent(reply event.ReplyContext, senderID core.M
 		return
 	}
 
-	nowTS := s.cfg.Clock.GetCurrentTime()
+	nowTS := cli.ReplyTimestamp(s.cfg.Clock.GetCurrentTimeUnique(), cmdTS)
 	content := codec.BuildTxtMsgContent(nowTS, codec.TxtTypeCLI, 0, prefix+replyText, nil)
 	// Firmware's room server answers CLI with the plain response delay; only the
 	// repeater uses the longer cli.ReplyDelay.
