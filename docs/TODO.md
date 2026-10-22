@@ -15,8 +15,6 @@ Accepted but ignored. These reply OK and do nothing (`device/companion/companion
 
 - **`CMD_SEND_SELF_ADVERT`** sends no advert. Recurring adverts default to off, as
   in firmware, so a companion has no way to advertise on demand.
-- **`CMD_SET_FLOOD_SCOPE_KEY` and `CMD_SET_DEFAULT_FLOOD_SCOPE`** never reach the
-  router, which already supports both (`SetSendScope`, `DefaultReplyScope`).
 - **`CMD_SET_ADVERT_LATLON` and `CMD_SET_OTHER_PARAMS`** are dropped.
 
 Not handled at all (`ERR_CODE_UNSUPPORTED_CMD`), roughly by priority:

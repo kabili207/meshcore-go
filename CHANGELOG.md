@@ -73,6 +73,14 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **Flood scope from the app.** The companion server now handles
+  `CMD_SET_FLOOD_SCOPE_KEY`, `CMD_SET_DEFAULT_FLOOD_SCOPE` and
+  `CMD_GET_DEFAULT_FLOOD_SCOPE` like firmware. The app's flood traffic goes
+  unscoped if the app asked for that, else to the override key, else to the
+  default scope. The new `Config.SetFloodScope` callback receives that scope
+  whenever it changes; `CompanionNode.SetSendScope` fits it. Before, both
+  setters replied OK and did nothing, and the getter always reported no scope.
+
 - **Login failures reach the app.** When a server with a pending login answers
   with anything but success, the companion node emits the new
   `event.LoginFailed`, and the companion server pushes `PUSH_CODE_LOGIN_FAIL`,

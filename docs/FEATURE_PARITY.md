@@ -116,7 +116,7 @@ companion CLI (`CMD_RUN_CLI_COMMAND`), `CMD_SEND_BINARY_REQ` and `CMD_SEND_ANON_
 with replies and unmatched responses forwarded as `PUSH_CODE_BINARY_RESPONSE`, and
 login failures pushed as `PUSH_CODE_LOGIN_FAIL`.
 
-Five of the dispatched codes are acknowledged without effect, and 14 of the
+Three of the dispatched codes are acknowledged without effect, and 14 of the
 undispatched ones are real gaps. Both lists are in [TODO.md](TODO.md).
 
 **N/A by design:** BLE transport itself (Go speaks the framing, not GATT), radio/tx/

@@ -39,6 +39,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/router"
 )
 
 // Node is the subset of a meshcore-go node the companion server reads. A
@@ -162,6 +163,12 @@ type Config struct {
 	// not store others' advert signatures).
 	ExportSelf func() []byte
 
+	// SetFloodScope, if set, is called with the scope the app's flood traffic
+	// should use whenever SET_FLOOD_SCOPE_KEY or SET_DEFAULT_FLOOD_SCOPE changes
+	// it. A null key means unscoped. CompanionNode.SetSendScope fits. Without
+	// it, the scope commands are remembered but have no effect on sends.
+	SetFloodScope func(key router.TransportKey)
+
 	// Logger for connection events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -199,6 +206,7 @@ type Server struct {
 	sendTrace     func(ctx context.Context, tag, authCode uint32, flags uint8, path []byte) error
 	stats         func() Stats
 	exportSelf    func() []byte
+	setFloodScope func(key router.TransportKey)
 	startTime     time.Time
 	log           *slog.Logger
 
@@ -222,6 +230,13 @@ type Server struct {
 
 	autoaddConfig  uint8 // CMD_SET/GET_AUTOADD_CONFIG
 	autoaddMaxHops uint8
+
+	// Flood scope state, as firmware's send_scope, send_unscoped and
+	// default_scope. See floodScopeLocked.
+	scopeOverride    router.TransportKey
+	scopeUnscoped    bool
+	defaultScopeName string
+	defaultScopeKey  router.TransportKey
 
 	ackCounter atomic.Uint32 // per-send correlation token for SENT/SEND_CONFIRMED
 
@@ -319,6 +334,7 @@ func NewServer(cfg Config) *Server {
 		sendTrace:     cfg.SendTrace,
 		stats:         cfg.Stats,
 		exportSelf:    cfg.ExportSelf,
+		setFloodScope: cfg.SetFloodScope,
 		startTime:     time.Now(),
 		log:           log.WithGroup("companion"),
 		name:          id.Name,
@@ -517,8 +533,16 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 			s.id.BatteryMilliVolts, s.id.StorageUsedKB, s.id.StorageTotalKB))
 
 	case serial.CmdGetDefaultFloodScope:
-		// No default flood scope configured; report unset.
-		return ss.send(serial.EncodeDefaultFloodScope("", nil))
+		s.mu.RLock()
+		name, key := s.defaultScopeName, s.defaultScopeKey
+		s.mu.RUnlock()
+		return ss.send(serial.EncodeDefaultFloodScope(name, key[:]))
+
+	case serial.CmdSetFloodScopeKey:
+		return s.setFloodScopeKey(ss, payload)
+
+	case serial.CmdSetDefaultFloodScope:
+		return s.setDefaultFloodScope(ss, payload)
 
 	case serial.CmdGetStats:
 		return s.getStats(ss, payload)
@@ -563,8 +587,7 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 		// The node's own scheduler advertises on its interval; acknowledge.
 		return ss.send(serial.EncodeOK())
 
-	case serial.CmdSetAdvertLatLon, serial.CmdSetOtherParams,
-		serial.CmdSetFloodScopeKey, serial.CmdSetDefaultFloodScope:
+	case serial.CmdSetAdvertLatLon, serial.CmdSetOtherParams:
 		// Device-parameter writes we accept but do not persist on a virtual node.
 		return ss.send(serial.EncodeOK())
 
@@ -597,6 +620,69 @@ func (s *Server) selfInfo() []byte {
 	}
 	s.mu.RUnlock()
 	return si.Encode()
+}
+
+// setFloodScopeKey answers CMD_SET_FLOOD_SCOPE_KEY. Byte 1 is 0 to set (with a
+// 16-byte key) or clear (without one) the override scope, or 1 to send
+// unscoped. Firmware handles no other value.
+func (s *Server) setFloodScopeKey(ss *session, payload []byte) error {
+	if len(payload) < 2 || payload[1] > 1 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	s.mu.Lock()
+	if payload[1] == 1 {
+		s.scopeUnscoped = true
+	} else {
+		s.scopeOverride = router.TransportKey{}
+		if len(payload) >= 2+16 {
+			copy(s.scopeOverride[:], payload[2:18])
+		}
+		s.scopeUnscoped = false
+	}
+	s.applyFloodScopeLocked()
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
+}
+
+// setDefaultFloodScope answers CMD_SET_DEFAULT_FLOOD_SCOPE: [name 31][key 16]
+// sets the default scope, and a shorter frame clears it. The name must be
+// NUL-terminated within its field and not empty.
+func (s *Server) setDefaultFloodScope(ss *session, payload []byte) error {
+	var name string
+	var key router.TransportKey
+	if len(payload) >= 1+31+16 {
+		n := bytes.IndexByte(payload[1:32], 0)
+		if n <= 0 {
+			return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+		}
+		name = string(payload[1 : 1+n])
+		copy(key[:], payload[32:48])
+	}
+	s.mu.Lock()
+	s.defaultScopeName, s.defaultScopeKey = name, key
+	s.applyFloodScopeLocked()
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
+}
+
+// floodScopeLocked returns the scope for the app's flood traffic, following
+// firmware's MyMesh::sendFloodScoped: unscoped if the app asked for it, else
+// the override, else the default scope.
+func (s *Server) floodScopeLocked() router.TransportKey {
+	switch {
+	case s.scopeUnscoped:
+		return router.TransportKey{}
+	case !s.scopeOverride.IsNull():
+		return s.scopeOverride
+	default:
+		return s.defaultScopeKey
+	}
+}
+
+func (s *Server) applyFloodScopeLocked() {
+	if s.setFloodScope != nil {
+		s.setFloodScope(s.floodScopeLocked())
+	}
 }
 
 // setName updates the advertised name reported in subsequent SELF_INFO replies.
