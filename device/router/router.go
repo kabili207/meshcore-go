@@ -882,13 +882,21 @@ func (r *Router) SendTrace(pkt *codec.Packet) {
 // SetSendScope sets the region send scope used by SendFloodScoped and
 // SendFloodPathScoped. Pass a key from TransportKeyFromRegion. A null key
 // disables scoping (equivalent to ClearSendScope).
-func (r *Router) SetSendScope(key TransportKey) { r.cfg.SendScope = key }
+func (r *Router) SetSendScope(key TransportKey) {
+	r.mu.Lock()
+	r.cfg.SendScope = key
+	r.mu.Unlock()
+}
 
 // ClearSendScope disables region scoping for outbound flood traffic.
-func (r *Router) ClearSendScope() { r.cfg.SendScope = TransportKey{} }
+func (r *Router) ClearSendScope() { r.SetSendScope(TransportKey{}) }
 
 // SendScope returns the current region send scope (null key if unscoped).
-func (r *Router) SendScope() TransportKey { return r.cfg.SendScope }
+func (r *Router) SendScope() TransportKey {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cfg.SendScope
+}
 
 // SendFloodScoped sends a flood packet scoped to the configured send scope.
 // When no scope is set (SendScope is null) it is identical to SendFlood.
@@ -945,7 +953,7 @@ func (r *Router) SendFloodPathWithKeyDelayed(pkt *codec.Packet, key [16]byte, de
 // the scope's code for this packet and transport_codes[1] is 0 (matching the
 // firmware, which reserves [1] as the reply-region hint, currently unused).
 func (r *Router) sendScopedFlood(pkt *codec.Packet, priority uint8, delay time.Duration) {
-	r.sendFloodWithScope(pkt, r.cfg.SendScope, priority, delay)
+	r.sendFloodWithScope(pkt, r.SendScope(), priority, delay)
 }
 
 // sendFloodWithScope is sendScopedFlood with the scope supplied by the caller,
@@ -994,7 +1002,7 @@ func (r *Router) sendFloodWithScope(pkt *codec.Packet, scope TransportKey, prior
 // pass through this node, so presenting it as a one-hop relay reflects reality
 // better than a zero-hop origin (which implies an endpoint device authored it).
 func (r *Router) SendFloodAsRelay(pkt *codec.Packet) {
-	scope := r.cfg.SendScope
+	scope := r.SendScope()
 	scoped := !scope.IsNull()
 
 	routeType := uint8(codec.RouteTypeFlood)

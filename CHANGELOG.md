@@ -186,6 +186,10 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **Changing a router's send scope raced with sends.** `SetSendScope` and
+  `ClearSendScope` wrote the scope while senders read it unlocked. Both now
+  hold the router's lock, so a companion app can change scope safely.
+
 - **Relays went out instantly.** Firmware's repeater waits a random 0 to
   5 × airtime × factor before relaying, so neighbors relaying the same packet
   don't transmit over each other. The router now does too, which matters once a

@@ -82,7 +82,7 @@ func (r *Router) ResolveReplyScope(origPkt *codec.Packet) TransportKey {
 	if defaultScope.IsNull() {
 		// Fall back to the send scope, so a node configured with only SendScope
 		// keeps its previous behavior.
-		defaultScope = r.cfg.SendScope
+		defaultScope = r.SendScope()
 	}
 
 	switch ChooseReplyScope(requestScopeKnown, requestWasUnscopedFlood, !defaultScope.IsNull()) {
