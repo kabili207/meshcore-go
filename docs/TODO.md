@@ -11,11 +11,11 @@ firmware release was analyzed, see [UPGRADE_1.17.md](UPGRADE_1.17.md) and
 
 ## Companion frame protocol
 
-Accepted but ignored. These reply OK and do nothing (`device/companion/companion.go`):
+Partly handled:
 
-- **`CMD_SEND_SELF_ADVERT`** sends no advert. Recurring adverts default to off, as
-  in firmware, so a companion has no way to advertise on demand.
-- **`CMD_SET_OTHER_PARAMS`** is dropped.
+- **`CMD_SET_OTHER_PARAMS`** keeps only the advert location policy. Manual
+  contact adds, telemetry modes and multi-acks are dropped, and `SELF_INFO`
+  reports them as zero.
 
 Not handled at all (`ERR_CODE_UNSUPPORTED_CMD`), roughly by priority:
 

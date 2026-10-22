@@ -169,6 +169,13 @@ type Config struct {
 	// it, the scope commands are remembered but have no effect on sends.
 	SetFloodScope func(key router.TransportKey)
 
+	// SendSelfAdvert, if set, sends this node's advert for CMD_SEND_SELF_ADVERT:
+	// zero-hop, or flooded with scope (the default flood scope, null for
+	// unscoped). appData holds the current name and role, plus the location
+	// when the app shares it. CompanionNode.SendSelfAdvert fits. Without it,
+	// CMD_SEND_SELF_ADVERT returns an error.
+	SendSelfAdvert func(ctx context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error
+
 	// Logger for connection events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -207,6 +214,7 @@ type Server struct {
 	stats         func() Stats
 	exportSelf    func() []byte
 	setFloodScope func(key router.TransportKey)
+	sendAdvert    func(ctx context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error
 	startTime     time.Time
 	log           *slog.Logger
 
@@ -224,6 +232,7 @@ type Server struct {
 	rxDelay       uint32
 	advLat        int32 // advertised location, degrees x1e6
 	advLon        int32
+	advLocPolicy  uint8 // CMD_SET_OTHER_PARAMS; nonzero shares the location in adverts
 	airtimeFactor uint32
 
 	tzOffset int8 // "tz.offset" CLI setting, hours from UTC
@@ -337,6 +346,7 @@ func NewServer(cfg Config) *Server {
 		stats:         cfg.Stats,
 		exportSelf:    cfg.ExportSelf,
 		setFloodScope: cfg.SetFloodScope,
+		sendAdvert:    cfg.SendSelfAdvert,
 		startTime:     time.Now(),
 		log:           log.WithGroup("companion"),
 		name:          id.Name,
@@ -588,14 +598,19 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 		return ss.send(serial.EncodeOK())
 
 	case serial.CmdSendSelfAdvert:
-		// The node's own scheduler advertises on its interval; acknowledge.
-		return ss.send(serial.EncodeOK())
+		return s.sendSelfAdvert(ss, payload)
 
 	case serial.CmdSetAdvertLatLon:
 		return s.setAdvertLatLon(ss, payload)
 
 	case serial.CmdSetOtherParams:
-		// Device-parameter writes we accept but do not persist on a virtual node.
+		// Only the advert location policy (byte 3) is kept. The other
+		// preferences are accepted and dropped.
+		if len(payload) >= 4 {
+			s.mu.Lock()
+			s.advLocPolicy = payload[3]
+			s.mu.Unlock()
+		}
 		return ss.send(serial.EncodeOK())
 
 	default:
@@ -613,20 +628,45 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 func (s *Server) selfInfo() []byte {
 	s.mu.RLock()
 	si := &serial.SelfInfo{
-		AdvType:    s.id.AdvType,
-		TxPower:    s.txPower,
-		MaxTxPower: s.id.MaxTxPower,
-		PublicKey:  s.node.PublicKey(),
-		AdvLat:     s.advLat,
-		AdvLon:     s.advLon,
-		RadioFreq:  s.radioFreqKHz,
-		RadioBw:    s.radioBwHz,
-		RadioSf:    s.radioSF,
-		RadioCr:    s.radioCR,
-		Name:       s.name,
+		AdvType:      s.id.AdvType,
+		TxPower:      s.txPower,
+		MaxTxPower:   s.id.MaxTxPower,
+		PublicKey:    s.node.PublicKey(),
+		AdvLat:       s.advLat,
+		AdvLon:       s.advLon,
+		AdvLocPolicy: s.advLocPolicy,
+		RadioFreq:    s.radioFreqKHz,
+		RadioBw:      s.radioBwHz,
+		RadioSf:      s.radioSF,
+		RadioCr:      s.radioCR,
+		Name:         s.name,
 	}
 	s.mu.RUnlock()
 	return si.Encode()
+}
+
+// sendSelfAdvert answers CMD_SEND_SELF_ADVERT. Byte 1 set to 1 floods the
+// advert in the default scope; otherwise it goes out zero-hop.
+func (s *Server) sendSelfAdvert(ss *session, payload []byte) error {
+	if s.sendAdvert == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	flood := len(payload) >= 2 && payload[1] == 1
+
+	s.mu.RLock()
+	ad := &codec.AdvertAppData{NodeType: s.id.AdvType, Name: s.name}
+	if s.advLocPolicy != 0 {
+		lat, lon := float64(s.advLat)/1e6, float64(s.advLon)/1e6
+		ad.Lat, ad.Lon = &lat, &lon
+	}
+	scope := s.defaultScopeKey
+	s.mu.RUnlock()
+
+	if err := s.sendAdvert(ss.ctx, ad, flood, scope); err != nil {
+		s.log.Warn("self advert failed", "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(serial.EncodeOK())
 }
 
 // setAdvertLatLon answers CMD_SET_ADVERT_LATLON: [lat int32][lon int32] in

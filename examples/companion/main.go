@@ -36,6 +36,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/node"
+	"github.com/kabili207/meshcore-go/device/router"
 	"github.com/kabili207/meshcore-go/transport"
 	mqtttransport "github.com/kabili207/meshcore-go/transport/mqtt"
 	serialtransport "github.com/kabili207/meshcore-go/transport/serial"
@@ -181,6 +182,9 @@ func run() error {
 			return comp.SendTrace(tag, authCode, flags, path)
 		},
 		SetFloodScope: comp.SetSendScope,
+		SendSelfAdvert: func(_ context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error {
+			return comp.SendSelfAdvert(appData, flood, scope)
+		},
 		ExportSelf: func() []byte {
 			builder := advert.NewSelfAdvertBuilder(&advert.SelfAdvertConfig{
 				PrivateKey: priv,

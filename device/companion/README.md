@@ -41,6 +41,9 @@ this package does not implement BLE.
   `SELF_INFO`, `GET`/`SET_TUNING_PARAMS`), auto-add config
   (`GET`/`SET_AUTOADD_CONFIG`), custom vars and advert-path reads, and the
   advert name and location setters.
+- **Self advert**: `SEND_SELF_ADVERT`, zero-hop or flooded in the default
+  scope, through the `SendSelfAdvert` callback. The location is included when
+  the app shares it (`SET_OTHER_PARAMS`).
 - **Flood scope**: `SET_FLOOD_SCOPE_KEY` and `SET`/`GET_DEFAULT_FLOOD_SCOPE`,
   resolved as firmware does and handed to the `SetFloodScope` callback.
 - **Direct messaging**: `SEND_TXT_MSG` → `SENT` with a `SEND_CONFIRMED` push on

@@ -73,6 +73,15 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **Self adverts on request.** `CMD_SEND_SELF_ADVERT` now sends an advert
+  through the new `Config.SendSelfAdvert` callback, zero-hop or, with byte 1
+  set to 1, flooded in the default scope, as firmware does. It carries the
+  current name, and the location when the app turned on location sharing
+  (byte 3 of `CMD_SET_OTHER_PARAMS`, now reported back in `SELF_INFO`). The
+  new `CompanionNode.SendSelfAdvert` fits the callback. Without the callback
+  the command now returns `ERR_CODE_UNSUPPORTED_CMD` instead of an OK that sent
+  nothing.
+
 - **The app can set the node's location.** `CMD_SET_ADVERT_LATLON` now updates
   the coordinates `SELF_INFO` reports, and rejects ones outside ±90° / ±180°
   with `ERR_CODE_ILLEGAL_ARG`, as firmware does. Before, it replied OK and
