@@ -115,6 +115,16 @@ contain breaking changes; those are called out explicitly below.
 
 ### Changed
 
+- **Firmware v1.18.0 is now the target.** The companion server reports
+  `FIRMWARE_VER_CODE` 14 (was 13), which tells apps `CMD_RUN_CLI_COMMAND`
+  exists. `cli.FirmwareVersion`, the `ver` reply for the repeater and room
+  server and the companion's default version string, is `v1.18.0` (was
+  `v1.16.0`). The companion's default build date comes from the new
+  `cli.FirmwareBuildDate`. Apps use these values to decide which settings to
+  offer, so they may now show 1.17 and 1.18 options. Ones we don't support
+  reply as unknown keys. Set `Identity.FirmwareVersion` or the roles' `Version`
+  to report something else.
+
 - `acl.DefaultMaxClients` and `room.DefaultMaxClients` go from 20 to 32,
   matching firmware v1.18's `MAX_CLIENTS`.
 

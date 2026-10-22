@@ -18,7 +18,11 @@ var ErrUnknownKey = errors.New("unknown or read-only config key")
 // by the "ver" CLI command when a role doesn't override it. It includes the
 // leading "v" like the firmware's FIRMWARE_VERSION macro, because the phone apps
 // parse this exact shape to gate which settings they let you edit.
-const FirmwareVersion = "v1.16.0"
+const FirmwareVersion = "v1.18.0"
+
+// FirmwareBuildDate is the build date of the firmware release FirmwareVersion
+// names, for roles that report one without being given their own.
+const FirmwareBuildDate = "15 Oct 2026"
 
 // FormatVersion builds the firmware-style "ver" reply: "<version> (Build: <date>)".
 // This matches the firmware's `sprintf(reply, "%s (Build: %s)", ...)` so the apps

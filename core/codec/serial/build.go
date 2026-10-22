@@ -21,9 +21,9 @@ const (
 )
 
 // CompanionFirmwareVerCode is the FIRMWARE_VER_CODE the device reports as byte 1
-// of DEVICE_INFO. 13 corresponds to firmware v1.16.0 and gates which features
+// of DEVICE_INFO. 14 corresponds to firmware v1.18.0 and gates which features
 // the phone apps enable.
-const CompanionFirmwareVerCode = 13
+const CompanionFirmwareVerCode = 14
 
 // Response payload builders for the companion protocol (device -> app). Each
 // returns a payload whose first byte is the response code; wrap it with
@@ -122,17 +122,17 @@ const deviceInfoSize = 1 + 1 + 1 + 1 + 4 + 12 + 40 + 20 + 1 + 1 // 82
 // The layout is fixed-width: the official app reads FirmwareVersion at offset 60,
 // so all fields must sit at their firmware offsets (a compact form is rejected).
 type DeviceInfo struct {
-	// FirmwareVerCode is the protocol/firmware version code (13 for v1.16.0).
+	// FirmwareVerCode is the protocol/firmware version code (14 for v1.18.0).
 	FirmwareVerCode uint8
 	// MaxContactsDiv2 is max_contacts/2; MaxGroupChannels is the channel count.
 	MaxContactsDiv2  uint8
 	MaxGroupChannels uint8
 	BLEPin           uint32
-	// BuildDate ("6 Jun 2026") goes in a fixed 12-byte NUL-terminated field.
+	// BuildDate ("15 Oct 2026") goes in a fixed 12-byte NUL-terminated field.
 	BuildDate string
 	// Manufacturer/model goes in a fixed 40-byte field at offset 20.
 	Manufacturer string
-	// FirmwareVersion ("v1.16.0") goes in a fixed 20-byte field at offset 60.
+	// FirmwareVersion ("v1.18.0") goes in a fixed 20-byte field at offset 60.
 	FirmwareVersion string
 	// ClientRepeat (v9+) and PathHashMode (v10+) are the two trailing bytes.
 	ClientRepeat uint8

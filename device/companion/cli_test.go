@@ -51,7 +51,7 @@ func TestRunCLICommand(t *testing.T) {
 			t.Errorf("%q = %q, want %q", tc.cmd, got, tc.want)
 		}
 	}
-	if got := runCLI(t, s, "ver"); got != "v1.16.0 (Build: 6 Jun 2026)" {
+	if got := runCLI(t, s, "ver"); got != "v1.18.0 (Build: 15 Oct 2026)" {
 		t.Errorf("ver = %q", got)
 	}
 }

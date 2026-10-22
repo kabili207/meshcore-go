@@ -36,6 +36,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/codec/serial"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 )
@@ -70,9 +71,9 @@ type Identity struct {
 	RadioSF      uint8
 	RadioCR      uint8
 
-	FirmwareVerCode  uint8  // protocol/firmware version code; default 13 (v1.16.0)
-	FirmwareVersion  string // default "v1.16.0"
-	BuildDate        string // firmware build date; default "6 Jun 2026"
+	FirmwareVerCode  uint8  // protocol/firmware version code; default serial.CompanionFirmwareVerCode
+	FirmwareVersion  string // default cli.FirmwareVersion
+	BuildDate        string // firmware build date; default cli.FirmwareBuildDate
 	Manufacturer     string // model/manufacturer string; default "meshcore-go"
 	MaxContacts      int    // default 256
 	MaxGroupChannels uint8  // default 8
@@ -255,10 +256,10 @@ func NewServer(cfg Config) *Server {
 		id.FirmwareVerCode = serial.CompanionFirmwareVerCode
 	}
 	if id.FirmwareVersion == "" {
-		id.FirmwareVersion = "v1.16.0"
+		id.FirmwareVersion = cli.FirmwareVersion
 	}
 	if id.BuildDate == "" {
-		id.BuildDate = "6 Jun 2026"
+		id.BuildDate = cli.FirmwareBuildDate
 	}
 	if id.Manufacturer == "" {
 		id.Manufacturer = "meshcore-go"
