@@ -51,9 +51,10 @@ Ordered by priority.
 > got no reply.
 >
 > `57845be` also makes a rejected login clear its pending state, as firmware
-> does. `aef1e9e` sends remote CLI replies immediately: firmware adds a 600ms
-> radio turnaround delay and bumps a reply timestamp that equals the command's,
-> and `SendDM` can do neither (a TODO marks the timestamp case).
+> does. CLI replies in all roles wait firmware's 600ms radio turnaround
+> delay (see `cli.ReplyDelay`). Firmware also bumps a reply timestamp that
+> equals the command's. The companion can't, since `SendDM` takes no timestamp
+> (a TODO marks it), and the repeater and room server don't yet.
 >
 > Still open: item 9 (no Go sensor role), the optional parts of 8, and the
 > 1.17 leftovers.

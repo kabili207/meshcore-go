@@ -85,6 +85,11 @@ type ReplyContext struct {
 	// value means send un-scoped. It is a raw key rather than a router type so
 	// this package stays free of a dependency on the router.
 	ReplyScope [16]byte
+
+	// Delay holds the reply in the send queue before it goes out. Firmware
+	// delays some replies, CLI replies for example (cli.ReplyDelay), to give
+	// the requester's radio time to switch back to receive.
+	Delay time.Duration
 }
 
 // HasFloodPath returns true if the original packet arrived via flood routing

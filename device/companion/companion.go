@@ -203,6 +203,8 @@ type Server struct {
 
 	tzOffset int8 // "tz.offset" CLI setting, hours from UTC
 
+	cliReplyDelay time.Duration // cli.ReplyDelay; tests shorten it
+
 	autoaddConfig  uint8 // CMD_SET/GET_AUTOADD_CONFIG
 	autoaddMaxHops uint8
 
@@ -310,6 +312,7 @@ func NewServer(cfg Config) *Server {
 		radioCR:       id.RadioCR,
 		txPower:       id.TxPower,
 		sessions:      make(map[*session]struct{}),
+		cliReplyDelay: cli.ReplyDelay,
 	}
 	if cfg.Events != nil {
 		cfg.Events(s.handleEvent)

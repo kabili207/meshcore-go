@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/codec/serial"
@@ -36,9 +37,12 @@ func (s *Server) handleRemoteCLI(e *event.TextMessageReceived) bool {
 	// TODO: firmware bumps the reply timestamp when it equals the command's, so
 	// the app's CLI view keeps them apart. SendDM doesn't let us pick one.
 	reply := s.runCLI(e.Message)
-	if _, err := s.sendDM(context.Background(), e.From, reply, serial.TxtTypeCLI, 0, nil); err != nil {
-		s.log.Warn("remote CLI reply failed", "to", e.From.String(), "error", err)
-	}
+	// SendDM can't take a delay, so wait here instead (see cli.ReplyDelay).
+	time.AfterFunc(s.cliReplyDelay, func() {
+		if _, err := s.sendDM(context.Background(), e.From, reply, serial.TxtTypeCLI, 0, nil); err != nil {
+			s.log.Warn("remote CLI reply failed", "to", e.From.String(), "error", err)
+		}
+	})
 	return true
 }
 

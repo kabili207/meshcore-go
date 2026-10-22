@@ -269,9 +269,9 @@ func (b *BaseNode) sendEncryptedResponse(reply event.ReplyContext, to core.MeshC
 	pkt := codec.NewPacket(payloadType, codec.RouteTypeFlood, payload)
 
 	if reply.HasDirectPath() {
-		b.Router.SendDirect(pkt, reply.DirectPath)
+		b.Router.SendDirectDelayed(pkt, reply.DirectPath, reply.Delay)
 	} else {
-		b.Router.SendFloodWithKey(pkt, reply.ReplyScope)
+		b.Router.SendFloodWithKeyDelayed(pkt, reply.ReplyScope, reply.Delay)
 	}
 	return nil
 }
@@ -294,7 +294,7 @@ func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, 
 	payload := codec.BuildAddressedPayload(to.Hash(), b.id.Hash(), mac, ciphertext)
 	pkt := codec.NewPacket(codec.PayloadTypePath, codec.RouteTypeFlood, payload)
 
-	b.Router.SendFloodPathWithKey(pkt, reply.ReplyScope)
+	b.Router.SendFloodPathWithKeyDelayed(pkt, reply.ReplyScope, max(reply.Delay, router.PathSendDelay))
 	return nil
 }
 

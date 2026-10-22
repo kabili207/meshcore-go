@@ -15,6 +15,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/device/acl"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
@@ -736,6 +737,9 @@ func TestHandleTextMessage_AdminCLITypes(t *testing.T) {
 			if content.TxtType != codec.TxtTypeCLI {
 				t.Errorf("reply type = %d, want CLI (1)", content.TxtType)
 			}
+			if sender.replies[0].delay != cli.ReplyDelay {
+				t.Errorf("reply delay = %v, want %v", sender.replies[0].delay, cli.ReplyDelay)
+			}
 		})
 	}
 }
@@ -783,13 +787,15 @@ type mockContactSend struct {
 	to          core.MeshCoreID
 	payloadType uint8
 	plaintext   []byte
+	delay       time.Duration // ReplyContext.Delay, for replies
 }
 
-func (m *mockSender) SendReply(_ event.ReplyContext, to core.MeshCoreID, payloadType uint8, plaintext []byte) error {
+func (m *mockSender) SendReply(reply event.ReplyContext, to core.MeshCoreID, payloadType uint8, plaintext []byte) error {
 	m.replies = append(m.replies, mockContactSend{
 		to:          to,
 		payloadType: payloadType,
 		plaintext:   append([]byte(nil), plaintext...),
+		delay:       reply.Delay,
 	})
 	return nil
 }

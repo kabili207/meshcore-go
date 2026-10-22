@@ -3,10 +3,12 @@ package companion
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/clock"
 	"github.com/kabili207/meshcore-go/core/codec/serial"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 )
@@ -64,8 +66,16 @@ func TestRunCLICommandTooShort(t *testing.T) {
 	}
 }
 
+type sentDM struct {
+	to      core.MeshCoreID
+	text    string
+	txtType uint8
+	at      time.Time
+}
+
 // A TXT_TYPE_CLI_COMMAND from a contact with the remote-CLI flag runs locally
-// and is answered with TXT_TYPE_CLI. Without the flag it goes to the app.
+// and is answered with TXT_TYPE_CLI after the CLI reply delay. Without the flag
+// it goes to the app.
 func TestRemoteCLI(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -80,39 +90,59 @@ func TestRemoteCLI(t *testing.T) {
 			from[0] = 0x21
 			store := &stubStore{list: []*contact.ContactInfo{{ID: from, Flags: tc.flags, OutPathLen: 0xFF}}}
 			var handler func(any)
-			var sentTo core.MeshCoreID
-			var sentText string
-			var sentType uint8
-			sends := 0
+			sent := make(chan sentDM, 4)
 			s := NewServer(Config{
 				Node:     &fakeNode{clk: clock.New(), contacts: store},
 				Identity: Identity{Name: "meshy"},
 				Events:   func(h func(any)) { handler = h },
 				SendDM: func(_ context.Context, to core.MeshCoreID, text string, txtType, _ uint8, onAck func()) (bool, error) {
-					sends++
-					sentTo, sentText, sentType = to, text, txtType
+					sent <- sentDM{to, text, txtType, time.Now()}
 					return false, nil
 				},
 			})
+			const delay = 50 * time.Millisecond
+			s.cliReplyDelay = delay
 
+			start := time.Now()
 			handler(&event.TextMessageReceived{Event: event.Event{From: from}, TxtType: serial.TxtTypeCLICommand, Message: "get name", Timestamp: 5})
+			if len(sent) != 0 {
+				t.Fatal("CLI reply went out without waiting for the reply delay")
+			}
 
 			queued := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))[0][0] != serial.RespCodeNoMoreMessages
-			if tc.wantReply {
-				if sends != 1 || sentTo != from || sentText != "> meshy" || sentType != serial.TxtTypeCLI {
-					t.Errorf("reply: sends=%d to=%x text=%q type=%d", sends, sentTo[:2], sentText, sentType)
-				}
-				if queued {
-					t.Error("an executed command was also queued for the app")
-				}
-			} else {
-				if sends != 0 {
-					t.Error("ran a CLI command from a contact without the remote-CLI flag")
-				}
+			if !tc.wantReply {
 				if !queued {
 					t.Error("command from a contact without the flag should be queued for the app")
 				}
+				select {
+				case <-sent:
+					t.Error("ran a CLI command from a contact without the remote-CLI flag")
+				case <-time.After(3 * delay):
+				}
+				return
+			}
+
+			if queued {
+				t.Error("an executed command was also queued for the app")
+			}
+			select {
+			case dm := <-sent:
+				if dm.to != from || dm.text != "> meshy" || dm.txtType != serial.TxtTypeCLI {
+					t.Errorf("reply: to=%x text=%q type=%d", dm.to[:2], dm.text, dm.txtType)
+				}
+				if dm.at.Sub(start) < delay {
+					t.Errorf("reply sent after %v, want at least %v", dm.at.Sub(start), delay)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("no CLI reply was sent")
 			}
 		})
+	}
+}
+
+func TestRemoteCLIDefaultDelay(t *testing.T) {
+	s, _ := newTestServer()
+	if s.cliReplyDelay != cli.ReplyDelay {
+		t.Errorf("default remote CLI reply delay = %v, want %v", s.cliReplyDelay, cli.ReplyDelay)
 	}
 }

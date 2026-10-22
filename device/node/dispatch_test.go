@@ -51,8 +51,17 @@ func testNode(t *testing.T) (*BaseNode, *eventCollector) {
 }
 
 // captureTransport records packets the node sends, so tests can inspect ACKs.
+// Tests that start the router read through snapshot, since the drain goroutine
+// sends concurrently.
 type captureTransport struct {
+	mu   sync.Mutex
 	sent []*codec.Packet
+}
+
+func (c *captureTransport) snapshot() []*codec.Packet {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]*codec.Packet(nil), c.sent...)
 }
 
 func (c *captureTransport) Start(context.Context) error                { return nil }
@@ -61,6 +70,8 @@ func (c *captureTransport) IsConnected() bool                          { return 
 func (c *captureTransport) SetPacketHandler(_ transport.PacketHandler) {}
 func (c *captureTransport) SetStateHandler(_ transport.StateHandler)   {}
 func (c *captureTransport) SendPacket(pkt *codec.Packet) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.sent = append(c.sent, pkt)
 	return nil
 }

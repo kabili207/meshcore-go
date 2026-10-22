@@ -818,12 +818,24 @@ func (r *Router) SendFloodPathReply(pkt *codec.Packet, origPkt *codec.Packet) {
 // callers that resolved the reply scope earlier (see event.ReplyContext). A
 // zero key sends un-scoped.
 func (r *Router) SendFloodWithKey(pkt *codec.Packet, key [16]byte) {
-	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodData, 0)
+	r.SendFloodWithKeyDelayed(pkt, key, 0)
+}
+
+// SendFloodWithKeyDelayed is SendFloodWithKey with the packet held in the send
+// queue for delay first. See SendDirectDelayed.
+func (r *Router) SendFloodWithKeyDelayed(pkt *codec.Packet, key [16]byte, delay time.Duration) {
+	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodData, delay)
 }
 
 // SendFloodPathWithKey is the PATH counterpart of SendFloodWithKey.
 func (r *Router) SendFloodPathWithKey(pkt *codec.Packet, key [16]byte) {
-	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodPath, PathSendDelay)
+	r.SendFloodPathWithKeyDelayed(pkt, key, PathSendDelay)
+}
+
+// SendFloodPathWithKeyDelayed is SendFloodPathWithKey with the caller choosing
+// the delay instead of PathSendDelay.
+func (r *Router) SendFloodPathWithKeyDelayed(pkt *codec.Packet, key [16]byte, delay time.Duration) {
+	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodPath, delay)
 }
 
 // sendScopedFlood is the shared implementation for the scoped flood senders.
@@ -910,6 +922,15 @@ func (r *Router) SendFloodAsRelay(pkt *codec.Packet) {
 // SendDirect prepares and sends a packet in direct routing mode.
 // The path is set to the provided route, and the packet is marked as seen.
 func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
+	r.SendDirectDelayed(pkt, path, 0)
+}
+
+// SendDirectDelayed is SendDirect with the packet held in the send queue for
+// delay first. Firmware delays replies this way so the requester's radio has
+// switched back to receive, which matters when a transport bridges to RF. The
+// delay only applies once Start has been called; before that, sends are
+// synchronous.
+func (r *Router) SendDirectDelayed(pkt *codec.Packet, path []byte, delay time.Duration) {
 	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeDirect
 
 	hashSize := r.cfg.PathHashMode + 1
@@ -925,7 +946,7 @@ func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
 	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentDirect.Add(1)
-	r.enqueue(pkt, PriorityDirect, 0, 0, true)
+	r.enqueue(pkt, PriorityDirect, delay, 0, true)
 }
 
 // SendFloodPath prepares and sends a PATH packet in flood mode with a delay.

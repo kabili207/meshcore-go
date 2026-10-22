@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ErrUnknownKey is returned by Set, Load, and Get for a key that is not
@@ -23,6 +24,11 @@ const FirmwareVersion = "v1.18.0"
 // FirmwareBuildDate is the build date of the firmware release FirmwareVersion
 // names, for roles that report one without being given their own.
 const FirmwareBuildDate = "15 Oct 2026"
+
+// ReplyDelay is how long a CLI reply waits before it is sent, matching
+// firmware's CLI_REPLY_DELAY_MILLIS. It gives the requester's radio time to
+// switch back to receive.
+const ReplyDelay = 600 * time.Millisecond
 
 // FormatVersion builds the firmware-style "ver" reply: "<version> (Build: <date>)".
 // This matches the firmware's `sprintf(reply, "%s (Build: %s)", ...)` so the apps

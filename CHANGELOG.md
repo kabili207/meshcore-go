@@ -154,6 +154,15 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **CLI replies went out with no delay.** Firmware holds CLI replies for 600ms
+  (`CLI_REPLY_DELAY_MILLIS`) so the requester's radio has switched back to
+  receive. Repeaters, room servers and remote companion CLI now do the same,
+  which matters whenever a transport bridges to RF. The new `cli.ReplyDelay`
+  holds the value. `event.ReplyContext.Delay` makes `BaseNode.SendReply` hold
+  a reply in the send queue, backed by the new `Router.SendDirectDelayed`,
+  `SendFloodWithKeyDelayed` and `SendFloodPathWithKeyDelayed`. Delays only
+  apply while the router is started.
+
 - **A rejected login stayed pending.** Any response from a server with a pending
   login is now taken as the login reply and clears it, as in firmware. Before,
   only a successful login cleared it, so the rejection was dropped and later

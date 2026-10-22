@@ -1,10 +1,13 @@
 package node
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/transport"
 )
 
@@ -139,5 +142,42 @@ func TestRepeaterCLI_NonAdminDenied(t *testing.T) {
 		if p.PayloadType() == codec.PayloadTypeTxtMsg {
 			t.Error("a non-admin CLI command should get no reply")
 		}
+	}
+}
+
+// CLI replies wait cli.ReplyDelay in the send queue, like firmware's
+// CLI_REPLY_DELAY_MILLIS, so a requester behind an RF bridge has switched back
+// to receive.
+func TestRepeaterCLI_ReplyDelayed(t *testing.T) {
+	n, ct := newTestRepeater(t, "adminpw", "guestpw")
+	client, _ := crypto.GenerateKeyPair()
+	loginAdmin(t, n, client)
+
+	n.base.Router.Start(context.Background())
+	defer n.base.Router.Stop()
+
+	countTxt := func() int {
+		c := 0
+		for _, p := range ct.snapshot() {
+			if p.PayloadType() == codec.PayloadTypeTxtMsg {
+				c++
+			}
+		}
+		return c
+	}
+
+	start := time.Now()
+	n.base.processPacket(buildRepeaterCLI(t, n, client, "get role"), transport.PacketSourceMQTT)
+	if countTxt() != 0 {
+		t.Fatal("CLI reply went out without the reply delay")
+	}
+	for countTxt() == 0 {
+		if time.Since(start) > 3*time.Second {
+			t.Fatal("CLI reply was never sent")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if elapsed := time.Since(start); elapsed < cli.ReplyDelay {
+		t.Errorf("CLI reply sent after %v, want at least %v", elapsed, cli.ReplyDelay)
 	}
 }
