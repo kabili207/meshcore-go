@@ -406,7 +406,7 @@ func (b *BaseNode) buildReplyContext(pkt *codec.Packet, ct *contact.ContactInfo,
 		copy(reply.DirectPath, ct.OutPath)
 	}
 	if pkt.IsFlood() && pkt.HopCount() > 0 {
-		reply.FloodPath = codec.ReverseFloodPath(pkt)
+		reply.FloodPath = append([]byte(nil), pkt.Path...)
 		reply.PathHashSize = pkt.PathHashSize
 	}
 	return reply

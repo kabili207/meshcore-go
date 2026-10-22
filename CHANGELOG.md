@@ -165,6 +165,17 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **Path returns carried the path backwards.** A path return tells the
+  requester its route to us, which is the flood path exactly as received:
+  relays append their hash, and a direct route is consumed from the front.
+  Firmware's `createPathReturn` sends it unchanged. We reversed it, so with two
+  or more hops the requester stored a route whose first hop wasn't its neighbor.
+  On an MQTT bridge every repeater hears every packet, which hid this. Over RF,
+  direct routing back to us failed. `event.ReplyContext.FloodPath` now holds the
+  path as received. Code that read it as the reversed path should call
+  `codec.ReverseFloodPath` on the original packet instead. Our own stored route
+  back to a flood sender is still the reverse, which is correct.
+
 - **Stored paths with a different hash size were sent mislabeled.**
   `Router.SendDirect` encoded every path with this router's own
   `PathHashMode`. A path learned from a peer using 2- or 3-byte hashes went out

@@ -229,7 +229,7 @@ func (b *BaseNode) handleAnonReq(pkt *codec.Packet, src transport.PacketSource) 
 		ReplyScope:    b.Router.ResolveReplyScope(pkt),
 	}
 	if pkt.IsFlood() && pkt.HopCount() > 0 {
-		reply.FloodPath = codec.ReverseFloodPath(pkt)
+		reply.FloodPath = append([]byte(nil), pkt.Path...)
 		reply.PathHashSize = pkt.PathHashSize
 	}
 

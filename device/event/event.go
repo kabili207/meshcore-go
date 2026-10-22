@@ -62,10 +62,12 @@ type ReplyContext struct {
 	// node and the sender. Used for encrypting response payloads.
 	SharedSecret []byte
 
-	// FloodPath is the reversed flood path from the original packet.
-	// Non-nil only when the original packet arrived via flood routing.
-	// Used by SendReply to wrap responses in PATH packets (matching
-	// firmware room server behavior).
+	// FloodPath is the flood path of the original packet, exactly as received.
+	// Non-nil only when it arrived by flood with at least one hop. SendReply
+	// returns it in a PATH packet, as firmware's createPathReturn does. It is
+	// the requester's route to us (relays append their hash, and a direct
+	// route is consumed from the front), so it must not be reversed. Our own
+	// route back to the requester is the reverse, see codec.ReverseFloodPath.
 	FloodPath []byte
 
 	// DirectPath is the contact's stored direct routing path, if known.
