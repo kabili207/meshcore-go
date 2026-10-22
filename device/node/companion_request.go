@@ -7,6 +7,7 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 )
 
@@ -84,6 +85,59 @@ func (n *CompanionNode) SendBinaryReq(to core.MeshCoreID, data []byte) (tag uint
 	n.pendingMu.Unlock()
 
 	return tag, flood, nil
+}
+
+// maxAnonReqData is the most request data an ANON_REQ can carry: the payload
+// holds dest hash(1), our public key(32) and MAC(2), leaving 149 bytes, which
+// pads down to 144 bytes of plaintext, less the 4-byte tag.
+const maxAnonReqData = 140
+
+// SendAnonReq sends an anonymous request (ANON_REQ) whose body the caller
+// supplies, starting with the request type byte, as CMD_SEND_ANON_REQ does. It
+// is signed with our identity, so the target needn't know us. The reply
+// arrives as a BinaryResponse event. Returns the request tag and whether the
+// request was flooded.
+//
+// Like firmware, a target that isn't a contact is first added as a transient
+// contact with a zero-hop path. That is also what lets us decrypt the reply.
+func (n *CompanionNode) SendAnonReq(to core.MeshCoreID, data []byte) (tag uint32, flood bool, err error) {
+	if len(data) > maxAnonReqData {
+		return 0, false, fmt.Errorf("request data too long: %d bytes", len(data))
+	}
+	contacts := n.base.Contacts()
+	ct := contacts.GetByPubKey(to)
+	if ct == nil {
+		if ct, err = contacts.AddContact(&contact.ContactInfo{
+			ID:         to,
+			Type:       codec.NodeTypeNone,
+			OutPathLen: 0, // zero-hop direct, firmware's default for an anon contact
+			LastMod:    n.clk.GetCurrentTime(),
+		}); err != nil {
+			return 0, false, fmt.Errorf("add anon contact: %w", err)
+		}
+	}
+	secret, err := contacts.GetSharedSecret(to)
+	if err != nil {
+		return 0, false, fmt.Errorf("shared secret: %w", err)
+	}
+
+	tag = n.clk.GetCurrentTimeUnique()
+	plaintext := make([]byte, 4+len(data))
+	binary.LittleEndian.PutUint32(plaintext, tag)
+	copy(plaintext[4:], data)
+	encrypted, err := crypto.EncryptAddressedWithSecret(plaintext, secret)
+	if err != nil {
+		return 0, false, fmt.Errorf("encrypt anon request: %w", err)
+	}
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	payload := codec.BuildAnonReqPayload(to.Hash(), n.base.PublicKey(), mac, ciphertext)
+	n.sendToContact(codec.NewPacket(codec.PayloadTypeAnonReq, codec.RouteTypeFlood, payload), ct)
+
+	n.pendingMu.Lock()
+	n.pendingBinary[tag] = to
+	n.pendingMu.Unlock()
+
+	return tag, !ct.HasDirectPath(), nil
 }
 
 // sendRequestContent encrypts a REQ body for to and sends it, direct when a path

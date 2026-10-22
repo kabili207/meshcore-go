@@ -1532,3 +1532,52 @@ func TestLoginFailedPush(t *testing.T) {
 		t.Errorf("got %x, want %x", frames, want)
 	}
 }
+
+func TestSendAnonReq(t *testing.T) {
+	var to core.MeshCoreID
+	to[0] = 0x55
+	var gotTo core.MeshCoreID
+	var gotData []byte
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}}, // not a contact
+		SendAnonReq: func(_ context.Context, id core.MeshCoreID, data []byte) (uint32, bool, error) {
+			gotTo, gotData = id, data
+			return 0x0A0B0C0D, false, nil
+		},
+	})
+	payload := append(append([]byte{serial.CmdSendAnonReq}, to[:]...), 0x07, 0x00)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent || resp[0][1] != serial.SentTypeDirect {
+		t.Fatalf("expected direct SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 0x0A0B0C0D {
+		t.Errorf("SENT tag = %08x", binary.LittleEndian.Uint32(resp[0][2:6]))
+	}
+	if gotTo != to || !bytes.Equal(gotData, []byte{0x07, 0x00}) {
+		t.Errorf("SendAnonReq got to=%x data=%x", gotTo[:2], gotData)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		cfg     Config
+		payload []byte
+		wantErr uint8
+	}{
+		{"no callback", Config{Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}}}, payload, serial.ErrCodeUnsupportedCmd},
+		{"no request data", Config{Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+			SendAnonReq: func(context.Context, core.MeshCoreID, []byte) (uint32, bool, error) { return 1, false, nil }},
+			append([]byte{serial.CmdSendAnonReq}, to[:]...), serial.ErrCodeIllegalArg},
+		{"send fails", Config{Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+			SendAnonReq: func(context.Context, core.MeshCoreID, []byte) (uint32, bool, error) {
+				return 0, false, errors.New("full")
+			}},
+			payload, serial.ErrCodeTableFull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := collectResponses(t, NewServer(tc.cfg), cmd(tc.payload...))
+			if resp[0][0] != serial.RespCodeErr || resp[0][1] != tc.wantErr {
+				t.Errorf("expected error %d, got %v", tc.wantErr, resp[0])
+			}
+		})
+	}
+}

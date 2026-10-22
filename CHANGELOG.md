@@ -81,6 +81,13 @@ contain breaking changes; those are called out explicitly below.
   goes to the app. Also adds `cli.Ftoa` (firmware's float formatting),
   `codec.IsValidAdvertName`, and the contact telemetry permission flags.
 
+- **Anonymous requests from the app.** `CompanionNode.SendAnonReq` sends an
+  ANON_REQ with a caller-supplied body to any node. A target that isn't a
+  contact is first added as a transient contact with a zero-hop path, as
+  firmware does, so the reply can be decrypted. The reply arrives as
+  `event.BinaryResponse`. The companion server handles `CMD_SEND_ANON_REQ`
+  through the new `Config.SendAnonReq`.
+
 - **Binary requests and unhandled responses.** `CompanionNode.SendBinaryReq`
   sends a request with a caller-supplied body and reports the reply as
   `event.BinaryResponse`. A response that matches no pending request, such as

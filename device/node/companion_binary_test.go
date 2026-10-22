@@ -220,3 +220,59 @@ func TestCompanionLegacyLoginOK(t *testing.T) {
 		t.Error("expected a LoginResponse for a legacy OK")
 	}
 }
+
+// CMD_SEND_ANON_REQ: an anonymous request to a node that isn't a contact gets a
+// transient contact with a zero-hop path first, as firmware does, so the reply
+// can be decrypted. The reply arrives as a BinaryResponse.
+func TestCompanionAnonReq(t *testing.T) {
+	comp, compCap := newTestCompanion(t)
+	collector := &eventCollector{}
+	comp.OnEvent(collector.handler)
+	server, _ := crypto.GenerateKeyPair()
+	serverID := clientID(server)
+
+	data := []byte{codec.AnonReqTypeBasic, 0x00} // clock request, zero-hop reply path
+	tag, flood, err := comp.SendAnonReq(serverID, data)
+	if err != nil {
+		t.Fatalf("SendAnonReq: %v", err)
+	}
+	if flood {
+		t.Error("a new anon contact defaults to zero-hop direct, not flood")
+	}
+	ct := comp.base.Contacts().GetByPubKey(serverID)
+	if ct == nil || !ct.IsTransient() || ct.OutPathLen != 0 {
+		t.Fatalf("contact = %+v, want a transient zero-hop contact", ct)
+	}
+
+	var req *codec.Packet
+	for _, p := range compCap.snapshot() {
+		if p.PayloadType() == codec.PayloadTypeAnonReq {
+			req = p
+		}
+	}
+	if req == nil || !req.IsDirect() || req.HopCount() != 0 {
+		t.Fatalf("sent %v, want a zero-hop direct ANON_REQ", req)
+	}
+	anon, err := codec.ParseAnonReqPayload(req.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt, err := crypto.DecryptAnonymous(codec.PrependMAC(anon.MAC, anon.Ciphertext), server.PrivateKey, anon.PubKey[:])
+	if err != nil {
+		t.Fatalf("server can't decrypt: %v", err)
+	}
+	if binary.LittleEndian.Uint32(pt) != tag || !bytes.HasPrefix(pt[4:], data) {
+		t.Errorf("plaintext = %x, want tag %08x then %x", pt, tag, data)
+	}
+
+	deliverResponse(t, comp, server, tag, []byte{0x80})
+	var br *event.BinaryResponse
+	for _, e := range collector.get() {
+		if x, ok := e.(*event.BinaryResponse); ok {
+			br = x
+		}
+	}
+	if br == nil || br.Tag != tag {
+		t.Errorf("BinaryResponse = %+v, want one with the anon request's tag", br)
+	}
+}

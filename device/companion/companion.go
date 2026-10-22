@@ -132,6 +132,12 @@ type Config struct {
 	// error. CompanionNode.SendBinaryReq fits this signature.
 	SendBinaryReq func(ctx context.Context, to core.MeshCoreID, data []byte) (tag uint32, flood bool, err error)
 
+	// SendAnonReq, if set, sends an anonymous request to any node, contact or
+	// not, and returns the request tag and whether it was flooded. The reply
+	// arrives as an event.BinaryResponse, pushed as BINARY_RESPONSE. Without
+	// it, CMD_SEND_ANON_REQ returns an error. CompanionNode.SendAnonReq fits.
+	SendAnonReq func(ctx context.Context, to core.MeshCoreID, data []byte) (tag uint32, flood bool, err error)
+
 	// SendTrace, if set, sends a TRACE along a relay-hash path with the app's tag
 	// and auth code. The result arrives as an event.TraceReceived, pushed as
 	// TRACE_DATA. Without it, CMD_SEND_TRACE_PATH returns an error.
@@ -181,6 +187,7 @@ type Server struct {
 	sendStatus    func(ctx context.Context, to core.MeshCoreID) error
 	sendTelemetry func(ctx context.Context, to core.MeshCoreID) (uint32, error)
 	sendBinaryReq func(ctx context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error)
+	sendAnonReq   func(ctx context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error)
 	sendTrace     func(ctx context.Context, tag, authCode uint32, flags uint8, path []byte) error
 	stats         func() Stats
 	exportSelf    func() []byte
@@ -299,6 +306,7 @@ func NewServer(cfg Config) *Server {
 		sendStatus:    cfg.SendStatus,
 		sendTelemetry: cfg.SendTelemetry,
 		sendBinaryReq: cfg.SendBinaryReq,
+		sendAnonReq:   cfg.SendAnonReq,
 		sendTrace:     cfg.SendTrace,
 		stats:         cfg.Stats,
 		exportSelf:    cfg.ExportSelf,
@@ -471,6 +479,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdSendBinaryReq:
 		return s.sendBinaryReqCmd(ss, payload)
+
+	case serial.CmdSendAnonReq:
+		return s.sendAnonReqCmd(ss, payload)
 
 	case serial.CmdRunCLICommand:
 		return s.runCLICmd(ss, payload)
@@ -934,11 +945,36 @@ func (s *Server) sendBinaryReqCmd(ss *session, payload []byte) error {
 		s.log.Warn("binary request failed", "to", to.String(), "error", err)
 		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
 	}
-	sentType, estTimeout := uint8(serial.SentTypeDirect), uint32(4000)
+	return ss.send(s.encodeRequestSent(tag, flood))
+}
+
+// encodeRequestSent builds the SENT reply for a request whose answer arrives
+// later as a BINARY_RESPONSE push.
+func (s *Server) encodeRequestSent(tag uint32, flood bool) []byte {
 	if flood {
-		sentType, estTimeout = serial.SentTypeFlood, 12000
+		return serial.EncodeSent(serial.SentTypeFlood, tag, 12000)
 	}
-	return ss.send(serial.EncodeSent(sentType, tag, estTimeout))
+	return serial.EncodeSent(serial.SentTypeDirect, tag, 4000)
+}
+
+// sendAnonReqCmd handles CMD_SEND_ANON_REQ: [cmd][pubkey 32][request data].
+// Unlike a binary request, the target needn't be a contact; the node adds a
+// transient one. It replies SENT with the request tag.
+func (s *Server) sendAnonReqCmd(ss *session, payload []byte) error {
+	if s.sendAnonReq == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	if len(payload) < 2+32 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var to core.MeshCoreID
+	copy(to[:], payload[1:33])
+	tag, flood, err := s.sendAnonReq(ss.ctx, to, payload[33:])
+	if err != nil {
+		s.log.Warn("anon request failed", "to", to.String(), "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(s.encodeRequestSent(tag, flood))
 }
 
 // sendTracePath handles CMD_SEND_TRACE_PATH: send a trace with the app's tag and
