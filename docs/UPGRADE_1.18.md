@@ -42,13 +42,21 @@ Ordered by priority.
 > | 8. Discovery gates | `5abad07` |
 > | 8. `loop.detect minimal` | `f512380` |
 > | 4. Transport code 0 as unscoped (diverges, see item) | `51e37a6` |
+> | 6. Binary requests and unhandled responses | `57845be` |
+> | 5. Companion CLI and remote CLI | `aef1e9e` |
+> | 5. Version code 14, `v1.18.0` | `5ffcd53` |
 >
 > `6dc917a` also gives CLI messages unique timestamps, as firmware does.
 > Without that, a second command in the same second was taken as a retry and
 > got no reply.
 >
-> Still open: items 5, 6 and 9, the optional parts of 8, and the 1.17
-> leftovers.
+> `57845be` also makes a rejected login clear its pending state, as firmware
+> does. `aef1e9e` sends remote CLI replies immediately: firmware adds a 600ms
+> radio turnaround delay and bumps a reply timestamp that equals the command's,
+> and `SendDM` can do neither (a TODO marks the timestamp case).
+>
+> Still open: item 9 (no Go sensor role), the optional parts of 8, and the
+> 1.17 leftovers.
 
 ### 1. Unaligned ciphertext panics `macThenDecrypt` (critical)
 

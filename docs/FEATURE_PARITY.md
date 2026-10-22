@@ -5,11 +5,10 @@ the shared base layer.
 
 ## Version baseline
 
-- **Go (this repo):** wire-compatible with `FIRMWARE_VER_CODE 13`.
-- **Firmware compared:** `~/Projects/PlatformIO/MeshCore` at `d9296435`
-  (`companion-v1.17.1`). `FIRMWARE_VER_CODE` is still 13, unchanged since v1.16.0, so
-  the wire baseline did not move. See `UPGRADE_1.17.md` for the v1.16.0 to v1.17.1
-  delta and what it required.
+- **Go (this repo):** reports `FIRMWARE_VER_CODE 14` and `v1.18.0`.
+- **Firmware compared:** `companion-v1.18.0` (`81dbae59`) in
+  `~/Projects/PlatformIO/MeshCore`. See `UPGRADE_1.17.md` and `UPGRADE_1.18.md`
+  for each release's delta and what it required.
 
 Everything below was re-verified against the code on 2026-08-16. Claims here have a
 history of drifting behind the implementation; when in doubt, trust the code and fix
@@ -106,9 +105,12 @@ A phone app can connect to a Go node today. `ListenAndServe` runs a TCP listener
 `'>'`/`'<'` + uint16-LE-length format the firmware uses on USB serial and, as of
 v1.17, on Ethernet — so the same client code works against either.
 
-**Implemented:** 35 dispatch arms covering 38 `CMD_*` codes, an offline message queue
+**Implemented:** 37 dispatch arms covering 40 `CMD_*` codes, an offline message queue
 drained by `CMD_SYNC_NEXT_MESSAGE`, and unsolicited pushes to connected sessions.
-Unknown opcodes return `ERR_CODE_UNSUPPORTED_CMD`.
+Unknown opcodes return `ERR_CODE_UNSUPPORTED_CMD`. This includes the v1.18 companion
+CLI (`CMD_RUN_CLI_COMMAND`, also reachable over the mesh by contacts with the
+remote-CLI flag) and `CMD_SEND_BINARY_REQ`, with replies and unmatched responses
+such as sensor pushes forwarded as `PUSH_CODE_BINARY_RESPONSE`.
 
 **Divergence worth fixing:** the offline queue is **unbounded**. Firmware uses a fixed
 16-slot ring. A Go node that never has an app connect will grow the queue without
@@ -118,9 +120,10 @@ limit.
 `CmdReboot`, `CmdFactoryReset`, `CmdSetDevicePin`, `CmdGetAllowedRepeatFreq`,
 `CmdSetOtherParams`. Real gaps, roughly in priority order:
 
-- `CmdSendChannelData`, `CmdSendControlData`, `CmdSendBinaryReq`, `CmdSendAnonReq`,
+- `CmdSendChannelData`, `CmdSendControlData`, `CmdSendAnonReq`,
   `CmdSendPathDiscoveryReq` — send paths `BaseNode` already implements internally, just
-  not reachable from a connected app
+  not reachable from a connected app. Anon request replies would reuse the
+  `BINARY_RESPONSE` push.
 - `CmdSetPathHashMode`, `CmdSetDefaultFloodScope`, `CmdSetFloodScopeKey` — config the
   router supports but an app cannot set
 - `CmdLogout`, `CmdHasConnection` — session lifecycle
