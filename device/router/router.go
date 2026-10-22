@@ -45,6 +45,18 @@ const (
 	// Firmware: PATH_RETURN_DELAY = 300ms.
 	PathSendDelay = 300 * time.Millisecond
 
+	// Reply delays from firmware. A reply waits so the requester's radio has
+	// switched back to receive, which matters when a transport bridges to RF.
+	//
+	// ServerResponseDelay is firmware's SERVER_RESPONSE_DELAY, for responses to
+	// requests and logins.
+	ServerResponseDelay = 300 * time.Millisecond
+	// TxtAckDelay is firmware's TXT_ACK_DELAY, for ACKs of text messages.
+	TxtAckDelay = 200 * time.Millisecond
+	// MultiAckSpacing separates redundant multipart ACK copies and the ACK
+	// that follows them.
+	MultiAckSpacing = 300 * time.Millisecond
+
 	// Send priorities matching firmware conventions.
 	PriorityDirect      = 0 // Highest: direct-routed traffic
 	PriorityFloodData   = 1 // Flood data, ACKs
@@ -789,6 +801,12 @@ func (r *Router) SendScope() TransportKey { return r.cfg.SendScope }
 // through the home-region scope. Adverts remain unscoped.
 func (r *Router) SendFloodScoped(pkt *codec.Packet) {
 	r.sendScopedFlood(pkt, PriorityFloodData, 0)
+}
+
+// SendFloodScopedDelayed is SendFloodScoped with the packet held in the send
+// queue for delay first. See SendDirectDelayed.
+func (r *Router) SendFloodScopedDelayed(pkt *codec.Packet, delay time.Duration) {
+	r.sendScopedFlood(pkt, PriorityFloodData, delay)
 }
 
 // SendFloodPathScoped is the scoped counterpart of SendFloodPath: a PATH packet

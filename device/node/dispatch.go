@@ -8,6 +8,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/router"
 	"github.com/kabili207/meshcore-go/transport"
 )
 
@@ -137,12 +138,13 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 				// return path and carries the ACK (firmware createPathReturn with
 				// an embedded PAYLOAD_TYPE_ACK). Without this the sender never
 				// learns the direct path and keeps flooding.
-				if err := b.sendPathReturn(reply, ct.ID, codec.PayloadTypeAck, ackPayload); err != nil {
+				ackReply := reply
+				ackReply.Delay = router.TxtAckDelay
+				if err := b.sendPathReturn(ackReply, ct.ID, codec.PayloadTypeAck, ackPayload); err != nil {
 					b.log.Debug("failed to send path-return ack", "error", err)
 				}
 			} else {
-				b.sendAckPayload(ct.ID, ackPayload)
-				b.sendExtraAcks(ct, ackPayload)
+				b.sendTextAck(ct, ackPayload)
 			}
 		case codec.TxtTypeSigned:
 			// Signed messages (e.g. a room server pushing a post) are ACKed with
@@ -150,7 +152,7 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 			// content.
 			ackData := codec.TrimTxtMsgContent(plaintext, content)
 			ackHash := crypto.ComputeAckHash(ackData, b.id[:])
-			b.sendAckPayload(ct.ID, codec.BuildAckPayload(ackHash))
+			b.sendAckPayload(ct.ID, codec.BuildAckPayload(ackHash), router.TxtAckDelay)
 		}
 	}
 

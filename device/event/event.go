@@ -86,9 +86,10 @@ type ReplyContext struct {
 	// this package stays free of a dependency on the router.
 	ReplyScope [16]byte
 
-	// Delay holds the reply in the send queue before it goes out. Firmware
-	// delays some replies, CLI replies for example (cli.ReplyDelay), to give
-	// the requester's radio time to switch back to receive.
+	// Delay holds the reply in the send queue before it goes out, to give the
+	// requester's radio time to switch back to receive. Zero means
+	// router.ServerResponseDelay, firmware's delay for responses. CLI replies
+	// from a repeater use cli.ReplyDelay instead.
 	Delay time.Duration
 }
 

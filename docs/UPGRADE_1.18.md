@@ -51,8 +51,9 @@ Ordered by priority.
 > got no reply.
 >
 > `57845be` also makes a rejected login clear its pending state, as firmware
-> does. CLI replies in all roles wait firmware's 600ms radio turnaround
-> delay (see `cli.ReplyDelay`). Firmware also bumps a reply timestamp that
+> does. Replies and ACKs now use firmware's radio turnaround delays: 300ms
+> for responses, 600ms for repeater and companion CLI replies, 200ms for text
+> ACKs. Firmware also bumps a reply timestamp that
 > equals the command's. The companion can't, since `SendDM` takes no timestamp
 > (a TODO marks it), and the repeater and room server don't yet.
 >

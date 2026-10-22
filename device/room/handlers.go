@@ -8,9 +8,9 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/acl"
-	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/router"
 	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
@@ -205,7 +205,9 @@ func (s *Server) handleCLICommandEvent(reply event.ReplyContext, senderID core.M
 
 	nowTS := s.cfg.Clock.GetCurrentTime()
 	content := codec.BuildTxtMsgContent(nowTS, codec.TxtTypeCLI, 0, prefix+replyText, nil)
-	reply.Delay = cli.ReplyDelay
+	// Firmware's room server answers CLI with the plain response delay; only the
+	// repeater uses the longer cli.ReplyDelay.
+	reply.Delay = router.ServerResponseDelay
 
 	if s.sender != nil {
 		if err := s.sender.SendReply(reply, senderID, codec.PayloadTypeTxtMsg, content); err != nil {

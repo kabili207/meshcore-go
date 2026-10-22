@@ -15,7 +15,6 @@ import (
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/ack"
 	"github.com/kabili207/meshcore-go/device/acl"
-	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
@@ -737,8 +736,10 @@ func TestHandleTextMessage_AdminCLITypes(t *testing.T) {
 			if content.TxtType != codec.TxtTypeCLI {
 				t.Errorf("reply type = %d, want CLI (1)", content.TxtType)
 			}
-			if sender.replies[0].delay != cli.ReplyDelay {
-				t.Errorf("reply delay = %v, want %v", sender.replies[0].delay, cli.ReplyDelay)
+			// Unlike the repeater, firmware's room server uses the plain response
+			// delay for CLI replies.
+			if sender.replies[0].delay != router.ServerResponseDelay {
+				t.Errorf("reply delay = %v, want %v", sender.replies[0].delay, router.ServerResponseDelay)
 			}
 		})
 	}

@@ -154,14 +154,23 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
-- **CLI replies went out with no delay.** Firmware holds CLI replies for 600ms
-  (`CLI_REPLY_DELAY_MILLIS`) so the requester's radio has switched back to
-  receive. Repeaters, room servers and remote companion CLI now do the same,
-  which matters whenever a transport bridges to RF. The new `cli.ReplyDelay`
-  holds the value. `event.ReplyContext.Delay` makes `BaseNode.SendReply` hold
-  a reply in the send queue, backed by the new `Router.SendDirectDelayed`,
-  `SendFloodWithKeyDelayed` and `SendFloodPathWithKeyDelayed`. Delays only
-  apply while the router is started.
+- **Replies and ACKs went out with no delay.** Firmware holds them briefly so
+  the requester's radio has switched back to receive, which matters whenever a
+  transport bridges to RF. We now use the same delays:
+  - Responses to requests and logins: 300ms (`router.ServerResponseDelay`).
+    This is the default for anything sent with `BaseNode.SendReply`.
+  - Repeater and remote companion CLI replies: 600ms (`cli.ReplyDelay`). The
+    room server uses 300ms for CLI replies, as firmware does.
+  - Text message ACKs: 200ms (`router.TxtAckDelay`), including an ACK carried
+    in a path return. With multi-acks on, the multipart copies now go first,
+    300ms apart (`router.MultiAckSpacing`), then the ACK, matching firmware's
+    order. We used to send the ACK first.
+  - `SendACK` and `SendACKPayload`, which answer requests such as a room
+    keep-alive: 300ms.
+
+  `event.ReplyContext.Delay` overrides the reply delay. The router gained
+  `SendDirectDelayed`, `SendFloodScopedDelayed`, `SendFloodWithKeyDelayed` and
+  `SendFloodPathWithKeyDelayed`. Delays only apply while the router is started.
 
 - **A rejected login stayed pending.** Any response from a server with a pending
   login is now taken as the login reply and clears it, as in firmware. Before,
