@@ -138,6 +138,13 @@ type Config struct {
 	// it, CMD_SEND_ANON_REQ returns an error. CompanionNode.SendAnonReq fits.
 	SendAnonReq func(ctx context.Context, to core.MeshCoreID, data []byte) (tag uint32, flood bool, err error)
 
+	// SendCLIReply, if set, sends the reply to a remote CLI command. It gets the
+	// command's timestamp so the reply can be stamped apart from it, and is
+	// expected to apply cli.ReplyDelay itself. CompanionNode.SendCLIReply fits.
+	// Without it, replies go through SendDM after a server-side delay, and can
+	// share the command's timestamp.
+	SendCLIReply func(ctx context.Context, to core.MeshCoreID, text string, commandTS uint32) error
+
 	// SendTrace, if set, sends a TRACE along a relay-hash path with the app's tag
 	// and auth code. The result arrives as an event.TraceReceived, pushed as
 	// TRACE_DATA. Without it, CMD_SEND_TRACE_PATH returns an error.
@@ -188,6 +195,7 @@ type Server struct {
 	sendTelemetry func(ctx context.Context, to core.MeshCoreID) (uint32, error)
 	sendBinaryReq func(ctx context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error)
 	sendAnonReq   func(ctx context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error)
+	sendCLIReply  func(ctx context.Context, to core.MeshCoreID, text string, commandTS uint32) error
 	sendTrace     func(ctx context.Context, tag, authCode uint32, flags uint8, path []byte) error
 	stats         func() Stats
 	exportSelf    func() []byte
@@ -307,6 +315,7 @@ func NewServer(cfg Config) *Server {
 		sendTelemetry: cfg.SendTelemetry,
 		sendBinaryReq: cfg.SendBinaryReq,
 		sendAnonReq:   cfg.SendAnonReq,
+		sendCLIReply:  cfg.SendCLIReply,
 		sendTrace:     cfg.SendTrace,
 		stats:         cfg.Stats,
 		exportSelf:    cfg.ExportSelf,

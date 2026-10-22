@@ -174,6 +174,9 @@ func run() error {
 		SendAnonReq: func(_ context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error) {
 			return comp.SendAnonReq(to, data)
 		},
+		SendCLIReply: func(_ context.Context, to core.MeshCoreID, text string, commandTS uint32) error {
+			return comp.SendCLIReply(to, text, commandTS)
+		},
 		SendTrace: func(_ context.Context, tag, authCode uint32, flags uint8, path []byte) error {
 			return comp.SendTrace(tag, authCode, flags, path)
 		},

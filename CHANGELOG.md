@@ -183,6 +183,12 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **Remote companion CLI replies could share their command's timestamp.** The
+  new `CompanionNode.SendCLIReply` stamps the reply with `cli.ReplyTimestamp`
+  and holds it for `cli.ReplyDelay` in the router's send queue. The companion
+  server uses it through the new optional `Config.SendCLIReply`. Without that
+  callback it falls back to `SendDM` as before.
+
 - **CLI replies could share their command's timestamp.** The repeater and room
   server now stamp CLI replies with the unique clock and bump the timestamp by
   one when it equals the command's, as firmware does, so the apps' CLI view

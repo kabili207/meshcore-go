@@ -146,3 +146,35 @@ func TestRemoteCLIDefaultDelay(t *testing.T) {
 		t.Errorf("default remote CLI reply delay = %v, want %v", s.cliReplyDelay, cli.ReplyDelay)
 	}
 }
+
+// With SendCLIReply set, the server hands the node the command's timestamp, so
+// the reply can be stamped apart from it, and leaves the delay to the node.
+func TestRemoteCLIUsesSendCLIReply(t *testing.T) {
+	var from core.MeshCoreID
+	from[0] = 0x21
+	store := &stubStore{list: []*contact.ContactInfo{{ID: from, Flags: contact.FlagRemoteCLI, OutPathLen: 0xFF}}}
+	var handler func(any)
+	var gotTo core.MeshCoreID
+	var gotText string
+	var gotTS uint32
+	calls := 0
+	NewServer(Config{
+		Node:     &fakeNode{clk: clock.New(), contacts: store},
+		Identity: Identity{Name: "meshy"},
+		Events:   func(h func(any)) { handler = h },
+		SendDM: func(context.Context, core.MeshCoreID, string, uint8, uint8, func()) (bool, error) {
+			t.Error("SendDM used although SendCLIReply is set")
+			return false, nil
+		},
+		SendCLIReply: func(_ context.Context, to core.MeshCoreID, text string, commandTS uint32) error {
+			calls++
+			gotTo, gotText, gotTS = to, text, commandTS
+			return nil
+		},
+	})
+
+	handler(&event.TextMessageReceived{Event: event.Event{From: from}, TxtType: serial.TxtTypeCLICommand, Message: "get name", Timestamp: 4242})
+	if calls != 1 || gotTo != from || gotText != "> meshy" || gotTS != 4242 {
+		t.Errorf("SendCLIReply calls=%d to=%x text=%q ts=%d", calls, gotTo[:2], gotText, gotTS)
+	}
+}

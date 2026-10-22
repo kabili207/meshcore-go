@@ -27,17 +27,22 @@ func (s *Server) runCLICmd(ss *session, payload []byte) error {
 // CLI and sends the reply back as TXT_TYPE_CLI, as firmware's onCLICommandRecv
 // does. It reports false when the message should go to the app instead.
 func (s *Server) handleRemoteCLI(e *event.TextMessageReceived) bool {
-	if e.TxtType != serial.TxtTypeCLICommand || s.sendDM == nil {
+	if e.TxtType != serial.TxtTypeCLICommand || (s.sendCLIReply == nil && s.sendDM == nil) {
 		return false
 	}
 	ct := s.node.Contacts().GetByPubKey(e.From)
 	if ct == nil || !ct.IsRemoteCLIAllowed() {
 		return false
 	}
-	// TODO: firmware bumps the reply timestamp when it equals the command's, so
-	// the app's CLI view keeps them apart. SendDM doesn't let us pick one.
 	reply := s.runCLI(e.Message)
-	// SendDM can't take a delay, so wait here instead (see cli.ReplyDelay).
+	if s.sendCLIReply != nil {
+		if err := s.sendCLIReply(context.Background(), e.From, reply, e.Timestamp); err != nil {
+			s.log.Warn("remote CLI reply failed", "to", e.From.String(), "error", err)
+		}
+		return true
+	}
+	// Fallback: SendDM takes neither a delay nor a timestamp, so wait here
+	// (see cli.ReplyDelay). The reply may share the command's timestamp.
 	time.AfterFunc(s.cliReplyDelay, func() {
 		if _, err := s.sendDM(context.Background(), e.From, reply, serial.TxtTypeCLI, 0, nil); err != nil {
 			s.log.Warn("remote CLI reply failed", "to", e.From.String(), "error", err)
