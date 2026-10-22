@@ -62,3 +62,25 @@ func TestNewRoom_RouterCLIKeys(t *testing.T) {
 		}
 	}
 }
+
+// Firmware's room server doesn't forward (disable_fwd = 1 by default, and v1.18
+// refuses "set repeat on"), so a RoomNode doesn't either unless asked to.
+func TestRoomNode_DoesNotForwardByDefault(t *testing.T) {
+	kp, _ := crypto.GenerateKeyPair()
+	rn, err := NewRoom(RoomConfig{PrivateKey: ed25519.PrivateKey(kp.PrivateKey)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rn.base.Router.GetForwardPackets() {
+		t.Error("room node forwards packets by default")
+	}
+
+	on := true
+	rn, err = NewRoom(RoomConfig{PrivateKey: ed25519.PrivateKey(kp.PrivateKey), ForwardPackets: &on})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rn.base.Router.GetForwardPackets() {
+		t.Error("explicit ForwardPackets=true was not honored")
+	}
+}

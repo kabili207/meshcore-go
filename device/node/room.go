@@ -57,7 +57,13 @@ type RoomConfig struct {
 	// MaxRetries is how many times to resend before giving up. Default: 3.
 	MaxRetries int
 
-	// ForwardPackets enables packet relaying. Default: true for room servers.
+	// ForwardPackets enables packet relaying. Default: false, as in firmware,
+	// whose room server ships with forwarding off and since v1.18 refuses
+	// "set repeat on".
+	//
+	// Deprecated: room servers aren't meant to repeat. Run a repeater
+	// alongside instead. Ignored when Router is set, since that router's own
+	// configuration applies.
 	ForwardPackets *bool
 
 	// EventHandlers registered during construction.
@@ -108,8 +114,7 @@ func NewRoom(cfg RoomConfig) (*RoomNode, error) {
 
 	clk := clock.New()
 
-	// Default: room servers forward packets
-	forwardPackets := true
+	forwardPackets := false
 	if cfg.ForwardPackets != nil {
 		forwardPackets = *cfg.ForwardPackets
 	}

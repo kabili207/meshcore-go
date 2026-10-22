@@ -9,6 +9,15 @@ contain breaking changes; those are called out explicitly below.
 
 ### Changed (breaking)
 
+- **Room servers no longer forward packets by default.** Firmware's room server
+  ships with forwarding off and, since v1.18, refuses `set repeat on`.
+  `node.NewRoom` now builds its router with forwarding off.
+  `RoomConfig.ForwardPackets` still turns it on, but is deprecated. A router
+  passed in through `RoomConfig.Router` keeps its own setting, as before.
+
+  *Migration:* to keep a room server relaying, set
+  `RoomConfig.ForwardPackets` to true, or better, run a repeater alongside it.
+
 - **Removed APIs left over from the room server's legacy dispatch path.**
   - `Router.SendFloodReply` and `Router.SendFloodPathReply` are gone. Resolve
     the scope with `Router.ResolveReplyScope` and send with
