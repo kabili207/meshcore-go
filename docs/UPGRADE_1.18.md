@@ -45,6 +45,11 @@ Ordered by priority.
 > | 6. Binary requests and unhandled responses | `57845be` |
 > | 5. Companion CLI and remote CLI | `aef1e9e` |
 > | 5. Version code 14, `v1.18.0` | `5ffcd53` |
+> | Optional: signed-message ACKs like plain ones | `c8467d0` |
+> | Optional: CLI reply timestamps (repeater, room server) | `0ca5b84` |
+> | Optional: login failures pushed to the app | `bcde811` |
+> | Optional: `CMD_SEND_ANON_REQ` | `870229e` |
+> | 8. Room server `set repeat on` deprecated | `7509844` |
 >
 > `6dc917a` also gives CLI messages unique timestamps, as firmware does.
 > Without that, a second command in the same second was taken as a retry and
@@ -54,11 +59,11 @@ Ordered by priority.
 > does. Replies and ACKs now use firmware's radio turnaround delays: 300ms
 > for responses, 600ms for repeater and companion CLI replies, 200ms for text
 > ACKs. Firmware also bumps a reply timestamp that
-> equals the command's. The companion can't, since `SendDM` takes no timestamp
-> (a TODO marks it), and the repeater and room server don't yet.
+> equals the command's. The repeater and room server do now. The companion
+> can't, since `SendDM` takes no timestamp (a TODO marks it).
 >
-> Still open: item 9 (no Go sensor role) and the optional parts of 8. The
-> 1.17 leftovers are done (see the end of this file).
+> Still open: item 9 (no Go sensor role). The 1.17 leftovers are done (see
+> the end of this file).
 
 ### 1. Unaligned ciphertext panics `macThenDecrypt` (critical)
 
