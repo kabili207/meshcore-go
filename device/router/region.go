@@ -140,6 +140,14 @@ func (m *RegionMap) PutRegion(name string, parentID uint16, id uint16) *RegionEn
 // Pass RegionDenyFlood as the mask when deciding whether to forward a scoped
 // flood. Matches the firmware's RegionMap::findMatch.
 func (m *RegionMap) FindMatch(pkt *codec.Packet, mask uint8) *RegionEntry {
+	// Code 0 is un-scoped (see isUnscoped). Unlike firmware, the wildcard's
+	// flags still apply.
+	if pkt.TransportCodes[0] == 0 {
+		if m.wildcard.Flags&mask != 0 {
+			return nil
+		}
+		return &m.wildcard
+	}
 	for i := range m.regions {
 		region := &m.regions[i]
 		if region.Flags&mask != 0 {

@@ -104,6 +104,15 @@ contain breaking changes; those are called out explicitly below.
   advert intervals are 0. Firmware v1.18 treats the latter as a node that
   doesn't want to be found.
 
+- **Transport code 0 is treated as un-scoped**, as in firmware v1.18. Such a
+  TRANSPORT_FLOOD follows the wildcard region instead of being dropped as an
+  unknown scope, counts against `MaxUnscopedFloodHops`, gets an un-scoped reply,
+  and skips `ValidateTransportCode` (which also stops the validator from dropping
+  the zero-hop `{0, 0}` contact share). Firmware still forwards code 0 when the
+  wildcard denies flooding and doesn't cap it with `flood.max.unscoped`. We
+  apply both limits, so code 0 can't be used to get un-scoped traffic past a
+  repeater configured to block it.
+
 - Repeaters default to `loop.detect minimal`, as in firmware v1.18. Firmware
   applies this to new installs only. Here it applies to any repeater that has no
   persisted `loop.detect`, since only changed settings are persisted. To keep the

@@ -91,8 +91,9 @@ type Config struct {
 	MaxFloodHops int
 
 	// MaxUnscopedFloodHops limits how far unscoped flood packets (RouteTypeFlood,
-	// i.e. without region transport codes) propagate. Scoped flood
-	// (RouteTypeTransportFlood) is not affected. Firmware's flood.max.unscoped.
+	// or RouteTypeTransportFlood with transport code 0) propagate. Scoped flood
+	// is not affected. Firmware's flood.max.unscoped, which unlike this does
+	// not cap code 0 (see isUnscoped).
 	// Default: 64.
 	MaxUnscopedFloodHops int
 
@@ -432,7 +433,7 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Gate 1.5: transport code validation (before dedup so rejected packets
 	// don't consume dedup slots)
-	if pkt.HasTransportCodes() && r.cfg.ValidateTransportCode != nil {
+	if !isUnscoped(pkt) && r.cfg.ValidateTransportCode != nil {
 		if !r.cfg.ValidateTransportCode(pkt) {
 			r.log.Debug("dropping packet with unrecognized transport code",
 				"code0", pkt.TransportCodes[0],
@@ -642,7 +643,7 @@ func (r *Router) routeFloodForward(pkt *codec.Packet, src transport.PacketSource
 	}
 	// Tiered flood caps (firmware flood.max.unscoped / flood.max.advert).
 	// These mirror the >= semantics of the MaxFloodHops check above.
-	if pkt.RouteType() == codec.RouteTypeFlood && int(info.HopCount)+1 > r.cfg.MaxUnscopedFloodHops {
+	if isUnscoped(pkt) && int(info.HopCount)+1 > r.cfg.MaxUnscopedFloodHops {
 		return
 	}
 	if pkt.PayloadType() == codec.PayloadTypeAdvert && int(info.HopCount)+1 > r.cfg.MaxAdvertFloodHops {
@@ -688,10 +689,11 @@ func (r *Router) regionAllowsFlood(pkt *codec.Packet) bool {
 	if rm == nil {
 		return true
 	}
-	if pkt.RouteType() == codec.RouteTypeTransportFlood {
+	if !isUnscoped(pkt) {
 		return rm.FindMatch(pkt, RegionDenyFlood) != nil
 	}
-	// Unscoped RouteTypeFlood: gated by the wildcard region's flood flag.
+	// Un-scoped (no transport codes, or code 0): gated by the wildcard
+	// region's flood flag.
 	return rm.Wildcard().Flags&RegionDenyFlood == 0
 }
 
