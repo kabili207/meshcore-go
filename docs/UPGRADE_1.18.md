@@ -41,12 +41,13 @@ Ordered by priority.
 > | 7. `MAX_CLIENTS` 32 | `1d716a1` |
 > | 8. Discovery gates | `5abad07` |
 > | 8. `loop.detect minimal` | `f512380` |
+> | 4. Transport code 0 as unscoped (diverges, see item) | `51e37a6` |
 >
 > `6dc917a` also gives CLI messages unique timestamps, as firmware does.
 > Without that, a second command in the same second was taken as a retry and
 > got no reply.
 >
-> Still open: items 4, 5, 6 and 9, the optional parts of 8, and the 1.17
+> Still open: items 5, 6 and 9, the optional parts of 8, and the 1.17
 > leftovers.
 
 ### 1. Unaligned ciphertext panics `macThenDecrypt` (critical)
@@ -148,29 +149,39 @@ Pre-existing gap found while checking this: the firmware repeater still accepts
 ### 4. Transport code 0 is treated as unscoped
 
 `RegionMap::findMatch` now returns the wildcard region when
-`transport_codes[0] == 0` (`01f9293b`). `calcTransportCode` never produces 0, so
-before this change such a packet matched nothing and was dropped.
+`transport_codes[0] == 0` (`01f9293b`, PR #3568). `calcTransportCode` never
+produces 0, so before this change such a packet matched nothing and was dropped.
 
-Effects in firmware:
+**What sends it.** Nothing, in normal operation:
 
-- A `TRANSPORT_FLOOD` with code 0 is forwarded. The wildcard is returned *before*
-  the mask check, so this happens **even when the wildcard denies flooding**.
-  That looks unintended upstream. Decide whether to copy it or apply the wildcard's
-  deny flag.
-- `flood.max.unscoped` doesn't apply to it, since that check looks only at
-  `ROUTE_TYPE_FLOOD`.
-- A reply to such a request goes out unscoped (`is_wildcard` maps to
-  `REPLY_SCOPE_NONE`).
+- Codes `0000` and `FFFF` have been reserved since regions were introduced
+  (`963290ea`, November 2025), so no firmware hashes to 0.
+- The companion has no way to choose code 0 for a flood.
+- Neither the agessaman observer fork nor EastMesh sends it.
+- meshcore.js only parses packets. meshcore_py and meshcore-cli pass
+  `send_raw_packet` bytes through from the user.
 
-What we do today: `RegionMap.FindMatch` (`device/router/region.go:142`) has no zero
-check, so `regionAllowsFlood` drops the packet, and `ResolveReplyScope`
-(`replypolicy.go:67`) treats it as an unknown scope and uses the default scope
-rather than replying unscoped. The opt-in `NewTransportCodeValidator` also rejects
-code 0.
+The one existing use of `{0, 0}` is the companion's "share contact" advert
+(`shareContactZeroHop`, `7755400a`). It's a zero-hop TRANSPORT_DIRECT packet, and
+`findMatch` is only called for TRANSPORT_FLOOD. So in practice code 0 on a flood
+comes from injected or third-party packets, or from some future protocol use.
+PR #3568 has no description or discussion. The "home region" REVISIT notes on
+`transport_codes[1]` hint at a sender wanting to fill in `codes[1]` while staying
+unscoped, but that's a guess.
 
-**Fix:** early return of the wildcard in `FindMatch`, and treat
-`TransportFlood && codes[0] == 0` as an unscoped request in `ResolveReplyScope`.
-Small.
+**Where firmware is inconsistent.** The PR title says code 0 is "the same as
+un-scoped", and region matching and the reply scope do treat it that way. But
+`findMatch` returns the wildcard *before* the mask check, so a code 0 flood is
+forwarded even when the wildcard denies flooding. And `isFloodHopLimitExceeded`
+applies `flood.max.unscoped` only to `ROUTE_TYPE_FLOOD`. A plain flood is subject
+to both limits, so code 0 lets anyone get unscoped traffic past a repeater set
+up to block it.
+
+**What we do.** We treat code 0 as fully unscoped: wildcard flags apply, the
+unscoped hop cap applies, replies go out unscoped, and `ValidateTransportCode`
+skips it. The rationale and a REVISIT note live on `isUnscoped` in
+`device/router/transport.go`. This deliberately diverges from firmware's
+forwarding behavior.
 
 Pre-existing divergence: when the wildcard denies flooding, firmware sets
 `recv_pkt_region = NULL` for a plain FLOOD, so its reply uses the default scope.
