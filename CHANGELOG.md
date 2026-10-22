@@ -73,6 +73,11 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **The app can set the node's location.** `CMD_SET_ADVERT_LATLON` now updates
+  the coordinates `SELF_INFO` reports, and rejects ones outside ±90° / ±180°
+  with `ERR_CODE_ILLEGAL_ARG`, as firmware does. Before, it replied OK and
+  dropped them.
+
 - **Flood scope from the app.** The companion server now handles
   `CMD_SET_FLOOD_SCOPE_KEY`, `CMD_SET_DEFAULT_FLOOD_SCOPE` and
   `CMD_GET_DEFAULT_FLOOD_SCOPE` like firmware. The app's flood traffic goes

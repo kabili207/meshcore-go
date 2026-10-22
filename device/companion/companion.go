@@ -222,6 +222,8 @@ type Server struct {
 	radioCR       uint8
 	txPower       uint8
 	rxDelay       uint32
+	advLat        int32 // advertised location, degrees x1e6
+	advLon        int32
 	airtimeFactor uint32
 
 	tzOffset int8 // "tz.offset" CLI setting, hours from UTC
@@ -344,6 +346,8 @@ func NewServer(cfg Config) *Server {
 		radioSF:       id.RadioSF,
 		radioCR:       id.RadioCR,
 		txPower:       id.TxPower,
+		advLat:        degToFixed(id.Lat),
+		advLon:        degToFixed(id.Lon),
 		sessions:      make(map[*session]struct{}),
 		cliReplyDelay: cli.ReplyDelay,
 	}
@@ -587,7 +591,10 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 		// The node's own scheduler advertises on its interval; acknowledge.
 		return ss.send(serial.EncodeOK())
 
-	case serial.CmdSetAdvertLatLon, serial.CmdSetOtherParams:
+	case serial.CmdSetAdvertLatLon:
+		return s.setAdvertLatLon(ss, payload)
+
+	case serial.CmdSetOtherParams:
 		// Device-parameter writes we accept but do not persist on a virtual node.
 		return ss.send(serial.EncodeOK())
 
@@ -610,8 +617,8 @@ func (s *Server) selfInfo() []byte {
 		TxPower:    s.txPower,
 		MaxTxPower: s.id.MaxTxPower,
 		PublicKey:  s.node.PublicKey(),
-		AdvLat:     degToFixed(s.id.Lat),
-		AdvLon:     degToFixed(s.id.Lon),
+		AdvLat:     s.advLat,
+		AdvLon:     s.advLon,
 		RadioFreq:  s.radioFreqKHz,
 		RadioBw:    s.radioBwHz,
 		RadioSf:    s.radioSF,
@@ -620,6 +627,24 @@ func (s *Server) selfInfo() []byte {
 	}
 	s.mu.RUnlock()
 	return si.Encode()
+}
+
+// setAdvertLatLon answers CMD_SET_ADVERT_LATLON: [lat int32][lon int32] in
+// degrees x1e6, optionally followed by an altitude that firmware reserves for
+// future use.
+func (s *Server) setAdvertLatLon(ss *session, payload []byte) error {
+	if len(payload) < 9 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	lat := int32(binary.LittleEndian.Uint32(payload[1:5]))
+	lon := int32(binary.LittleEndian.Uint32(payload[5:9]))
+	if lat < -90e6 || lat > 90e6 || lon < -180e6 || lon > 180e6 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	s.mu.Lock()
+	s.advLat, s.advLon = lat, lon
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
 }
 
 // setFloodScopeKey answers CMD_SET_FLOOD_SCOPE_KEY. Byte 1 is 0 to set (with a

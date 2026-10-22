@@ -40,7 +40,7 @@ this package does not implement BLE.
   (`SET_RADIO_PARAMS` / `SET_RADIO_TX_POWER` update the params reported in
   `SELF_INFO`, `GET`/`SET_TUNING_PARAMS`), auto-add config
   (`GET`/`SET_AUTOADD_CONFIG`), custom vars and advert-path reads, and the
-  advert-name / config setters.
+  advert name and location setters.
 - **Flood scope**: `SET_FLOOD_SCOPE_KEY` and `SET`/`GET_DEFAULT_FLOOD_SCOPE`,
   resolved as firmware does and handed to the `SetFloodScope` callback.
 - **Direct messaging**: `SEND_TXT_MSG` → `SENT` with a `SEND_CONFIRMED` push on
