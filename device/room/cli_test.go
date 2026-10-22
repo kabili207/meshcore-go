@@ -311,3 +311,16 @@ func TestRoomCLI_RepeatDeprecated(t *testing.T) {
 		}
 	}
 }
+
+// Firmware's CommonCLI rejects node names containing [ ] \ : , ? *.
+func TestRoomCLI_SetNameRejectsBadChars(t *testing.T) {
+	h := newTestHarness(t)
+	h.server.executeCLI("set name Lobby")
+
+	if got := h.server.executeCLI("set name Lob*by"); got != "Error: bad chars" {
+		t.Errorf("set name Lob*by = %q, want Error: bad chars", got)
+	}
+	if got := h.server.executeCLI("get name"); got != "Lobby" {
+		t.Errorf("get name = %q, want Lobby unchanged", got)
+	}
+}

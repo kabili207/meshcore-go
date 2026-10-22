@@ -186,6 +186,12 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **`set name` accepted characters firmware rejects.** The repeater and room
+  server now refuse names containing `[ ] \ : , ? *` with `Error: bad chars`,
+  as firmware's CommonCLI does (`cli.ErrBadNameChars`). A name like that,
+  persisted before this change, fails `LoadConfig` and keeps the configured
+  default.
+
 - **A crafted packet could crash any node.** Decryption panicked when the
   ciphertext wasn't a whole number of AES blocks. A sender can produce a valid MAC
   for any length on an anonymous request (they pick the ephemeral key) or on a

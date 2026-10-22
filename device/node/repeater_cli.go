@@ -59,7 +59,13 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 	// --- Config keys ---
 	d.Key("name", cli.ConfigKey{
 		Get: func() string { return n.appData.Name },
-		Set: func(v string) error { n.appData.Name = v; return nil },
+		Set: func(v string) error {
+			if !codec.IsValidAdvertName(v) {
+				return cli.ErrBadNameChars
+			}
+			n.appData.Name = v
+			return nil
+		},
 	})
 	d.Key("lat", cli.ConfigKey{
 		Get: func() string { return formatCoord(n.appData.Lat) },

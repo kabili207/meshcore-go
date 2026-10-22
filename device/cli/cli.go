@@ -25,6 +25,10 @@ const FirmwareVersion = "v1.18.0"
 // names, for roles that report one without being given their own.
 const FirmwareBuildDate = "15 Oct 2026"
 
+// ErrBadNameChars rejects a node name containing a character firmware's
+// CommonCLI refuses (see codec.IsValidAdvertName).
+var ErrBadNameChars = errors.New("bad chars")
+
 // ReplyDelay is how long a CLI reply waits before it is sent, matching
 // firmware's CLI_REPLY_DELAY_MILLIS. It gives the requester's radio time to
 // switch back to receive.

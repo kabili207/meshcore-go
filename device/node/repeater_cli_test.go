@@ -217,3 +217,21 @@ func TestRepeaterCLI_ReplyTimestampDiffers(t *testing.T) {
 		t.Errorf("reply timestamp %d equals the command's", got.Timestamp)
 	}
 }
+
+// Firmware's CommonCLI rejects node names containing [ ] \ : , ? *.
+func TestRepeaterCLI_SetNameRejectsBadChars(t *testing.T) {
+	n, ct := newTestRepeater(t, "adminpw", "guestpw")
+	client, _ := crypto.GenerateKeyPair()
+	loginAdmin(t, n, client)
+	n.appData.Name = "Hub"
+
+	n.base.processPacket(buildRepeaterCLI(t, n, client, "set name Hub:2"), transport.PacketSourceMQTT)
+
+	reply, ok := lastCLIReply(t, n, client, ct)
+	if !ok || reply != "Error: bad chars" {
+		t.Errorf("set name Hub:2 = %q (ok=%v), want Error: bad chars", reply, ok)
+	}
+	if n.appData.Name != "Hub" {
+		t.Errorf("name = %q, want it unchanged", n.appData.Name)
+	}
+}
