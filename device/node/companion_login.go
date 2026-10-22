@@ -109,7 +109,7 @@ func (n *CompanionNode) IsConnected(id core.MeshCoreID) bool {
 // otherwise floods it.
 func (n *CompanionNode) sendToContact(pkt *codec.Packet, ct *contact.ContactInfo) {
 	if ct != nil && ct.HasDirectPath() {
-		n.base.Router.SendDirect(pkt, ct.OutPath)
+		n.base.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, 0)
 	} else {
 		n.base.Router.SendFloodScoped(pkt)
 	}

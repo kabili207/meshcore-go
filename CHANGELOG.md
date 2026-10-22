@@ -165,6 +165,16 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **Stored paths with a different hash size were sent mislabeled.**
+  `Router.SendDirect` encoded every path with this router's own
+  `PathHashMode`. A path learned from a peer using 2- or 3-byte hashes went out
+  with the wrong hop count and hash size (2 hops of 2 bytes became 4 hops of
+  1 byte), so relays misrouted it. The new `Router.SendDirectPath` takes the
+  path's encoded `path_len` byte and keeps its encoding, as firmware's
+  `sendDirect` does. Replies, ACKs (multipart copies included), contact sends,
+  DMs and companion requests all use it now. `SendDirect` is unchanged for raw
+  paths that carry no encoding.
+
 - **Regular contacts could take the anonymous contact slots.** Firmware keeps
   its `MAX_ANON_CONTACTS` slots reserved, so regular contacts only ever get
   `MAX_CONTACTS`. Ours let regular contacts grow into them. A repeater, which

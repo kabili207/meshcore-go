@@ -951,6 +951,34 @@ func (r *Router) SendDirectDelayed(pkt *codec.Packet, path []byte, delay time.Du
 	r.enqueue(pkt, PriorityDirect, delay, 0, true)
 }
 
+// SendDirectPath sends pkt along a stored path, given in the form contacts and
+// replies keep it: the encoded path_len wire byte and the path bytes. The
+// path keeps its own hash size, as firmware's sendDirect does. SendDirect
+// assumes this router's PathHashMode, which mislabels a path learned from a
+// peer that uses a different hash size, so relays would misread it.
+//
+// If the path bytes don't match pathLen, which means corrupt state, the packet
+// is still sent, encoded with the router's own hash size.
+func (r *Router) SendDirectPath(pkt *codec.Packet, pathLen uint8, path []byte, delay time.Duration) {
+	info := codec.PathInfoFromWireByte(pathLen)
+	if !info.IsValid() || info.ByteLen() != len(path) {
+		r.log.Warn("stored path doesn't match its encoded length, using our hash size",
+			"path_len", pathLen, "bytes", len(path))
+		r.SendDirectDelayed(pkt, path, delay)
+		return
+	}
+
+	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeDirect
+	pkt.PathLen = pathLen
+	pkt.PathHashSize = info.HashSize
+	pkt.Path = append([]byte(nil), path...)
+
+	r.dedup.MarkSeen(pkt)
+
+	r.counters.SentDirect.Add(1)
+	r.enqueue(pkt, PriorityDirect, delay, 0, true)
+}
+
 // SendFloodPath prepares and sends a PATH packet in flood mode with a delay.
 // PATH packets use a lower priority than data floods and are delayed to let
 // the original request propagate first. This matches the firmware's

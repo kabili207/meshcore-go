@@ -134,7 +134,7 @@ func (n *CompanionNode) sendTextChunk(to core.MeshCoreID, message string, o send
 
 	ct := n.base.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {
-		n.base.Router.SendDirect(pkt, ct.OutPath)
+		n.base.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, 0)
 	} else {
 		n.base.Router.SendFloodScoped(pkt)
 	}

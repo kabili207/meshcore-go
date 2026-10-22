@@ -273,7 +273,7 @@ func (b *BaseNode) sendEncryptedResponse(reply event.ReplyContext, to core.MeshC
 	pkt := codec.NewPacket(payloadType, codec.RouteTypeFlood, payload)
 
 	if reply.HasDirectPath() {
-		b.Router.SendDirectDelayed(pkt, reply.DirectPath, reply.Delay)
+		b.Router.SendDirectPath(pkt, reply.DirectPathLen, reply.DirectPath, reply.Delay)
 	} else {
 		b.Router.SendFloodWithKeyDelayed(pkt, reply.ReplyScope, reply.Delay)
 	}
@@ -344,10 +344,10 @@ func (b *BaseNode) sendTextAck(ct *contact.ContactInfo, ackPayload []byte) {
 		remaining := uint8(b.extraAckTransmits - i)
 		mp := codec.BuildMultipartPayload(remaining, codec.PayloadTypeAck, ackPayload)
 		pkt := codec.NewPacket(codec.PayloadTypeMultipart, codec.RouteTypeDirect, mp)
-		b.Router.SendDirectDelayed(pkt, ct.OutPath, d)
+		b.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, d)
 		d += router.MultiAckSpacing
 	}
-	b.Router.SendDirectDelayed(codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeDirect, ackPayload), ct.OutPath, d)
+	b.Router.SendDirectPath(codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeDirect, ackPayload), ct.OutPathLen, ct.OutPath, d)
 }
 
 // sendAckPayload sends an ACK with a caller-supplied wire payload: 4 bytes for
@@ -358,7 +358,7 @@ func (b *BaseNode) sendAckPayload(to core.MeshCoreID, payload []byte, delay time
 
 	ct := b.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {
-		b.Router.SendDirectDelayed(pkt, ct.OutPath, delay)
+		b.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, delay)
 	} else {
 		b.Router.SendFloodScopedDelayed(pkt, delay)
 	}
@@ -385,7 +385,7 @@ func (b *BaseNode) SendToContact(to core.MeshCoreID, payloadType uint8, plaintex
 
 	ct := b.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {
-		b.Router.SendDirect(pkt, ct.OutPath)
+		b.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, 0)
 	} else {
 		b.Router.SendFloodScoped(pkt)
 	}
