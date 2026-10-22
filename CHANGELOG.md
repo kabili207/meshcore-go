@@ -165,6 +165,20 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **Regular contacts could take the anonymous contact slots.** Firmware keeps
+  its `MAX_ANON_CONTACTS` slots reserved, so regular contacts only ever get
+  `MAX_CONTACTS`. Ours let regular contacts grow into them. A repeater, which
+  adds every advert it hears, could fill every slot on a busy mesh, after which
+  a client login got no contact entry and its requests couldn't be decrypted.
+  Regular contacts are now capped at `MaxContacts`.
+
+- **An advert from an anonymous contact promoted it in place.** It is now
+  replaced by a real contact allocated from the regular pool, as firmware does,
+  keeping the anonymous entry's learned path (firmware drops it, but our
+  repeaters and room servers route replies to logged-in clients through it). If
+  the advert isn't auto-added, the anonymous entry is left alone instead of
+  being promoted.
+
 - **Anonymous requests got the wrong reply route.** The repeater now picks
   the route the way firmware's `chooseReplyRoute` does:
   - a flood request gets a path return
