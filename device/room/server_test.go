@@ -880,9 +880,9 @@ func TestHandleRequest_KeepaliveNoDirectPathSkips(t *testing.T) {
 	h.server.SetSender(ms)
 	clientID := keepaliveClient(t, h)
 
-	// Empty reply context => no direct path.
 	h.server.HandleRequest(&event.RequestReceived{
 		Event:       event.Event{From: clientID},
+		Reply:       event.ReplyContext{DirectPathLen: contact.PathUnknown},
 		RequestType: codec.ReqTypeKeepalive,
 		Tag:         200,
 	})

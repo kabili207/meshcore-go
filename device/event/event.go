@@ -100,6 +100,8 @@ func (r *ReplyContext) HasFloodPath() bool {
 }
 
 // HasDirectPath returns true if a direct routing path to the sender is known.
+// A zero-hop path (DirectPathLen 0, no path bytes) counts: the reply goes
+// direct to a neighbor.
 func (r *ReplyContext) HasDirectPath() bool {
-	return r.DirectPathLen != 0xFF && len(r.DirectPath) > 0
+	return r.DirectPathLen != 0xFF
 }

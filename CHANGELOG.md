@@ -165,6 +165,26 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **Anonymous requests got the wrong reply route.** The repeater now picks
+  the route the way firmware's `chooseReplyRoute` does:
+  - a flood request gets a path return
+  - otherwise the reply goes direct along the path the request supplied, and
+    a supplied path of zero hops now means zero-hop direct (it used to flood)
+  - otherwise it goes along the stored path of a client on the access list,
+    so a direct re-login is answered direct instead of flooded
+  - otherwise it floods
+
+  `BaseNode` also resolves the reply scope for anonymous requests, which it
+  did only for addressed ones, so a flooded login reply is no longer sent
+  unscoped.
+
+- **Replies to zero-hop neighbors were flooded.** `ReplyContext.HasDirectPath`
+  required path bytes, so a known zero-hop path (`DirectPathLen` 0) counted as
+  no path. It now follows the field's documented contract, where only `0xFF`
+  means unknown. Room keep-alives from zero-hop clients are now answered, as in
+  firmware. Code that builds a `ReplyContext` by hand must set `DirectPathLen`
+  to `contact.PathUnknown` for "no path". `BaseNode` already does.
+
 - **Replies and ACKs went out with no delay.** Firmware holds them briefly so
   the requester's radio has switched back to receive, which matters whenever a
   transport bridges to RF. We now use the same delays:

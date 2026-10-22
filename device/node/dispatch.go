@@ -226,9 +226,11 @@ func (b *BaseNode) handleAnonReq(pkt *codec.Packet, src transport.PacketSource) 
 	reply := event.ReplyContext{
 		SharedSecret:  secret,
 		DirectPathLen: contact.PathUnknown,
+		ReplyScope:    b.Router.ResolveReplyScope(pkt),
 	}
-	if pkt.IsFlood() && pkt.PathLen > 0 {
+	if pkt.IsFlood() && pkt.HopCount() > 0 {
 		reply.FloodPath = codec.ReverseFloodPath(pkt)
+		reply.PathHashSize = pkt.PathHashSize
 	}
 
 	b.emitEvent(&event.AnonRequestReceived{

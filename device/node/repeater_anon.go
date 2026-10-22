@@ -57,14 +57,32 @@ func (n *RepeaterNode) respondAnonInfo(evt *event.AnonRequestReceived, build fun
 	binary.LittleEndian.PutUint32(reply[4:8], nowTS)
 	copy(reply[8:], body)
 
-	rc := evt.Reply
-	if len(path) > 0 {
-		rc.DirectPath = path
-		rc.DirectPathLen = evt.Plaintext[5]
-	}
+	rc := n.anonReplyContext(evt, path, evt.Plaintext[5], true)
 	if err := n.base.SendReply(rc, evt.From, codec.PayloadTypeResponse, reply); err != nil {
 		n.log.Warn("failed to send anon response", "error", err)
 	}
+}
+
+// anonReplyContext picks how to answer an anonymous request, following
+// firmware's chooseReplyRoute. A flooded request is answered as BaseNode
+// already arranged (a PATH return when it travelled). Otherwise the reply goes
+// direct along the path the request supplied, zero hops included, then along
+// the stored path of a client on the ACL, and floods only if neither exists.
+func (n *RepeaterNode) anonReplyContext(evt *event.AnonRequestReceived, supplied []byte, suppliedLen uint8, haveSupplied bool) event.ReplyContext {
+	rc := evt.Reply
+	if evt.RawPacket != nil && evt.RawPacket.IsFlood() {
+		return rc
+	}
+	switch {
+	case haveSupplied:
+		rc.DirectPath, rc.DirectPathLen = supplied, suppliedLen
+	case n.acl.GetClient(evt.From) != nil:
+		// The repeater keeps a client's learned path on its contact entry.
+		if ct := n.base.Contacts().GetByPubKey(evt.From); ct != nil && ct.HasDirectPath() {
+			rc.DirectPath, rc.DirectPathLen = ct.OutPath, ct.OutPathLen
+		}
+	}
+	return rc
 }
 
 // anonRegionsPayload returns the comma-separated names of regions that permit
