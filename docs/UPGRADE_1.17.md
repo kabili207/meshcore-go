@@ -3,6 +3,9 @@
 Analysis of upstream `meshcore-dev/MeshCore` between `companion-v1.16.0` (the
 previous Go baseline) and `companion-v1.17.1`, and what it means for this repo.
 
+> This is a record of the 1.17 work. Everything in it is done or a documented
+> difference. Open work is tracked in [TODO.md](TODO.md).
+
 Local firmware checkout: `~/Projects/PlatformIO/MeshCore`, now at `d9296435`
 (`* version 1.17.1`).
 
@@ -28,7 +31,7 @@ plus one routing fix (below).
 
 Five findings, ordered by how much they matter here.
 
-> **Status:** all five items are done. See "Remaining work" at the end for the
+> **Status:** all five items are done. See "Commits" at the end for the
 > commit list and what was deliberately left out.
 
 ### 1. Dedup split into `wasSeen()` / `markSeen()` — we already did this
@@ -181,9 +184,8 @@ One behavioral difference is worth a look: our growth is gated by `MaxContacts` 
 `len == MaxContacts`, a transient add must evict an existing transient and returns nil
 if there is none, rather than using one of the 8 reserved slots.
 
-**Action:** verify that nil-return path is intentional. Consider adopting the
-firmware's "clear the anon slot when a real advert arrives for that pubkey" behavior,
-which we may not do today. Low priority.
+**Resolved in the 1.18 work.** The anon slots are now reserved as in firmware
+(`3f2d561`), and a real advert replaces the anon entry (`5e6988a`).
 
 ## Explicitly not actionable
 
@@ -225,7 +227,7 @@ Two behaviors to keep in mind if you ever talk to an Ethernet-equipped node:
   delimited lines for raw CLI use. A node built that way does not speak the frame
   protocol at all, so frame-protocol clients cannot talk to it.
 
-## Remaining work
+## Commits
 
 All five items are done, each in its own commit:
 
@@ -248,26 +250,11 @@ The nil-logger panic had been masking the race: once `TestProcessDatagram_Malfor
 stopped crashing, `-race` surfaced an unguarded read of `t.conn`/`t.port` that `Stop`
 nils under the mutex. The whole suite now passes under `-race`.
 
-Deliberately left open:
+Left open at the time and finished during the 1.18 work:
 
-- **`REPLY_ROUTE_DIRECT_OUT_PATH`** for anon requests, the reply-route half of PR
-  #3106. Our precedence already matches upstream for the flood and supplied-path cases.
-- **Clearing an anon slot when a real advert arrives** for that pubkey, which firmware
-  added in v1.17 (`onAdvertRecv`).
-- **`truncateName`** in `device/router/region.go`, left byte-wise on purpose. See
-  item 4.
+- **`REPLY_ROUTE_DIRECT_OUT_PATH`** for anon requests (`1d18737`).
+- **Clearing an anon slot when a real advert arrives** (`5e6988a`).
 
-## Unrelated: firmware checkout state
-
-The fast-forward to `d9296435` succeeded. Your local modification to
-`variants/heltec_v3/platformio.ini` (enabling `MESH_PACKET_LOGGING`) was preserved.
-
-Upstream **deleted** `.vscode/extensions.json`, which you had also modified — your only
-change was re-adding a comment header, no content difference. That deletion is still
-unresolved in the working tree (`DU` state) because `git rm` was blocked by a
-permission prompt. Resolve with:
-
-```
-git rm .vscode/extensions.json
-git stash drop        # the pre-merge stash, no longer needed
-```
+`truncateName` in `device/router/region.go` stays byte-wise on purpose (item 4). It's
+listed with the other deliberate differences in
+[FEATURE_PARITY.md](FEATURE_PARITY.md).

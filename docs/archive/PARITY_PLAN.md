@@ -1,5 +1,9 @@
 # meshcore-go Parity Plan
 
+> **Archived (2026-10-22).** Phases 1 to 4 are done. What was left of Phases 5
+> and 6 (airtime budget, sensor role, KISS modem) is tracked in
+> [../TODO.md](../TODO.md). Kept for the reasoning behind the plan.
+
 Prioritized plan to close the gaps found in `docs/FEATURE_PARITY.md`.
 
 **Status (2026-08-16): 20 of 24 items are done.** Only Phase 5 (airtime / duty-cycle /

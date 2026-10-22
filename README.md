@@ -68,6 +68,15 @@ The MQTT transport speaks to firmware forks that add MQTT bridging to MeshCore r
 
 For EastMesh, `Secret` is the repeater's `bridge.secret`. That firmware's bridge connects over plain TCP only, so the broker needs a non-TLS listener for the repeaters even if this side uses `UseTLS`.
 
+## Documentation
+
+- [docs/TODO.md](docs/TODO.md): what's still missing compared to firmware. Start here.
+- [docs/FEATURE_PARITY.md](docs/FEATURE_PARITY.md): what works, role by role, and where we differ from firmware on purpose.
+- [docs/UPGRADE_1.17.md](docs/UPGRADE_1.17.md), [docs/UPGRADE_1.18.md](docs/UPGRADE_1.18.md): how each firmware release was analyzed and brought in.
+- [docs/OBSERVER_MQTT.md](docs/OBSERVER_MQTT.md): the observer MQTT JSON format, as uploaders send it and dashboards read it.
+- [docs/PAYLOAD_TYPES.md](docs/PAYLOAD_TYPES.md): payload layouts and size limits.
+- [docs/archive/](docs/archive/): finished plans, kept for their design reasoning.
+
 ## Protocol
 
 MeshCore is a lightweight mesh routing protocol for LoRa radios. See [meshcore.io](https://meshcore.io) for the full protocol specification.
