@@ -17,6 +17,7 @@ func TestDelayedSends(t *testing.T) {
 	}{
 		{"direct", func(r *Router, pkt *codec.Packet) { r.SendDirectDelayed(pkt, []byte{0x11}, delay) }},
 		{"scoped flood", func(r *Router, pkt *codec.Packet) { r.SendFloodScopedDelayed(pkt, delay) }},
+		{"zero hop", func(r *Router, pkt *codec.Packet) { r.SendZeroHopDelayed(pkt, delay) }},
 		{"flood", func(r *Router, pkt *codec.Packet) { r.SendFloodWithKeyDelayed(pkt, [16]byte{}, delay) }},
 		{"flood path", func(r *Router, pkt *codec.Packet) { r.SendFloodPathWithKeyDelayed(pkt, [16]byte{}, delay) }},
 	} {

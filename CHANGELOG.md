@@ -186,6 +186,23 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **Relays went out instantly.** Firmware's repeater waits a random 0 to
+  5 × airtime × factor before relaying, so neighbors relaying the same packet
+  don't transmit over each other. The router now does too, which matters once a
+  transport bridges to RF.
+  - Floods use `TxDelayFactor` (firmware `txdelay`). Direct packets use
+    `DirectTxDelayFactor` (`direct.txdelay`).
+  - Forwarded direct ACKs send their `ExtraAckTransmits` multipart copies
+    first, 300ms apart. A relayed multipart ACK waits for the copies still
+    coming.
+  - Repeater discovery responses wait 4× the flood delay.
+  - `NewRepeater` sets firmware's 0.5 / 0.3 factors, and the repeater CLI gains
+    `txdelay` and `direct.txdelay` (0 to 2).
+  - Airtime comes from `router.RadioParams.Airtime`, a port of RadioLib's
+    time-on-air formula. Set `RepeaterConfig.Radio` (or `router.Config.Radio`)
+    to the mesh's radio, which defaults to firmware's 869.618,62.5,8,5.
+  - Other roles keep a zero delay factor and relay as before.
+
 - **`set name` accepted characters firmware rejects.** The repeater and room
   server now refuse names containing `[ ] \ : , ? *` with `Error: bad chars`,
   as firmware's CommonCLI does (`cli.ErrBadNameChars`). A name like that,

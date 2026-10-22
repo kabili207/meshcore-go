@@ -17,6 +17,7 @@ package router
 import (
 	"context"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -117,6 +118,22 @@ type Config struct {
 	// 0 = 1-byte hashes (default, backward-compatible), 1 = 2-byte, 2 = 3-byte.
 	PathHashMode uint8
 
+	// TxDelayFactor and DirectTxDelayFactor set the random wait before
+	// relaying a flood or direct packet: up to 5 x airtime x factor, firmware's
+	// txdelay and direct.txdelay (0-2). Neighbors relaying the same packet
+	// then don't transmit over each other once a transport bridges to RF.
+	// Default: 0, no wait. Firmware's repeater uses 0.5 and 0.3.
+	TxDelayFactor       float64
+	DirectTxDelayFactor float64
+
+	// Radio is the LoRa setup of the mesh, used to estimate airtime for the
+	// relay delays. Default: DefaultRadioParams.
+	Radio RadioParams
+
+	// ExtraAckTransmits is how many multipart ACK copies to send ahead of a
+	// forwarded direct ACK, firmware's multi.acks. Default: 0.
+	ExtraAckTransmits int
+
 	// LoopDetect sets the loop detection level for flood forwarding.
 	// 0 = off (default), 1 = minimal, 2 = moderate, 3 = strict.
 	// When enabled, packets with too many self-hash occurrences in the
@@ -199,6 +216,9 @@ type Router struct {
 	cancel    context.CancelFunc
 	drainDone chan struct{}
 	started   bool
+
+	// randIntN draws the relay delays; tests replace it to make them exact.
+	randIntN func(n int) int
 }
 
 type transportEntry struct {
@@ -222,11 +242,16 @@ func New(cfg Config) *Router {
 		logger = slog.Default()
 	}
 
+	if cfg.Radio == (RadioParams{}) {
+		cfg.Radio = DefaultRadioParams
+	}
+
 	return &Router{
-		cfg:   cfg,
-		log:   logger.WithGroup("router"),
-		dedup: dedupe.New(),
-		queue: NewSendQueue(),
+		cfg:      cfg,
+		log:      logger.WithGroup("router"),
+		dedup:    dedupe.New(),
+		queue:    NewSendQueue(),
+		randIntN: rand.IntN,
 	}
 }
 
@@ -336,6 +361,33 @@ func (r *Router) SetLoopDetect(level int) {
 	r.cfg.LoopDetect = level
 }
 
+// GetTxDelayFactor returns the flood relay delay factor (firmware txdelay).
+func (r *Router) GetTxDelayFactor() float64 { return r.cfg.TxDelayFactor }
+
+// SetTxDelayFactor sets the flood relay delay factor (firmware txdelay).
+func (r *Router) SetTxDelayFactor(f float64) { r.cfg.TxDelayFactor = f }
+
+// GetDirectTxDelayFactor returns the direct relay delay factor (firmware
+// direct.txdelay).
+func (r *Router) GetDirectTxDelayFactor() float64 { return r.cfg.DirectTxDelayFactor }
+
+// SetDirectTxDelayFactor sets the direct relay delay factor (firmware
+// direct.txdelay).
+func (r *Router) SetDirectTxDelayFactor(f float64) { r.cfg.DirectTxDelayFactor = f }
+
+// SetRadio sets the radio setup used to estimate airtime for relay delays. A
+// zero value restores DefaultRadioParams.
+func (r *Router) SetRadio(p RadioParams) {
+	if p == (RadioParams{}) {
+		p = DefaultRadioParams
+	}
+	r.cfg.Radio = p
+}
+
+// SetExtraAckTransmits sets how many multipart copies go ahead of a forwarded
+// direct ACK (firmware multi.acks).
+func (r *Router) SetExtraAckTransmits(n int) { r.cfg.ExtraAckTransmits = max(n, 0) }
+
 // GetMaxFloodHops returns the maximum flood hop count before packets are dropped.
 func (r *Router) GetMaxFloodHops() int {
 	return r.cfg.MaxFloodHops
@@ -436,6 +488,12 @@ func (r *Router) Counters() *RouterCounters { return &r.counters }
 //
 // This corresponds to the firmware's Mesh::onRecvPacket() + routeRecvPacket().
 func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
+	r.handlePacket(pkt, src, 0)
+}
+
+// handlePacket is HandlePacket with an extra wait for a forwarded ACK, used
+// when handleMultipart feeds a multipart ACK's inner ACK back in.
+func (r *Router) handlePacket(pkt *codec.Packet, src transport.PacketSource, ackDelay time.Duration) {
 	// Gate 1: version check
 	if pkt.PayloadVersion() > codec.PayloadVer1 {
 		r.log.Debug("dropping packet with unsupported version",
@@ -495,7 +553,7 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 	// Gate 4: direct routing with path
 	if pkt.IsDirect() && pkt.HopCount() > 0 {
 		r.counters.RecvDirect.Add(1)
-		r.handleDirectForward(pkt, src)
+		r.handleDirectForward(pkt, src, ackDelay)
 		return
 	}
 
@@ -548,11 +606,14 @@ func (r *Router) handleMultipart(pkt *codec.Packet, src transport.PacketSource) 
 		Payload:        frag.Data,
 		SNR:            pkt.SNR,
 	}
-	r.HandlePacket(inner, src)
+	// Relaying waits for the copies still on their way, 300ms apart
+	// (firmware forwardMultipartDirect).
+	r.handlePacket(inner, src, time.Duration(frag.Remaining+1)*MultiAckSpacing)
 }
 
 // handleDirectForward processes a direct-routed packet with hop count >= 1.
-func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSource) {
+// ackDelay adds to the wait before a forwarded ACK.
+func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSource, ackDelay time.Duration) {
 	// Early ACK receive: resolve any direct ACK we hear, even if we are not the
 	// next hop and even if forwarding is disabled. Firmware calls onAckRecv before
 	// the next-hop / allowPacketForward checks, so a node that merely overhears an
@@ -579,11 +640,14 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 		return
 	}
 
+	// Firmware computes the delay before removing itself from the path.
+	delay := r.retransmitDelay(pkt, r.cfg.DirectTxDelayFactor)
+
 	// ACK special case: already resolved above; forward a fresh copy at highest
 	// priority.
 	if pkt.PayloadType() == codec.PayloadTypeAck {
 		removeSelfFromPath(pkt)
-		r.forwardAck(pkt)
+		r.forwardAck(pkt, delay+ackDelay)
 		return
 	}
 
@@ -596,7 +660,7 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 		// Forward it out with empty path.
 	}
 
-	r.enqueue(pkt, PriorityDirect, 0, src, false)
+	r.enqueue(pkt, PriorityDirect, delay, src, false)
 }
 
 // forwardAck creates a new ACK packet from the forwarded packet's payload
@@ -608,7 +672,10 @@ func (r *Router) handleDirectForward(pkt *codec.Packet, src transport.PacketSour
 // 6 bytes (hash + attempt + random); truncating to the 4-byte hash would both
 // drop those bytes and change the packet hash used for deduplication along the
 // path.
-func (r *Router) forwardAck(pkt *codec.Packet) {
+//
+// After delay, the ExtraAckTransmits multipart copies go first, MultiAckSpacing
+// apart, then the ACK, as firmware's routeDirectRecvAcks sends them.
+func (r *Router) forwardAck(pkt *codec.Packet, delay time.Duration) {
 	if len(pkt.Payload) < codec.AckSize {
 		return
 	}
@@ -626,7 +693,39 @@ func (r *Router) forwardAck(pkt *codec.Packet) {
 	copy(ackPkt.Path, pkt.Path)
 	copy(ackPkt.Payload, pkt.Payload)
 
-	r.enqueue(ackPkt, PriorityDirect, 0, 0, true)
+	for extra := r.cfg.ExtraAckTransmits; extra > 0; extra-- {
+		mp := &codec.Packet{
+			Header:         (pkt.PayloadVersion() << codec.PHVerShift) | (codec.PayloadTypeMultipart << codec.PHTypeShift) | pkt.RouteType(),
+			TransportCodes: ackPkt.TransportCodes,
+			PathLen:        pkt.PathLen,
+			PathHashSize:   pkt.PathHashSize,
+			Path:           append([]byte(nil), pkt.Path...),
+			Payload:        codec.BuildMultipartPayload(uint8(extra), codec.PayloadTypeAck, pkt.Payload),
+		}
+		r.enqueue(mp, PriorityDirect, delay, 0, true)
+		delay += MultiAckSpacing
+	}
+	r.enqueue(ackPkt, PriorityDirect, delay, 0, true)
+}
+
+// retransmitDelay picks the random wait before relaying pkt: 0 to 5t, where t
+// is the packet's airtime scaled by factor (firmware getRetransmitDelay and
+// getDirectRetransmitDelay). Call it with our hash already in a flood's path,
+// or still in a direct packet's path, as firmware does.
+func (r *Router) retransmitDelay(pkt *codec.Packet, factor float64) time.Duration {
+	if factor <= 0 {
+		return 0
+	}
+	airtime := r.cfg.Radio.Airtime(len(pkt.Path) + len(pkt.Payload) + 2)
+	t := int(float64(airtime.Milliseconds()) * factor)
+	return time.Duration(r.randIntN(5*t+1)) * time.Millisecond
+}
+
+// RetransmitDelay is the random flood relay wait for pkt (see TxDelayFactor).
+// Firmware also uses it, widened, for replies that several nodes send at once,
+// such as discovery responses.
+func (r *Router) RetransmitDelay(pkt *codec.Packet) time.Duration {
+	return r.retransmitDelay(pkt, r.cfg.TxDelayFactor)
 }
 
 // handleFlood processes a flood-routed packet.
@@ -688,7 +787,7 @@ func (r *Router) routeFloodForward(pkt *codec.Packet, src transport.PacketSource
 
 	// Firmware uses hop count as priority for flood forwarding:
 	// closer sources get lower (better) priority.
-	r.enqueue(fwd, uint8(newInfo.HopCount), 0, src, false)
+	r.enqueue(fwd, uint8(newInfo.HopCount), r.retransmitDelay(fwd, r.cfg.TxDelayFactor), src, false)
 }
 
 // regionAllowsFlood applies the RegionMap policy to a flood packet's forwarding
@@ -1000,6 +1099,12 @@ func (r *Router) SendFloodPath(pkt *codec.Packet) {
 // SendZeroHop prepares and sends a packet as a zero-hop direct packet.
 // These packets are not forwarded by relays (path is empty).
 func (r *Router) SendZeroHop(pkt *codec.Packet) {
+	r.SendZeroHopDelayed(pkt, 0)
+}
+
+// SendZeroHopDelayed is SendZeroHop with the packet held in the send queue for
+// delay first.
+func (r *Router) SendZeroHopDelayed(pkt *codec.Packet, delay time.Duration) {
 	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeDirect
 
 	hashSize := r.cfg.PathHashMode + 1
@@ -1010,7 +1115,7 @@ func (r *Router) SendZeroHop(pkt *codec.Packet) {
 	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentDirect.Add(1)
-	r.enqueue(pkt, PriorityDirect, 0, 0, true)
+	r.enqueue(pkt, PriorityDirect, delay, 0, true)
 }
 
 // broadcastToAllTransports sends a packet to every connected transport.

@@ -29,7 +29,7 @@ Two structural facts shape everything:
 | Role | Firmware | Go | Overall parity |
 |---|---|---|---|
 | Companion / chat | `companion_radio` | `device/node/companion.go` + `device/companion` | Strong, both mesh and frame protocol |
-| Repeater | `simple_repeater` | `device/node/repeater.go` | Strong; no airtime/CSMA |
+| Repeater | `simple_repeater` | `device/node/repeater.go` | Strong; relay delays, no airtime budget/CSMA |
 | Room server | `simple_room_server` | `device/room/*` | Strong |
 | Sensor | `simple_sensor` | none | Wire format + telemetry only |
 | KISS modem | `kiss_modem` | none | Missing entirely |
@@ -46,16 +46,22 @@ append/remove/reverse, region map including the exact `/regions2` binary format,
 transport keys (Go implements the private-region keystore that firmware stubs as a
 hardware TODO), trace forwarding, multipart ACK handling, packet dedup.
 
-**Biggest gap: airtime / duty-cycle / CSMA is entirely missing.** Firmware's
-`Dispatcher` runs a token-bucket airtime budget (~50% duty cycle, 1-hour window),
-defers TX when budget is low, does CAD/channel sensing, applies SNR-weighted RX flood
-delay (better-SNR nodes rebroadcast first), and randomizes flood rebroadcast jitter.
-Go has none of it: the router drains its queue every 10ms
-(`DefaultDrainInterval`) and almost always sends with `delay=0`. The queue does
-support per-packet delay (`device/router/queue.go`) and uses it for
-`PathSendDelay` (300ms on PATH packets), so the mechanism exists and is simply never
-applied to airtime. Excusable for a transport-attached node, but any Go node fronting
-real RF would misbehave (collisions, storms, duty-cycle non-compliance).
+**Timing.** The send delays that keep neighbors from talking over each other match
+firmware:
+
+- **Relays:** a random wait of up to 5 × airtime × `txdelay` (0.5) for floods and
+  `direct.txdelay` (0.3) for direct packets. Airtime is estimated by a port of
+  RadioLib's time-on-air formula, from `RadioParams` (default 869.618,62.5,8,5).
+- **Forwarded ACKs:** the multi-ack copies go first, 300ms apart, and relayed
+  multi-acks wait for the copies still coming.
+- **Replies:** responses wait 300ms, CLI replies 600ms (300ms on the room server),
+  text ACKs 200ms.
+
+**Still missing:** firmware's token-bucket airtime budget (~50% duty cycle over a
+1-hour window, deferring TX when it runs low), CAD/channel sensing, and the
+SNR-weighted receive delay. That delay is off by default in firmware, and our
+transports carry no SNR anyway. A Go node fronting real RF relays at the right
+moments, but has no duty-cycle limit.
 
 **Reply scoping** now matches firmware v1.17: a flooded reply mirrors the request's
 transport scope, falls back to `Config.DefaultReplyScope`, and only goes un-scoped
@@ -227,5 +233,6 @@ KISS TNC).
   discovery, and opt-in persistence.
 - Room server: functionally close to firmware, on a single dispatch path.
 - Sensor and KISS modem: not started.
-- Systemic: no airtime/duty-cycle/CSMA anywhere. This is the one gap that would matter
-  immediately if a LoRa radio transport were ever added.
+- Systemic: relay and reply delays match firmware, but there's no airtime budget,
+  duty-cycle limit or CSMA. That gap would matter if a LoRa radio transport were
+  ever added.

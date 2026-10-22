@@ -67,6 +67,10 @@ Ordered by priority.
 >
 > Still open: item 9 (no Go sensor role). The 1.17 leftovers are done (see
 > the end of this file).
+>
+> Follow-ups after the merge: the direct ACK forwarding delay (`6df5aaed`) is
+> done, along with firmware's relay delays generally, and `set name` now
+> rejects the characters firmware does.
 
 ### 1. Unaligned ciphertext panics `macThenDecrypt` (critical)
 
@@ -303,10 +307,6 @@ The sensor also gained a region map, `region load/save`, default and reply scope
 
 ## Explicitly not actionable
 
-- **Direct ACK forwarding delay** (`6df5aaed`). Forwarded direct ACKs now wait
-  `getDirectRetransmitDelay()` and extra ACKs are spaced 300ms apart. We forward with
-  zero delay (`router.go:616`) and never send the extra multi-ACK copies on
-  forward. Both fall under the airtime/CSMA gap in `FEATURE_PARITY.md`.
 - **`CommonRadioPrefs` refactor.** Radio CLI moved into its own helper that runs
   before the rest of CommonCLI. Reply strings are unchanged, and we implement only
   `path.hash.mode` and `multi.acks` from it.

@@ -175,6 +175,9 @@ func NewBase(cfg BaseConfig) (*BaseNode, error) {
 		extraAckTransmits:  cfg.ExtraAckTransmits,
 		log:                logger.WithGroup("node"),
 	}
+	if cfg.ExtraAckTransmits > 0 {
+		r.SetExtraAckTransmits(cfg.ExtraAckTransmits) // forwarded ACKs use it too
+	}
 
 	// Register event handlers from config
 	for _, h := range cfg.EventHandlers {
@@ -327,6 +330,7 @@ func (b *BaseNode) SetExtraAckTransmits(n int) {
 		n = 0
 	}
 	b.extraAckTransmits = n
+	b.Router.SetExtraAckTransmits(n) // forwarded ACKs use the same setting
 }
 
 // sendTextAck ACKs a received text message the way firmware's sendAckTo does,
