@@ -1428,3 +1428,87 @@ func TestTraceDataPush(t *testing.T) {
 		t.Errorf("hashes/snrs/lastSnr wrong: %x", f[12:])
 	}
 }
+
+func TestSendBinaryReq(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x33
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	var gotTo core.MeshCoreID
+	var gotData []byte
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendBinaryReq: func(_ context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error) {
+			gotTo, gotData = to, data
+			return 0x01020304, true, nil
+		},
+	})
+
+	// [50][pubkey 32][request data]
+	payload := append(append([]byte{serial.CmdSendBinaryReq}, id[:]...), 0x06, 0x00, 0x05)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent || resp[0][1] != serial.SentTypeFlood {
+		t.Fatalf("expected flood SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 0x01020304 {
+		t.Errorf("SENT tag = %08x, want the request tag", binary.LittleEndian.Uint32(resp[0][2:6]))
+	}
+	if gotTo != id || !bytes.Equal(gotData, []byte{0x06, 0x00, 0x05}) {
+		t.Errorf("SendBinaryReq got to=%x data=%x", gotTo[:4], gotData)
+	}
+}
+
+func TestSendBinaryReqErrors(t *testing.T) {
+	var known, unknown core.MeshCoreID
+	known[0], unknown[0] = 0x33, 0x44
+	store := &stubStore{list: []*contact.ContactInfo{{ID: known, OutPathLen: 0xFF}}}
+	send := func(context.Context, core.MeshCoreID, []byte) (uint32, bool, error) { return 1, false, nil }
+
+	for _, tc := range []struct {
+		name    string
+		cfgSend func(context.Context, core.MeshCoreID, []byte) (uint32, bool, error)
+		payload []byte
+		wantErr uint8
+	}{
+		{"no callback", nil, append(append([]byte{serial.CmdSendBinaryReq}, known[:]...), 1), serial.ErrCodeUnsupportedCmd},
+		{"unknown contact", send, append(append([]byte{serial.CmdSendBinaryReq}, unknown[:]...), 1), serial.ErrCodeNotFound},
+		{"no request data", send, append([]byte{serial.CmdSendBinaryReq}, known[:]...), serial.ErrCodeIllegalArg},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewServer(Config{Node: &fakeNode{clk: clock.New(), contacts: store}, SendBinaryReq: tc.cfgSend})
+			resp := collectResponses(t, s, cmd(tc.payload...))
+			if resp[0][0] != serial.RespCodeErr || resp[0][1] != tc.wantErr {
+				t.Errorf("expected error %d, got %v", tc.wantErr, resp[0])
+			}
+		})
+	}
+}
+
+// Matched binary responses and unmatched ones (sensor pushes) both reach the
+// app as PUSH_CODE_BINARY_RESPONSE: [code][reserved][tag u32][body].
+func TestBinaryResponsePush(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		evt  func(tag uint32, body []byte) any
+	}{
+		{"matched", func(tag uint32, body []byte) any { return &event.BinaryResponse{Tag: tag, Data: body} }},
+		{"unhandled", func(tag uint32, body []byte) any { return &event.UnhandledResponse{Tag: tag, Content: body} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var handler func(any)
+			s := NewServer(Config{
+				Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+				Events: func(h func(any)) { handler = h },
+			})
+			var out bytes.Buffer
+			s.addSession(&session{srv: s, w: &out, ctx: context.Background()})
+
+			handler(tc.evt(0xA1B2C3D4, []byte{0x01, 0x02}))
+
+			frames := decodeFrames(&out)
+			want := []byte{serial.PushCodeBinaryResponse, 0, 0xD4, 0xC3, 0xB2, 0xA1, 0x01, 0x02}
+			if len(frames) != 1 || !bytes.Equal(frames[0], want) {
+				t.Errorf("got %x, want %x", frames, want)
+			}
+		})
+	}
+}

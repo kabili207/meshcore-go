@@ -124,6 +124,13 @@ type Config struct {
 	// CMD_SEND_TELEMETRY_REQ returns an error; a self request still gets a reply.
 	SendTelemetry func(ctx context.Context, to core.MeshCoreID) (tag uint32, err error)
 
+	// SendBinaryReq, if set, sends a request whose body the app supplies
+	// (starting with the request type byte) and returns the request tag and
+	// whether it was flooded. The reply arrives as an event.BinaryResponse,
+	// pushed as BINARY_RESPONSE. Without it, CMD_SEND_BINARY_REQ returns an
+	// error. CompanionNode.SendBinaryReq fits this signature.
+	SendBinaryReq func(ctx context.Context, to core.MeshCoreID, data []byte) (tag uint32, flood bool, err error)
+
 	// SendTrace, if set, sends a TRACE along a relay-hash path with the app's tag
 	// and auth code. The result arrives as an event.TraceReceived, pushed as
 	// TRACE_DATA. Without it, CMD_SEND_TRACE_PATH returns an error.
@@ -172,6 +179,7 @@ type Server struct {
 	sendLogin     func(ctx context.Context, to core.MeshCoreID, password string) error
 	sendStatus    func(ctx context.Context, to core.MeshCoreID) error
 	sendTelemetry func(ctx context.Context, to core.MeshCoreID) (uint32, error)
+	sendBinaryReq func(ctx context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error)
 	sendTrace     func(ctx context.Context, tag, authCode uint32, flags uint8, path []byte) error
 	stats         func() Stats
 	exportSelf    func() []byte
@@ -285,6 +293,7 @@ func NewServer(cfg Config) *Server {
 		sendLogin:     cfg.SendLogin,
 		sendStatus:    cfg.SendStatus,
 		sendTelemetry: cfg.SendTelemetry,
+		sendBinaryReq: cfg.SendBinaryReq,
 		sendTrace:     cfg.SendTrace,
 		stats:         cfg.Stats,
 		exportSelf:    cfg.ExportSelf,
@@ -453,6 +462,9 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 
 	case serial.CmdSendTelemetryReq:
 		return s.sendTelemetryReq(ss, payload)
+
+	case serial.CmdSendBinaryReq:
+		return s.sendBinaryReqCmd(ss, payload)
 
 	case serial.CmdSendTracePath:
 		return s.sendTracePath(ss, payload)
@@ -788,6 +800,12 @@ func (s *Server) handleEvent(evt any) {
 		s.pushStatusResponse(e)
 	case *event.TelemetryResponse:
 		s.pushTelemetryResponse(e)
+	case *event.BinaryResponse:
+		s.pushToSessions(serial.EncodeBinaryResponse(e.Tag, e.Data))
+	case *event.UnhandledResponse:
+		// Firmware v1.18 hands unmatched responses (sensor push telemetry) to
+		// the app in the same frame as a matched binary response.
+		s.pushToSessions(serial.EncodeBinaryResponse(e.Tag, e.Content))
 	case *event.TraceReceived:
 		s.pushTraceData(e)
 	}
@@ -881,6 +899,33 @@ func (s *Server) sendTelemetryReq(ss *session, payload []byte) error {
 // pushTelemetryResponse emits PUSH_CODE_TELEMETRY_RESPONSE from a telemetry event.
 func (s *Server) pushTelemetryResponse(e *event.TelemetryResponse) {
 	s.pushToSessions(serial.EncodeTelemetryResponse(e.From[:6], e.Data))
+}
+
+// sendBinaryReqCmd handles CMD_SEND_BINARY_REQ: [cmd][pubkey 32][request data].
+// It replies SENT with the request tag, and the reply arrives later as a
+// BinaryResponse event.
+func (s *Server) sendBinaryReqCmd(ss *session, payload []byte) error {
+	if s.sendBinaryReq == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	if len(payload) < 2+32 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var to core.MeshCoreID
+	copy(to[:], payload[1:33])
+	if s.node.Contacts().GetByPubKey(to) == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	tag, flood, err := s.sendBinaryReq(ss.ctx, to, payload[33:])
+	if err != nil {
+		s.log.Warn("binary request failed", "to", to.String(), "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	sentType, estTimeout := uint8(serial.SentTypeDirect), uint32(4000)
+	if flood {
+		sentType, estTimeout = serial.SentTypeFlood, 12000
+	}
+	return ss.send(serial.EncodeSent(sentType, tag, estTimeout))
 }
 
 // sendTracePath handles CMD_SEND_TRACE_PATH: send a trace with the app's tag and

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -23,16 +24,9 @@ func (n *CompanionNode) SendTelemetryReq(to core.MeshCoreID) (uint32, error) {
 	// permission mask. Zero requests all telemetry the peer permits.
 	var reqData [4]byte
 	content := codec.BuildRequestContent(tag, codec.ReqTypeGetTelemetry, reqData[:])
-
-	encrypted, err := crypto.EncryptAddressedWithSecret(content, secret)
-	if err != nil {
-		return 0, fmt.Errorf("encrypt telemetry request: %w", err)
+	if _, err := n.sendRequestContent(to, secret, content); err != nil {
+		return 0, fmt.Errorf("telemetry request: %w", err)
 	}
-	mac, ciphertext := codec.SplitMAC(encrypted)
-	selfID := n.base.ID()
-	payload := codec.BuildAddressedPayload(to.Hash(), selfID.Hash(), mac, ciphertext)
-	pkt := codec.NewPacket(codec.PayloadTypeReq, codec.RouteTypeFlood, payload)
-	n.sendToContact(pkt, n.base.Contacts().GetByPubKey(to))
 
 	n.pendingMu.Lock()
 	n.pendingTelemetry[tag] = to
@@ -52,16 +46,9 @@ func (n *CompanionNode) SendStatusReq(to core.MeshCoreID) (uint32, error) {
 
 	tag := n.clk.GetCurrentTimeUnique()
 	content := codec.BuildRequestContent(tag, codec.ReqTypeGetStats, nil)
-
-	encrypted, err := crypto.EncryptAddressedWithSecret(content, secret)
-	if err != nil {
-		return 0, fmt.Errorf("encrypt status request: %w", err)
+	if _, err := n.sendRequestContent(to, secret, content); err != nil {
+		return 0, fmt.Errorf("status request: %w", err)
 	}
-	mac, ciphertext := codec.SplitMAC(encrypted)
-	selfID := n.base.ID()
-	payload := codec.BuildAddressedPayload(to.Hash(), selfID.Hash(), mac, ciphertext)
-	pkt := codec.NewPacket(codec.PayloadTypeReq, codec.RouteTypeFlood, payload)
-	n.sendToContact(pkt, n.base.Contacts().GetByPubKey(to))
 
 	n.pendingMu.Lock()
 	n.pendingStatus[tag] = to
@@ -70,9 +57,77 @@ func (n *CompanionNode) SendStatusReq(to core.MeshCoreID) (uint32, error) {
 	return tag, nil
 }
 
+// SendBinaryReq sends a request whose body the caller supplies, starting with
+// the request type byte, as CMD_SEND_BINARY_REQ does. The reply arrives as a
+// BinaryResponse event. Returns the request tag and whether the request was
+// flooded (no direct path to the peer).
+func (n *CompanionNode) SendBinaryReq(to core.MeshCoreID, data []byte) (tag uint32, flood bool, err error) {
+	// Firmware's sendRequest limit: room for the tag and cipher padding.
+	if len(data) > codec.MaxPacketPayload-16 {
+		return 0, false, fmt.Errorf("request data too long: %d bytes", len(data))
+	}
+	secret, err := n.base.Contacts().GetSharedSecret(to)
+	if err != nil {
+		return 0, false, fmt.Errorf("shared secret: %w", err)
+	}
+
+	tag = n.clk.GetCurrentTimeUnique()
+	content := make([]byte, 4+len(data))
+	binary.LittleEndian.PutUint32(content, tag)
+	copy(content[4:], data)
+	if flood, err = n.sendRequestContent(to, secret, content); err != nil {
+		return 0, false, fmt.Errorf("binary request: %w", err)
+	}
+
+	n.pendingMu.Lock()
+	n.pendingBinary[tag] = to
+	n.pendingMu.Unlock()
+
+	return tag, flood, nil
+}
+
+// sendRequestContent encrypts a REQ body for to and sends it, direct when a path
+// is known and flooded otherwise. Reports whether it flooded.
+func (n *CompanionNode) sendRequestContent(to core.MeshCoreID, secret, content []byte) (bool, error) {
+	encrypted, err := crypto.EncryptAddressedWithSecret(content, secret)
+	if err != nil {
+		return false, fmt.Errorf("encrypt: %w", err)
+	}
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	selfID := n.base.ID()
+	payload := codec.BuildAddressedPayload(to.Hash(), selfID.Hash(), mac, ciphertext)
+	pkt := codec.NewPacket(codec.PayloadTypeReq, codec.RouteTypeFlood, payload)
+	ct := n.base.Contacts().GetByPubKey(to)
+	n.sendToContact(pkt, ct)
+	return ct == nil || !ct.HasDirectPath(), nil
+}
+
+// handleBinaryResponse promotes a response matching a pending binary request
+// into a BinaryResponse event. Reports whether it was consumed.
+func (n *CompanionNode) handleBinaryResponse(e *event.ResponseReceived) bool {
+	n.pendingMu.Lock()
+	peer, pending := n.pendingBinary[e.Tag]
+	if pending && peer == e.From {
+		delete(n.pendingBinary, e.Tag)
+	} else {
+		pending = false
+	}
+	n.pendingMu.Unlock()
+	if !pending {
+		return false
+	}
+
+	n.base.emitEvent(&event.BinaryResponse{
+		Event: n.base.baseEvent(e.RawPacket, e.Source, e.From),
+		Tag:   e.Tag,
+		Data:  e.Content,
+	})
+	return true
+}
+
 // handleStatusResponse promotes a response matching a pending status request
-// into a StatusResponse event.
-func (n *CompanionNode) handleStatusResponse(e *event.ResponseReceived) {
+// into a StatusResponse event. Reports whether it was consumed.
+func (n *CompanionNode) handleStatusResponse(e *event.ResponseReceived) bool {
 	n.pendingMu.Lock()
 	peer, pending := n.pendingStatus[e.Tag]
 	if pending && peer == e.From {
@@ -82,18 +137,19 @@ func (n *CompanionNode) handleStatusResponse(e *event.ResponseReceived) {
 	}
 	n.pendingMu.Unlock()
 	if !pending {
-		return
+		return false
 	}
 
 	n.base.emitEvent(&event.StatusResponse{
 		Event: n.base.baseEvent(e.RawPacket, e.Source, e.From),
 		Data:  e.Content,
 	})
+	return true
 }
 
 // handleTelemetryResponse promotes a response matching a pending telemetry
-// request into a TelemetryResponse event.
-func (n *CompanionNode) handleTelemetryResponse(e *event.ResponseReceived) {
+// request into a TelemetryResponse event. Reports whether it was consumed.
+func (n *CompanionNode) handleTelemetryResponse(e *event.ResponseReceived) bool {
 	n.pendingMu.Lock()
 	peer, pending := n.pendingTelemetry[e.Tag]
 	if pending && peer == e.From {
@@ -103,11 +159,12 @@ func (n *CompanionNode) handleTelemetryResponse(e *event.ResponseReceived) {
 	}
 	n.pendingMu.Unlock()
 	if !pending {
-		return
+		return false
 	}
 
 	n.base.emitEvent(&event.TelemetryResponse{
 		Event: n.base.baseEvent(e.RawPacket, e.Source, e.From),
 		Data:  e.Content,
 	})
+	return true
 }

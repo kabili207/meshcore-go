@@ -283,6 +283,17 @@ func EncodeTelemetryResponse(pubKeyPrefix, cayenneData []byte) []byte {
 	return b
 }
 
+// EncodeBinaryResponse builds a PUSH_CODE_BINARY_RESPONSE payload:
+// [code][reserved 1][tag u32 LE][body]. The tag is the request tag from
+// RESP_CODE_SENT, or a push tag for an unsolicited response.
+func EncodeBinaryResponse(tag uint32, body []byte) []byte {
+	b := make([]byte, 6+len(body))
+	b[0] = PushCodeBinaryResponse
+	binary.LittleEndian.PutUint32(b[2:6], tag)
+	copy(b[6:], body)
+	return b
+}
+
 // EncodeStatusResponse builds a PUSH_CODE_STATUS_RESPONSE payload:
 // [code][reserved 1][pubkey_prefix 6][status blob]. The blob is the remote
 // repeater's serialized RepeaterStats, forwarded as received.

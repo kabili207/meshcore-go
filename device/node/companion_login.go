@@ -120,25 +120,38 @@ func (n *CompanionNode) onInternalEvent(evt any) {
 	switch e := evt.(type) {
 	case *event.ResponseReceived:
 		n.connections.Touch(e.From) // any response means the server is alive
-		n.handleLoginResponse(e)
-		n.handleTelemetryResponse(e)
-		n.handleStatusResponse(e)
+		handled := n.handleLoginResponse(e) ||
+			n.handleStatusResponse(e) ||
+			n.handleTelemetryResponse(e) ||
+			n.handleBinaryResponse(e)
+		if !handled {
+			n.base.emitEvent(&event.UnhandledResponse{
+				Event:   n.base.baseEvent(e.RawPacket, e.Source, e.From),
+				Tag:     e.Tag,
+				Content: e.Content,
+			})
+		}
 	}
 }
 
 // handleLoginResponse promotes a RESP_SERVER_LOGIN_OK from a server we have a
-// pending login with into a LoginResponse event and a tracked connection.
-func (n *CompanionNode) handleLoginResponse(e *event.ResponseReceived) {
+// pending login with into a LoginResponse event and a tracked connection. Like
+// firmware, any response from that server is taken as the login reply and
+// clears the pending login, so a rejection is consumed too. Reports whether the
+// response was consumed.
+func (n *CompanionNode) handleLoginResponse(e *event.ResponseReceived) bool {
 	n.pendingMu.Lock()
 	_, pending := n.pendingLogins[e.From]
+	delete(n.pendingLogins, e.From)
 	n.pendingMu.Unlock()
 	if !pending {
-		return
+		return false
 	}
 	// Login-OK content: resp_type(1) + keepalive(1) + admin(1) + perms(1) +
 	// random(4) + fw_ver_level(1). See buildRepeaterLoginResponse.
 	if len(e.Content) < 4 || e.Content[0] != codec.RespServerLoginOK {
-		return
+		n.log.Info("login rejected", "peer", e.From.String())
+		return true
 	}
 	isAdmin := e.Content[2] != 0
 	perms := e.Content[3]
@@ -146,10 +159,6 @@ func (n *CompanionNode) handleLoginResponse(e *event.ResponseReceived) {
 	if len(e.Content) >= 9 {
 		fwVerLevel = e.Content[8]
 	}
-
-	n.pendingMu.Lock()
-	delete(n.pendingLogins, e.From)
-	n.pendingMu.Unlock()
 
 	n.connections.Register(e.From)
 	n.base.emitEvent(&event.LoginResponse{
@@ -160,6 +169,7 @@ func (n *CompanionNode) handleLoginResponse(e *event.ResponseReceived) {
 		FirmwareVerLevel: fwVerLevel,
 	})
 	n.log.Info("logged in to server", "peer", e.From.String(), "perms", perms)
+	return true
 }
 
 // keepAliveLoop periodically sends keep-alives to all tracked connections.

@@ -53,6 +53,14 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **Binary requests and unhandled responses.** `CompanionNode.SendBinaryReq`
+  sends a request with a caller-supplied body and reports the reply as
+  `event.BinaryResponse`. A response that matches no pending request, such as
+  sensor push telemetry, is now reported as `event.UnhandledResponse` instead of
+  being dropped. The companion server handles `CMD_SEND_BINARY_REQ` through the
+  new `Config.SendBinaryReq` and pushes both events as
+  `PUSH_CODE_BINARY_RESPONSE`, as firmware v1.18 does.
+
 - **`TXT_TYPE_CLI_COMMAND` (3)**, the explicit CLI command text type from
   firmware v1.18, as `codec.TxtTypeCLICommand` and `serial.TxtTypeCLICommand`.
   Repeaters and room servers run it as an admin CLI command, exactly like type 1,
@@ -125,6 +133,11 @@ contain breaking changes; those are called out explicitly below.
   for any length on an anonymous request (they pick the ephemeral key) or on a
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
+
+- **A rejected login stayed pending.** Any response from a server with a pending
+  login is now taken as the login reply and clears it, as in firmware. Before,
+  only a successful login cleared it, so the rejection was dropped and later
+  responses from that server were checked against the stale login.
 
 - **Channel messages could be attributed to the wrong channel.** Group events
   carried only the 1-byte channel hash, which two channels share about 1 time in
