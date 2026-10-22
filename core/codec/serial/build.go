@@ -251,6 +251,15 @@ func EncodeLoginSuccess(pubKeyPrefix []byte, isAdmin bool, serverTimestamp uint3
 	return b
 }
 
+// EncodeLoginFail builds a PUSH_CODE_LOGIN_FAIL payload:
+// [code][reserved 1][pubkey_prefix 6].
+func EncodeLoginFail(pubKeyPrefix []byte) []byte {
+	b := make([]byte, 8)
+	b[0] = PushCodeLoginFail
+	copy(b[2:8], pubKeyPrefix)
+	return b
+}
+
 // EncodeTraceData builds a PUSH_CODE_TRACE_DATA payload (reply to a completed
 // SEND_TRACE_PATH): [code][reserved][path_len][flags][tag u32][auth u32]
 // [path_hashes path_len][path_snrs][last_snr i8]. path_hashes is the traced

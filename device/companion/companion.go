@@ -807,6 +807,8 @@ func (s *Server) handleEvent(evt any) {
 		s.pushAdvert(e)
 	case *event.LoginResponse:
 		s.pushLoginSuccess(e)
+	case *event.LoginFailed:
+		s.pushToSessions(serial.EncodeLoginFail(e.From[:6]))
 	case *event.StatusResponse:
 		s.pushStatusResponse(e)
 	case *event.TelemetryResponse:

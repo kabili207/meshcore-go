@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -147,9 +148,20 @@ func (n *CompanionNode) handleLoginResponse(e *event.ResponseReceived) bool {
 	if !pending {
 		return false
 	}
+	// Legacy repeaters answer a good login with a plain "OK" and nothing else.
+	if bytes.HasPrefix(e.Content, []byte("OK")) {
+		n.connections.Register(e.From)
+		n.base.emitEvent(&event.LoginResponse{
+			Event:           event.Event{From: e.From, Timestamp: time.Now()},
+			ServerTimestamp: e.Tag,
+		})
+		n.log.Info("logged in to legacy server", "peer", e.From.String())
+		return true
+	}
 	// Login-OK content: resp_type(1) + keepalive(1) + admin(1) + perms(1) +
 	// random(4) + fw_ver_level(1). See buildRepeaterLoginResponse.
 	if len(e.Content) < 4 || e.Content[0] != codec.RespServerLoginOK {
+		n.base.emitEvent(&event.LoginFailed{Event: event.Event{From: e.From, Timestamp: time.Now()}})
 		n.log.Info("login rejected", "peer", e.From.String())
 		return true
 	}

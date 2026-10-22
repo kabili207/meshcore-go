@@ -149,7 +149,7 @@ func TestCompanionLoginFailureNotUnhandled(t *testing.T) {
 	if _, err := comp.SendLogin(peerID, "wrong"); err != nil {
 		t.Fatal(err)
 	}
-	deliverResponse(t, comp, peer, 1, []byte{0x00}) // not RESP_SERVER_LOGIN_OK
+	deliverResponse(t, comp, peer, 1, []byte{0x05}) // not RESP_SERVER_LOGIN_OK (0x00)
 
 	for _, e := range collector.get() {
 		if _, ok := e.(*event.UnhandledResponse); ok {
@@ -167,5 +167,56 @@ func TestCompanionLoginFailureNotUnhandled(t *testing.T) {
 	}
 	if !found {
 		t.Error("the pending login wasn't cleared by the failure response")
+	}
+}
+
+// A rejected login is reported as LoginFailed, which the companion server
+// pushes as PUSH_CODE_LOGIN_FAIL.
+func TestCompanionLoginFailedEvent(t *testing.T) {
+	comp, _ := newTestCompanion(t)
+	collector := &eventCollector{}
+	comp.OnEvent(collector.handler)
+	peer, peerID := addPeer(t, comp)
+
+	if _, err := comp.SendLogin(peerID, "wrong"); err != nil {
+		t.Fatal(err)
+	}
+	deliverResponse(t, comp, peer, 1, []byte{0x05}) // not RESP_SERVER_LOGIN_OK (0x00)
+
+	var lf *event.LoginFailed
+	for _, e := range collector.get() {
+		if x, ok := e.(*event.LoginFailed); ok {
+			lf = x
+		}
+	}
+	if lf == nil || lf.From != peerID {
+		t.Errorf("LoginFailed = %+v, want one from the server", lf)
+	}
+}
+
+// Legacy repeaters answer a good login with a plain "OK", which firmware still
+// accepts as success.
+func TestCompanionLegacyLoginOK(t *testing.T) {
+	comp, _ := newTestCompanion(t)
+	collector := &eventCollector{}
+	comp.OnEvent(collector.handler)
+	peer, peerID := addPeer(t, comp)
+
+	if _, err := comp.SendLogin(peerID, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	deliverResponse(t, comp, peer, 1, []byte("OK"))
+
+	var ok bool
+	for _, e := range collector.get() {
+		switch e.(type) {
+		case *event.LoginResponse:
+			ok = true
+		case *event.LoginFailed:
+			t.Error("legacy OK reported as a failed login")
+		}
+	}
+	if !ok {
+		t.Error("expected a LoginResponse for a legacy OK")
 	}
 }

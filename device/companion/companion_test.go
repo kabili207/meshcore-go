@@ -1512,3 +1512,23 @@ func TestBinaryResponsePush(t *testing.T) {
 		})
 	}
 }
+
+func TestLoginFailedPush(t *testing.T) {
+	var handler func(any)
+	s := NewServer(Config{
+		Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		Events: func(h func(any)) { handler = h },
+	})
+	var out bytes.Buffer
+	s.addSession(&session{srv: s, w: &out, ctx: context.Background()})
+
+	var from core.MeshCoreID
+	copy(from[:], []byte{1, 2, 3, 4, 5, 6, 7})
+	handler(&event.LoginFailed{Event: event.Event{From: from}})
+
+	frames := decodeFrames(&out)
+	want := []byte{serial.PushCodeLoginFail, 0, 1, 2, 3, 4, 5, 6}
+	if len(frames) != 1 || !bytes.Equal(frames[0], want) {
+		t.Errorf("got %x, want %x", frames, want)
+	}
+}

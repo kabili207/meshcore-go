@@ -64,6 +64,13 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **Login failures reach the app.** When a server with a pending login answers
+  with anything but success, the companion node emits the new
+  `event.LoginFailed`, and the companion server pushes `PUSH_CODE_LOGIN_FAIL`,
+  as firmware does. A legacy server's plain `"OK"` reply is accepted as
+  success. Firmware servers send nothing for a wrong password, so this fires on
+  unexpected replies rather than on bad passwords.
+
 - **Companion CLI** (firmware v1.18). The companion server answers
   `CMD_RUN_CLI_COMMAND` with `RESP_CODE_CLI_REPLY`. It supports `get/set name`,
   `board`, `ver`, `get/set tz.offset`, and the read-only `get radio`, `get freq`

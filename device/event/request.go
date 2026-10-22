@@ -76,6 +76,13 @@ type LoginResponse struct {
 	FirmwareVerLevel uint8
 }
 
+// LoginFailed fires when a server with a pending login answers with anything
+// other than a successful login. The embedded Event's From field is the
+// server.
+type LoginFailed struct {
+	Event
+}
+
 // TelemetryResponse fires when a peer answers a SendTelemetryReq. The embedded
 // Event's From field is the responding peer.
 type TelemetryResponse struct {
