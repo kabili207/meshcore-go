@@ -59,8 +59,11 @@ Ordered by priority.
 > does. Replies and ACKs now use firmware's radio turnaround delays: 300ms
 > for responses, 600ms for repeater and companion CLI replies, 200ms for text
 > ACKs. Firmware also bumps a reply timestamp that
-> equals the command's. The repeater and room server do now. The companion
-> can't, since `SendDM` takes no timestamp (a TODO marks it).
+> equals the command's. All three roles do now (`0ca5b84`, and `f408323` for
+> the companion through `Config.SendCLIReply`).
+>
+> `c9668ff` stops room servers forwarding by default, matching firmware's
+> `disable_fwd = 1`.
 >
 > Still open: item 9 (no Go sensor role). The 1.17 leftovers are done (see
 > the end of this file).
