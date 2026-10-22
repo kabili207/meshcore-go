@@ -45,6 +45,18 @@ const (
 	// Firmware: PATH_RETURN_DELAY = 300ms.
 	PathSendDelay = 300 * time.Millisecond
 
+	// Reply delays from firmware. A reply waits so the requester's radio has
+	// switched back to receive, which matters when a transport bridges to RF.
+	//
+	// ServerResponseDelay is firmware's SERVER_RESPONSE_DELAY, for responses to
+	// requests and logins.
+	ServerResponseDelay = 300 * time.Millisecond
+	// TxtAckDelay is firmware's TXT_ACK_DELAY, for ACKs of text messages.
+	TxtAckDelay = 200 * time.Millisecond
+	// MultiAckSpacing separates redundant multipart ACK copies and the ACK
+	// that follows them.
+	MultiAckSpacing = 300 * time.Millisecond
+
 	// Send priorities matching firmware conventions.
 	PriorityDirect      = 0 // Highest: direct-routed traffic
 	PriorityFloodData   = 1 // Flood data, ACKs
@@ -91,8 +103,9 @@ type Config struct {
 	MaxFloodHops int
 
 	// MaxUnscopedFloodHops limits how far unscoped flood packets (RouteTypeFlood,
-	// i.e. without region transport codes) propagate. Scoped flood
-	// (RouteTypeTransportFlood) is not affected. Firmware's flood.max.unscoped.
+	// or RouteTypeTransportFlood with transport code 0) propagate. Scoped flood
+	// is not affected. Firmware's flood.max.unscoped, which unlike this does
+	// not cap code 0 (see isUnscoped).
 	// Default: 64.
 	MaxUnscopedFloodHops int
 
@@ -432,7 +445,7 @@ func (r *Router) HandlePacket(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Gate 1.5: transport code validation (before dedup so rejected packets
 	// don't consume dedup slots)
-	if pkt.HasTransportCodes() && r.cfg.ValidateTransportCode != nil {
+	if !isUnscoped(pkt) && r.cfg.ValidateTransportCode != nil {
 		if !r.cfg.ValidateTransportCode(pkt) {
 			r.log.Debug("dropping packet with unrecognized transport code",
 				"code0", pkt.TransportCodes[0],
@@ -642,7 +655,7 @@ func (r *Router) routeFloodForward(pkt *codec.Packet, src transport.PacketSource
 	}
 	// Tiered flood caps (firmware flood.max.unscoped / flood.max.advert).
 	// These mirror the >= semantics of the MaxFloodHops check above.
-	if pkt.RouteType() == codec.RouteTypeFlood && int(info.HopCount)+1 > r.cfg.MaxUnscopedFloodHops {
+	if isUnscoped(pkt) && int(info.HopCount)+1 > r.cfg.MaxUnscopedFloodHops {
 		return
 	}
 	if pkt.PayloadType() == codec.PayloadTypeAdvert && int(info.HopCount)+1 > r.cfg.MaxAdvertFloodHops {
@@ -688,10 +701,11 @@ func (r *Router) regionAllowsFlood(pkt *codec.Packet) bool {
 	if rm == nil {
 		return true
 	}
-	if pkt.RouteType() == codec.RouteTypeTransportFlood {
+	if !isUnscoped(pkt) {
 		return rm.FindMatch(pkt, RegionDenyFlood) != nil
 	}
-	// Unscoped RouteTypeFlood: gated by the wildcard region's flood flag.
+	// Un-scoped (no transport codes, or code 0): gated by the wildcard
+	// region's flood flag.
 	return rm.Wildcard().Flags&RegionDenyFlood == 0
 }
 
@@ -789,6 +803,12 @@ func (r *Router) SendFloodScoped(pkt *codec.Packet) {
 	r.sendScopedFlood(pkt, PriorityFloodData, 0)
 }
 
+// SendFloodScopedDelayed is SendFloodScoped with the packet held in the send
+// queue for delay first. See SendDirectDelayed.
+func (r *Router) SendFloodScopedDelayed(pkt *codec.Packet, delay time.Duration) {
+	r.sendScopedFlood(pkt, PriorityFloodData, delay)
+}
+
 // SendFloodPathScoped is the scoped counterpart of SendFloodPath: a PATH packet
 // sent at PriorityFloodPath after PathSendDelay, scoped to the send scope when
 // one is set.
@@ -796,32 +816,28 @@ func (r *Router) SendFloodPathScoped(pkt *codec.Packet) {
 	r.sendScopedFlood(pkt, PriorityFloodPath, PathSendDelay)
 }
 
-// SendFloodReply floods a reply, scoping it to match the request in origPkt
-// (see ResolveReplyScope). Use this instead of SendFloodScoped whenever the
-// packet answers a received request, so the reply reaches the requester through
-// the same region the request came from.
-//
-// Mirrors the firmware's sendFloodReply.
-func (r *Router) SendFloodReply(pkt *codec.Packet, origPkt *codec.Packet) {
-	r.sendFloodWithScope(pkt, r.ResolveReplyScope(origPkt), PriorityFloodData, 0)
-}
-
-// SendFloodPathReply is the PATH counterpart of SendFloodReply: a PATH return
-// scoped to match the request that prompted it.
-func (r *Router) SendFloodPathReply(pkt *codec.Packet, origPkt *codec.Packet) {
-	r.sendFloodWithScope(pkt, r.ResolveReplyScope(origPkt), PriorityFloodPath, PathSendDelay)
-}
-
 // SendFloodWithKey floods a packet scoped to an already-resolved key, for
 // callers that resolved the reply scope earlier (see event.ReplyContext). A
 // zero key sends un-scoped.
 func (r *Router) SendFloodWithKey(pkt *codec.Packet, key [16]byte) {
-	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodData, 0)
+	r.SendFloodWithKeyDelayed(pkt, key, 0)
+}
+
+// SendFloodWithKeyDelayed is SendFloodWithKey with the packet held in the send
+// queue for delay first. See SendDirectDelayed.
+func (r *Router) SendFloodWithKeyDelayed(pkt *codec.Packet, key [16]byte, delay time.Duration) {
+	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodData, delay)
 }
 
 // SendFloodPathWithKey is the PATH counterpart of SendFloodWithKey.
 func (r *Router) SendFloodPathWithKey(pkt *codec.Packet, key [16]byte) {
-	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodPath, PathSendDelay)
+	r.SendFloodPathWithKeyDelayed(pkt, key, PathSendDelay)
+}
+
+// SendFloodPathWithKeyDelayed is SendFloodPathWithKey with the caller choosing
+// the delay instead of PathSendDelay.
+func (r *Router) SendFloodPathWithKeyDelayed(pkt *codec.Packet, key [16]byte, delay time.Duration) {
+	r.sendFloodWithScope(pkt, TransportKey(key), PriorityFloodPath, delay)
 }
 
 // sendScopedFlood is the shared implementation for the scoped flood senders.
@@ -908,6 +924,15 @@ func (r *Router) SendFloodAsRelay(pkt *codec.Packet) {
 // SendDirect prepares and sends a packet in direct routing mode.
 // The path is set to the provided route, and the packet is marked as seen.
 func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
+	r.SendDirectDelayed(pkt, path, 0)
+}
+
+// SendDirectDelayed is SendDirect with the packet held in the send queue for
+// delay first. Firmware delays replies this way so the requester's radio has
+// switched back to receive, which matters when a transport bridges to RF. The
+// delay only applies once Start has been called; before that, sends are
+// synchronous.
+func (r *Router) SendDirectDelayed(pkt *codec.Packet, path []byte, delay time.Duration) {
 	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeDirect
 
 	hashSize := r.cfg.PathHashMode + 1
@@ -923,7 +948,35 @@ func (r *Router) SendDirect(pkt *codec.Packet, path []byte) {
 	r.dedup.MarkSeen(pkt)
 
 	r.counters.SentDirect.Add(1)
-	r.enqueue(pkt, PriorityDirect, 0, 0, true)
+	r.enqueue(pkt, PriorityDirect, delay, 0, true)
+}
+
+// SendDirectPath sends pkt along a stored path, given in the form contacts and
+// replies keep it: the encoded path_len wire byte and the path bytes. The
+// path keeps its own hash size, as firmware's sendDirect does. SendDirect
+// assumes this router's PathHashMode, which mislabels a path learned from a
+// peer that uses a different hash size, so relays would misread it.
+//
+// If the path bytes don't match pathLen, which means corrupt state, the packet
+// is still sent, encoded with the router's own hash size.
+func (r *Router) SendDirectPath(pkt *codec.Packet, pathLen uint8, path []byte, delay time.Duration) {
+	info := codec.PathInfoFromWireByte(pathLen)
+	if !info.IsValid() || info.ByteLen() != len(path) {
+		r.log.Warn("stored path doesn't match its encoded length, using our hash size",
+			"path_len", pathLen, "bytes", len(path))
+		r.SendDirectDelayed(pkt, path, delay)
+		return
+	}
+
+	pkt.Header = (pkt.Header &^ codec.PHRouteMask) | codec.RouteTypeDirect
+	pkt.PathLen = pathLen
+	pkt.PathHashSize = info.HashSize
+	pkt.Path = append([]byte(nil), path...)
+
+	r.dedup.MarkSeen(pkt)
+
+	r.counters.SentDirect.Add(1)
+	r.enqueue(pkt, PriorityDirect, delay, 0, true)
 }
 
 // SendFloodPath prepares and sends a PATH packet in flood mode with a delay.

@@ -10,6 +10,7 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/cli"
+	"github.com/kabili207/meshcore-go/device/router"
 )
 
 // Without the opt-in callbacks, clock-setting and reboot report unsupported.
@@ -224,5 +225,20 @@ func TestRepeaterCLI_Stats(t *testing.T) {
 	}
 	if got := n.cli.Execute("stats-radio"); got != "unsupported" {
 		t.Errorf("stats-radio = %q, want unsupported", got)
+	}
+}
+
+// Firmware v1.18 defaults repeaters to loop.detect minimal. A persisted value,
+// applied through LoadConfig, still wins.
+func TestRepeater_LoopDetectDefaultsToMinimal(t *testing.T) {
+	n, _ := newTestRepeater(t, "adminpw", "guestpw")
+	if got, _ := n.GetConfig("loop.detect"); got != "minimal" {
+		t.Errorf("default loop.detect = %q, want minimal", got)
+	}
+	if err := n.LoadConfig("loop.detect", "off"); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.base.Router.GetLoopDetect(); got != router.LoopDetectOff {
+		t.Errorf("loop detect after loading off = %d, want off", got)
 	}
 }

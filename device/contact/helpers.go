@@ -86,6 +86,17 @@ func ProcessAdvert(
 		}
 	}
 
+	// A transient (anonymous) entry is replaced by a real contact instead of
+	// being updated in place, so the real one comes from the main pool.
+	// Firmware clears the anon slot and runs the normal add. Unlike firmware we
+	// keep its learned path, because repeaters and room servers route replies
+	// to logged-in clients through these entries. If the advert isn't added,
+	// the entry is left untouched.
+	var replaced *ContactInfo
+	if existing != nil && existing.IsTransient() {
+		replaced, existing = existing, nil
+	}
+
 	// Step 5a: max auto-add hops filter (new contacts only)
 	var o AdvertOptions
 	if len(opts) > 0 {
@@ -113,6 +124,11 @@ func ProcessAdvert(
 	// Step 6: new contact — add to store
 	if existing == nil {
 		newContact := populateContactFromAdvert(advert, nowTimestamp)
+		if replaced != nil {
+			newContact.OutPathLen = replaced.OutPathLen
+			newContact.OutPath = append([]byte(nil), replaced.OutPath...)
+			_ = store.RemoveContact(replaced.ID)
+		}
 		stored, err := store.AddContact(newContact)
 		if err != nil {
 			return AdvertResult{

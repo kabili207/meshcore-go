@@ -62,10 +62,12 @@ type ReplyContext struct {
 	// node and the sender. Used for encrypting response payloads.
 	SharedSecret []byte
 
-	// FloodPath is the reversed flood path from the original packet.
-	// Non-nil only when the original packet arrived via flood routing.
-	// Used by SendReply to wrap responses in PATH packets (matching
-	// firmware room server behavior).
+	// FloodPath is the flood path of the original packet, exactly as received.
+	// Non-nil only when it arrived by flood with at least one hop. SendReply
+	// returns it in a PATH packet, as firmware's createPathReturn does. It is
+	// the requester's route to us (relays append their hash, and a direct
+	// route is consumed from the front), so it must not be reversed. Our own
+	// route back to the requester is the reverse, see codec.ReverseFloodPath.
 	FloodPath []byte
 
 	// DirectPath is the contact's stored direct routing path, if known.
@@ -85,6 +87,12 @@ type ReplyContext struct {
 	// value means send un-scoped. It is a raw key rather than a router type so
 	// this package stays free of a dependency on the router.
 	ReplyScope [16]byte
+
+	// Delay holds the reply in the send queue before it goes out, to give the
+	// requester's radio time to switch back to receive. Zero means
+	// router.ServerResponseDelay, firmware's delay for responses. CLI replies
+	// from a repeater use cli.ReplyDelay instead.
+	Delay time.Duration
 }
 
 // HasFloodPath returns true if the original packet arrived via flood routing
@@ -94,6 +102,8 @@ func (r *ReplyContext) HasFloodPath() bool {
 }
 
 // HasDirectPath returns true if a direct routing path to the sender is known.
+// A zero-hop path (DirectPathLen 0, no path bytes) counts: the reply goes
+// direct to a neighbor.
 func (r *ReplyContext) HasDirectPath() bool {
-	return r.DirectPathLen != 0xFF && len(r.DirectPath) > 0
+	return r.DirectPathLen != 0xFF
 }

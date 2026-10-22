@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/clock"
@@ -251,6 +252,9 @@ func (b *BaseNode) emitEvent(evt any) {
 //   - If a direct path is known: sends via direct routing
 //   - Otherwise: sends via flood
 func (b *BaseNode) SendReply(reply event.ReplyContext, to core.MeshCoreID, payloadType uint8, plaintext []byte) error {
+	if reply.Delay == 0 {
+		reply.Delay = router.ServerResponseDelay
+	}
 	if reply.HasFloodPath() {
 		return b.sendPathReturn(reply, to, payloadType, plaintext)
 	}
@@ -269,9 +273,9 @@ func (b *BaseNode) sendEncryptedResponse(reply event.ReplyContext, to core.MeshC
 	pkt := codec.NewPacket(payloadType, codec.RouteTypeFlood, payload)
 
 	if reply.HasDirectPath() {
-		b.Router.SendDirect(pkt, reply.DirectPath)
+		b.Router.SendDirectPath(pkt, reply.DirectPathLen, reply.DirectPath, reply.Delay)
 	} else {
-		b.Router.SendFloodWithKey(pkt, reply.ReplyScope)
+		b.Router.SendFloodWithKeyDelayed(pkt, reply.ReplyScope, reply.Delay)
 	}
 	return nil
 }
@@ -294,19 +298,20 @@ func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, 
 	payload := codec.BuildAddressedPayload(to.Hash(), b.id.Hash(), mac, ciphertext)
 	pkt := codec.NewPacket(codec.PayloadTypePath, codec.RouteTypeFlood, payload)
 
-	b.Router.SendFloodPathWithKey(pkt, reply.ReplyScope)
+	b.Router.SendFloodPathWithKeyDelayed(pkt, reply.ReplyScope, reply.Delay)
 	return nil
 }
 
-// SendACK sends a 4-byte ACK packet to the recipient (signed/keepalive ACKs).
+// SendACK sends a 4-byte ACK packet to the recipient as the reply to a request,
+// such as a room keep-alive, after router.ServerResponseDelay.
 func (b *BaseNode) SendACK(to core.MeshCoreID, ackHash uint32) {
-	b.sendAckPayload(to, codec.BuildAckPayload(ackHash))
+	b.sendAckPayload(to, codec.BuildAckPayload(ackHash), router.ServerResponseDelay)
 }
 
 // SendACKPayload sends an ACK with a caller-supplied wire payload. It routes
 // direct when a path to the recipient is known, else floods.
 func (b *BaseNode) SendACKPayload(to core.MeshCoreID, payload []byte) {
-	b.sendAckPayload(to, payload)
+	b.sendAckPayload(to, payload, router.ServerResponseDelay)
 }
 
 // GetExtraAckTransmits returns the number of redundant multipart ACK copies
@@ -324,33 +329,38 @@ func (b *BaseNode) SetExtraAckTransmits(n int) {
 	b.extraAckTransmits = n
 }
 
-// sendExtraAcks sends redundant multipart ACK copies over a known direct path,
-// implementing the firmware's multi_acks feature. Each copy is a MULTIPART
-// packet wrapping the same ACK; the receiver deduplicates so only one resolves.
-// No-op when ExtraAckTransmits is 0 or no direct path is known.
-func (b *BaseNode) sendExtraAcks(ct *contact.ContactInfo, ackPayload []byte) {
-	if b.extraAckTransmits <= 0 || ct == nil || !ct.HasDirectPath() {
+// sendTextAck ACKs a received text message the way firmware's sendAckTo does,
+// after router.TxtAckDelay. With a direct path, the ExtraAckTransmits multipart
+// copies (firmware's multi_acks) go first, MultiAckSpacing apart, then the ACK
+// itself. The receiver deduplicates, so only one resolves. Without a path the
+// ACK is flooded, with no extra copies.
+func (b *BaseNode) sendTextAck(ct *contact.ContactInfo, ackPayload []byte) {
+	if !ct.HasDirectPath() {
+		b.sendAckPayload(ct.ID, ackPayload, router.TxtAckDelay)
 		return
 	}
+	d := router.TxtAckDelay
 	for i := 0; i < b.extraAckTransmits; i++ {
 		remaining := uint8(b.extraAckTransmits - i)
 		mp := codec.BuildMultipartPayload(remaining, codec.PayloadTypeAck, ackPayload)
 		pkt := codec.NewPacket(codec.PayloadTypeMultipart, codec.RouteTypeDirect, mp)
-		b.Router.SendDirect(pkt, ct.OutPath)
+		b.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, d)
+		d += router.MultiAckSpacing
 	}
+	b.Router.SendDirectPath(codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeDirect, ackPayload), ct.OutPathLen, ct.OutPath, d)
 }
 
 // sendAckPayload sends an ACK with a caller-supplied wire payload: 4 bytes for
 // signed/keepalive ACKs, or the 6-byte extended form for plain text messages
 // (see codec.BuildAckPayloadExt).
-func (b *BaseNode) sendAckPayload(to core.MeshCoreID, payload []byte) {
+func (b *BaseNode) sendAckPayload(to core.MeshCoreID, payload []byte, delay time.Duration) {
 	pkt := codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeFlood, payload)
 
 	ct := b.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {
-		b.Router.SendDirect(pkt, ct.OutPath)
+		b.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, delay)
 	} else {
-		b.Router.SendFloodScoped(pkt)
+		b.Router.SendFloodScopedDelayed(pkt, delay)
 	}
 }
 
@@ -375,7 +385,7 @@ func (b *BaseNode) SendToContact(to core.MeshCoreID, payloadType uint8, plaintex
 
 	ct := b.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {
-		b.Router.SendDirect(pkt, ct.OutPath)
+		b.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, 0)
 	} else {
 		b.Router.SendFloodScoped(pkt)
 	}
@@ -396,7 +406,7 @@ func (b *BaseNode) buildReplyContext(pkt *codec.Packet, ct *contact.ContactInfo,
 		copy(reply.DirectPath, ct.OutPath)
 	}
 	if pkt.IsFlood() && pkt.HopCount() > 0 {
-		reply.FloodPath = codec.ReverseFloodPath(pkt)
+		reply.FloodPath = append([]byte(nil), pkt.Path...)
 		reply.PathHashSize = pkt.PathHashSize
 	}
 	return reply

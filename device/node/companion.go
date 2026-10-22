@@ -93,6 +93,7 @@ type CompanionNode struct {
 	pendingLogins    map[core.MeshCoreID]uint32 // server -> login send time
 	pendingTelemetry map[uint32]core.MeshCoreID // request tag -> peer
 	pendingStatus    map[uint32]core.MeshCoreID // status request tag -> peer
+	pendingBinary    map[uint32]core.MeshCoreID // binary request tag -> peer
 }
 
 // NewCompanion creates a CompanionNode from the given configuration.
@@ -193,6 +194,7 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 		pendingLogins:    make(map[core.MeshCoreID]uint32),
 		pendingTelemetry: make(map[uint32]core.MeshCoreID),
 		pendingStatus:    make(map[uint32]core.MeshCoreID),
+		pendingBinary:    make(map[uint32]core.MeshCoreID),
 	}
 
 	// Watch responses for login-OK correlation and connection liveness.

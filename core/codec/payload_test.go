@@ -617,6 +617,7 @@ func TestTxtTypeName(t *testing.T) {
 		{TxtTypePlain, "plain"},
 		{TxtTypeCLI, "cli"},
 		{TxtTypeSigned, "signed"},
+		{TxtTypeCLICommand, "cli-command"},
 		{0x0F, "unknown(15)"},
 	}
 
@@ -684,5 +685,18 @@ func TestParsePathContentAcceptsMaxPath(t *testing.T) {
 	}
 	if len(pc.Path) != 64 {
 		t.Errorf("Path length = %d, want 64", len(pc.Path))
+	}
+}
+
+func TestIsValidAdvertName(t *testing.T) {
+	for _, name := range []string{"Hub", "My Node 2", "Café ☕", ""} {
+		if !IsValidAdvertName(name) {
+			t.Errorf("IsValidAdvertName(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"a[b", "a]b", `a\b`, "a:b", "a,b", "a?b", "a*b"} {
+		if IsValidAdvertName(name) {
+			t.Errorf("IsValidAdvertName(%q) = true, want false", name)
+		}
 	}
 }

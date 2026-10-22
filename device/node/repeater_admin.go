@@ -99,7 +99,8 @@ func (n *RepeaterNode) handleLogin(evt *event.AnonRequestReceived) {
 	n.log.Info("repeater client logged in", "peer", senderID.String(), "perms", perm)
 
 	resp := buildRepeaterLoginResponse(nowTS, uint8(perm))
-	if err := n.base.SendReply(evt.Reply, senderID, codec.PayloadTypeResponse, resp); err != nil {
+	rc := n.anonReplyContext(evt, nil, 0, false)
+	if err := n.base.SendReply(rc, senderID, codec.PayloadTypeResponse, resp); err != nil {
 		n.log.Warn("failed to send login response", "error", err)
 	}
 }

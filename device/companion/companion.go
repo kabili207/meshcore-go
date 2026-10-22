@@ -36,6 +36,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/codec/serial"
 	"github.com/kabili207/meshcore-go/core/crypto"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 )
@@ -50,6 +51,9 @@ type Node interface {
 	// messages on it. Returns the channel hash. Called when SET_CHANNEL
 	// configures a channel.
 	AddChannel(key []byte) uint8
+	// RemoveChannel forgets a channel key. Called when SET_CHANNEL deletes or
+	// overwrites a channel.
+	RemoveChannel(key []byte)
 }
 
 // Identity is the static device description the server reports in SELF_INFO and
@@ -67,9 +71,9 @@ type Identity struct {
 	RadioSF      uint8
 	RadioCR      uint8
 
-	FirmwareVerCode  uint8  // protocol/firmware version code; default 13 (v1.16.0)
-	FirmwareVersion  string // default "v1.16.0"
-	BuildDate        string // firmware build date; default "6 Jun 2026"
+	FirmwareVerCode  uint8  // protocol/firmware version code; default serial.CompanionFirmwareVerCode
+	FirmwareVersion  string // default cli.FirmwareVersion
+	BuildDate        string // firmware build date; default cli.FirmwareBuildDate
 	Manufacturer     string // model/manufacturer string; default "meshcore-go"
 	MaxContacts      int    // default 256
 	MaxGroupChannels uint8  // default 8
@@ -121,6 +125,26 @@ type Config struct {
 	// CMD_SEND_TELEMETRY_REQ returns an error; a self request still gets a reply.
 	SendTelemetry func(ctx context.Context, to core.MeshCoreID) (tag uint32, err error)
 
+	// SendBinaryReq, if set, sends a request whose body the app supplies
+	// (starting with the request type byte) and returns the request tag and
+	// whether it was flooded. The reply arrives as an event.BinaryResponse,
+	// pushed as BINARY_RESPONSE. Without it, CMD_SEND_BINARY_REQ returns an
+	// error. CompanionNode.SendBinaryReq fits this signature.
+	SendBinaryReq func(ctx context.Context, to core.MeshCoreID, data []byte) (tag uint32, flood bool, err error)
+
+	// SendAnonReq, if set, sends an anonymous request to any node, contact or
+	// not, and returns the request tag and whether it was flooded. The reply
+	// arrives as an event.BinaryResponse, pushed as BINARY_RESPONSE. Without
+	// it, CMD_SEND_ANON_REQ returns an error. CompanionNode.SendAnonReq fits.
+	SendAnonReq func(ctx context.Context, to core.MeshCoreID, data []byte) (tag uint32, flood bool, err error)
+
+	// SendCLIReply, if set, sends the reply to a remote CLI command. It gets the
+	// command's timestamp so the reply can be stamped apart from it, and is
+	// expected to apply cli.ReplyDelay itself. CompanionNode.SendCLIReply fits.
+	// Without it, replies go through SendDM after a server-side delay, and can
+	// share the command's timestamp.
+	SendCLIReply func(ctx context.Context, to core.MeshCoreID, text string, commandTS uint32) error
+
 	// SendTrace, if set, sends a TRACE along a relay-hash path with the app's tag
 	// and auth code. The result arrives as an event.TraceReceived, pushed as
 	// TRACE_DATA. Without it, CMD_SEND_TRACE_PATH returns an error.
@@ -169,6 +193,9 @@ type Server struct {
 	sendLogin     func(ctx context.Context, to core.MeshCoreID, password string) error
 	sendStatus    func(ctx context.Context, to core.MeshCoreID) error
 	sendTelemetry func(ctx context.Context, to core.MeshCoreID) (uint32, error)
+	sendBinaryReq func(ctx context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error)
+	sendAnonReq   func(ctx context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error)
+	sendCLIReply  func(ctx context.Context, to core.MeshCoreID, text string, commandTS uint32) error
 	sendTrace     func(ctx context.Context, tag, authCode uint32, flags uint8, path []byte) error
 	stats         func() Stats
 	exportSelf    func() []byte
@@ -189,6 +216,10 @@ type Server struct {
 	rxDelay       uint32
 	airtimeFactor uint32
 
+	tzOffset int8 // "tz.offset" CLI setting, hours from UTC
+
+	cliReplyDelay time.Duration // cli.ReplyDelay; tests shorten it
+
 	autoaddConfig  uint8 // CMD_SET/GET_AUTOADD_CONFIG
 	autoaddMaxHops uint8
 
@@ -204,6 +235,14 @@ type Server struct {
 type channelEntry struct {
 	name   string
 	secret []byte
+}
+
+// active reports whether the slot holds a usable channel. Apps delete a channel
+// by writing an empty name and an all-zero secret, and firmware skips any slot
+// with an empty name. An all-zero key would otherwise match traffic from nodes
+// that never set a key (firmware searchChannelsByHash, v1.18).
+func (c channelEntry) active() bool {
+	return c.name != "" && len(c.secret) > 0 && !bytes.Equal(c.secret, make([]byte, len(c.secret)))
 }
 
 // queuedMessage is an incoming message awaiting CMD_SYNC_NEXT_MESSAGE drain. It
@@ -234,10 +273,10 @@ func NewServer(cfg Config) *Server {
 		id.FirmwareVerCode = serial.CompanionFirmwareVerCode
 	}
 	if id.FirmwareVersion == "" {
-		id.FirmwareVersion = "v1.16.0"
+		id.FirmwareVersion = cli.FirmwareVersion
 	}
 	if id.BuildDate == "" {
-		id.BuildDate = "6 Jun 2026"
+		id.BuildDate = cli.FirmwareBuildDate
 	}
 	if id.Manufacturer == "" {
 		id.Manufacturer = "meshcore-go"
@@ -274,6 +313,9 @@ func NewServer(cfg Config) *Server {
 		sendLogin:     cfg.SendLogin,
 		sendStatus:    cfg.SendStatus,
 		sendTelemetry: cfg.SendTelemetry,
+		sendBinaryReq: cfg.SendBinaryReq,
+		sendAnonReq:   cfg.SendAnonReq,
+		sendCLIReply:  cfg.SendCLIReply,
 		sendTrace:     cfg.SendTrace,
 		stats:         cfg.Stats,
 		exportSelf:    cfg.ExportSelf,
@@ -287,6 +329,7 @@ func NewServer(cfg Config) *Server {
 		radioCR:       id.RadioCR,
 		txPower:       id.TxPower,
 		sessions:      make(map[*session]struct{}),
+		cliReplyDelay: cli.ReplyDelay,
 	}
 	if cfg.Events != nil {
 		cfg.Events(s.handleEvent)
@@ -443,6 +486,15 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 	case serial.CmdSendTelemetryReq:
 		return s.sendTelemetryReq(ss, payload)
 
+	case serial.CmdSendBinaryReq:
+		return s.sendBinaryReqCmd(ss, payload)
+
+	case serial.CmdSendAnonReq:
+		return s.sendAnonReqCmd(ss, payload)
+
+	case serial.CmdRunCLICommand:
+		return s.runCLICmd(ss, payload)
+
 	case serial.CmdSendTracePath:
 		return s.sendTracePath(ss, payload)
 
@@ -583,36 +635,56 @@ func (s *Server) setChannel(ss *session, payload []byte) error {
 	if err != nil {
 		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
 	}
+	entry := channelEntry{name: name, secret: secret}
 	s.mu.Lock()
 	if int(idx) >= len(s.channels) {
 		s.mu.Unlock()
 		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 	}
-	s.channels[idx] = channelEntry{name: name, secret: secret}
+	old := s.channels[idx]
+	s.channels[idx] = entry
+	// Another slot may hold the same key; it must keep decrypting.
+	dropOld := old.active() && !s.keyInUseLocked(old.secret)
 	s.mu.Unlock()
 
-	s.node.AddChannel(secret)
+	if dropOld {
+		s.node.RemoveChannel(old.secret)
+	}
+	if entry.active() {
+		s.node.AddChannel(secret)
+	}
 	return ss.send(serial.EncodeOK())
 }
 
+// keyInUseLocked reports whether any active slot holds key. Callers hold s.mu.
+func (s *Server) keyInUseLocked(key []byte) bool {
+	for _, ch := range s.channels {
+		if ch.active() && bytes.Equal(ch.secret, key) {
+			return true
+		}
+	}
+	return false
+}
+
 // channelKey returns the 16-byte key for a channel index, or nil if the index is
-// out of range or unconfigured.
+// out of range or the slot is not active.
 func (s *Server) channelKey(idx uint8) []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if int(idx) >= len(s.channels) || len(s.channels[idx].secret) == 0 {
+	if int(idx) >= len(s.channels) || !s.channels[idx].active() {
 		return nil
 	}
 	return s.channels[idx].secret
 }
 
-// channelIndexForHash finds the index of the configured channel whose key hashes
-// to hash.
-func (s *Server) channelIndexForHash(hash uint8) (uint8, bool) {
+// channelIndexForKey finds the index of the active channel whose key is key.
+// Matching on the key, not its 1-byte hash, keeps two channels that share a
+// hash apart.
+func (s *Server) channelIndexForKey(key []byte) (uint8, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i, ch := range s.channels {
-		if len(ch.secret) > 0 && crypto.ComputeChannelHash(ch.secret) == hash {
+		if ch.active() && bytes.Equal(ch.secret, key) {
 			return uint8(i), true
 		}
 	}
@@ -635,10 +707,16 @@ func (s *Server) sendTextMsg(ss *session, payload []byte) error {
 		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
 	}
 
+	switch req.TxtType {
+	case serial.TxtTypePlain, serial.TxtTypeCLI, serial.TxtTypeCLICommand:
+	default:
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+
 	// Remote-admin CLI commands are not ACKed: reply SENT with a zero
 	// expected-ack and register no confirmation. The reply returns later as a
 	// CONTACT_MSG_RECV with the CLI type, which the app routes as a cli_reply.
-	if req.TxtType == serial.TxtTypeCLI {
+	if req.TxtType == serial.TxtTypeCLI || req.TxtType == serial.TxtTypeCLICommand {
 		flood, err := s.sendDM(ss.ctx, ct.ID, req.Text, req.TxtType, req.Attempt, nil)
 		if err != nil {
 			s.log.Warn("cli send failed", "to", ct.ID.String(), "error", err)
@@ -740,17 +818,27 @@ func (s *Server) sendNextMessage(ss *session) error {
 func (s *Server) handleEvent(evt any) {
 	switch e := evt.(type) {
 	case *event.TextMessageReceived:
-		s.enqueueDM(e)
+		if !s.handleRemoteCLI(e) {
+			s.enqueueDM(e)
+		}
 	case *event.GroupTextReceived:
 		s.enqueueChannel(e)
 	case *event.AdvertReceived:
 		s.pushAdvert(e)
 	case *event.LoginResponse:
 		s.pushLoginSuccess(e)
+	case *event.LoginFailed:
+		s.pushToSessions(serial.EncodeLoginFail(e.From[:6]))
 	case *event.StatusResponse:
 		s.pushStatusResponse(e)
 	case *event.TelemetryResponse:
 		s.pushTelemetryResponse(e)
+	case *event.BinaryResponse:
+		s.pushToSessions(serial.EncodeBinaryResponse(e.Tag, e.Data))
+	case *event.UnhandledResponse:
+		// Firmware v1.18 hands unmatched responses (sensor push telemetry) to
+		// the app in the same frame as a matched binary response.
+		s.pushToSessions(serial.EncodeBinaryResponse(e.Tag, e.Content))
 	case *event.TraceReceived:
 		s.pushTraceData(e)
 	}
@@ -846,6 +934,58 @@ func (s *Server) pushTelemetryResponse(e *event.TelemetryResponse) {
 	s.pushToSessions(serial.EncodeTelemetryResponse(e.From[:6], e.Data))
 }
 
+// sendBinaryReqCmd handles CMD_SEND_BINARY_REQ: [cmd][pubkey 32][request data].
+// It replies SENT with the request tag, and the reply arrives later as a
+// BinaryResponse event.
+func (s *Server) sendBinaryReqCmd(ss *session, payload []byte) error {
+	if s.sendBinaryReq == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	if len(payload) < 2+32 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var to core.MeshCoreID
+	copy(to[:], payload[1:33])
+	if s.node.Contacts().GetByPubKey(to) == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeNotFound))
+	}
+	tag, flood, err := s.sendBinaryReq(ss.ctx, to, payload[33:])
+	if err != nil {
+		s.log.Warn("binary request failed", "to", to.String(), "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(s.encodeRequestSent(tag, flood))
+}
+
+// encodeRequestSent builds the SENT reply for a request whose answer arrives
+// later as a BINARY_RESPONSE push.
+func (s *Server) encodeRequestSent(tag uint32, flood bool) []byte {
+	if flood {
+		return serial.EncodeSent(serial.SentTypeFlood, tag, 12000)
+	}
+	return serial.EncodeSent(serial.SentTypeDirect, tag, 4000)
+}
+
+// sendAnonReqCmd handles CMD_SEND_ANON_REQ: [cmd][pubkey 32][request data].
+// Unlike a binary request, the target needn't be a contact; the node adds a
+// transient one. It replies SENT with the request tag.
+func (s *Server) sendAnonReqCmd(ss *session, payload []byte) error {
+	if s.sendAnonReq == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	if len(payload) < 2+32 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	var to core.MeshCoreID
+	copy(to[:], payload[1:33])
+	tag, flood, err := s.sendAnonReq(ss.ctx, to, payload[33:])
+	if err != nil {
+		s.log.Warn("anon request failed", "to", to.String(), "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(s.encodeRequestSent(tag, flood))
+}
+
 // sendTracePath handles CMD_SEND_TRACE_PATH: send a trace with the app's tag and
 // reply SENT. The result arrives later as a TraceReceived event.
 func (s *Server) sendTracePath(ss *session, payload []byte) error {
@@ -917,10 +1057,10 @@ func (s *Server) enqueueDM(e *event.TextMessageReceived) {
 	s.enqueue(qm)
 }
 
-// enqueueChannel queues an incoming group message, mapping its channel hash to a
-// configured channel index. Messages on unknown channels are dropped.
+// enqueueChannel queues an incoming group message under the channel index whose
+// key decrypted it. Messages on unknown channels are dropped.
 func (s *Server) enqueueChannel(e *event.GroupTextReceived) {
-	idx, ok := s.channelIndexForHash(e.ChannelHash)
+	idx, ok := s.channelIndexForKey(e.ChannelKey)
 	if !ok {
 		s.log.Debug("dropping message for unknown channel", "hash", e.ChannelHash)
 		return

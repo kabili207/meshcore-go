@@ -218,7 +218,7 @@ func (h *testHarness) replyContext(pkt *codec.Packet, _ core.MeshCoreID, secret 
 		DirectPathLen: contact.PathUnknown,
 	}
 	if pkt.IsFlood() && pkt.HopCount() > 0 {
-		reply.FloodPath = codec.ReverseFloodPath(pkt)
+		reply.FloodPath = append([]byte(nil), pkt.Path...)
 		reply.PathHashSize = pkt.PathHashSize
 	}
 	return reply
@@ -234,7 +234,7 @@ func (h *testHarness) replyContextForContact(pkt *codec.Packet, ct *contact.Cont
 		copy(reply.DirectPath, ct.OutPath)
 	}
 	if pkt.IsFlood() && pkt.HopCount() > 0 {
-		reply.FloodPath = codec.ReverseFloodPath(pkt)
+		reply.FloodPath = append([]byte(nil), pkt.Path...)
 		reply.PathHashSize = pkt.PathHashSize
 	}
 	return reply

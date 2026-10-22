@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ErrUnknownKey is returned by Set, Load, and Get for a key that is not
@@ -18,7 +19,27 @@ var ErrUnknownKey = errors.New("unknown or read-only config key")
 // by the "ver" CLI command when a role doesn't override it. It includes the
 // leading "v" like the firmware's FIRMWARE_VERSION macro, because the phone apps
 // parse this exact shape to gate which settings they let you edit.
-const FirmwareVersion = "v1.16.0"
+const FirmwareVersion = "v1.18.0"
+
+// FirmwareBuildDate is the build date of the firmware release FirmwareVersion
+// names, for roles that report one without being given their own.
+const FirmwareBuildDate = "15 Oct 2026"
+
+// ReplyDelay is how long a CLI reply waits before it is sent, matching
+// firmware's CLI_REPLY_DELAY_MILLIS. It gives the requester's radio time to
+// switch back to receive.
+const ReplyDelay = 600 * time.Millisecond
+
+// ReplyTimestamp returns the timestamp for a CLI reply, given the caller's
+// unique current time and the command's own timestamp. The apps' CLI view
+// can't tell a reply from its command when the two match, so firmware bumps
+// the reply by one in that case.
+func ReplyTimestamp(now, commandTS uint32) uint32 {
+	if now == commandTS {
+		return now + 1
+	}
+	return now
+}
 
 // FormatVersion builds the firmware-style "ver" reply: "<version> (Build: <date>)".
 // This matches the firmware's `sprintf(reply, "%s (Build: %s)", ...)` so the apps

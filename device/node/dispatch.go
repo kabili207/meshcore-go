@@ -8,6 +8,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/router"
 	"github.com/kabili207/meshcore-go/transport"
 )
 
@@ -130,27 +131,14 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 			// (hash + tail attempt byte + random), keyed by the sender's pubkey.
 			ackData := codec.TrimTxtMsgContent(plaintext, content)
 			ackHash := crypto.ComputeAckHash(ackData, ct.ID[:])
-			ackPayload := codec.BuildPlainTextAck(ackHash, plaintext, ackData)
-
-			if reply.HasFloodPath() {
-				// Flood-received: send one packet that both tells the sender the
-				// return path and carries the ACK (firmware createPathReturn with
-				// an embedded PAYLOAD_TYPE_ACK). Without this the sender never
-				// learns the direct path and keeps flooding.
-				if err := b.sendPathReturn(reply, ct.ID, codec.PayloadTypeAck, ackPayload); err != nil {
-					b.log.Debug("failed to send path-return ack", "error", err)
-				}
-			} else {
-				b.sendAckPayload(ct.ID, ackPayload)
-				b.sendExtraAcks(ct, ackPayload)
-			}
+			b.ackTextMessage(reply, ct, codec.BuildPlainTextAck(ackHash, plaintext, ackData))
 		case codec.TxtTypeSigned:
 			// Signed messages (e.g. a room server pushing a post) are ACKed with
 			// a 4-byte hash keyed by the receiver's own pubkey, over the signed
 			// content.
 			ackData := codec.TrimTxtMsgContent(plaintext, content)
 			ackHash := crypto.ComputeAckHash(ackData, b.id[:])
-			b.sendAckPayload(ct.ID, codec.BuildAckPayload(ackHash))
+			b.ackTextMessage(reply, ct, codec.BuildAckPayload(ackHash))
 		}
 	}
 
@@ -163,6 +151,22 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 		Timestamp:          content.Timestamp,
 		SenderPubKeyPrefix: content.SenderPubKeyPrefix,
 	})
+}
+
+// ackTextMessage ACKs a received text message the way firmware's
+// onPeerDataRecv does for plain and signed text. A flooded message gets one
+// PATH return that both carries the ACK and tells the sender its route to us.
+// Without it the sender never learns the path and keeps flooding. Otherwise
+// the ACK goes out through sendTextAck.
+func (b *BaseNode) ackTextMessage(reply event.ReplyContext, ct *contact.ContactInfo, ackPayload []byte) {
+	if !reply.HasFloodPath() {
+		b.sendTextAck(ct, ackPayload)
+		return
+	}
+	reply.Delay = router.TxtAckDelay
+	if err := b.sendPathReturn(reply, ct.ID, codec.PayloadTypeAck, ackPayload); err != nil {
+		b.log.Debug("failed to send path-return ack", "error", err)
+	}
 }
 
 // handleAck processes an ACK packet: resolve in tracker, then emit AckReceived.
@@ -224,9 +228,11 @@ func (b *BaseNode) handleAnonReq(pkt *codec.Packet, src transport.PacketSource) 
 	reply := event.ReplyContext{
 		SharedSecret:  secret,
 		DirectPathLen: contact.PathUnknown,
+		ReplyScope:    b.Router.ResolveReplyScope(pkt),
 	}
-	if pkt.IsFlood() && pkt.PathLen > 0 {
-		reply.FloodPath = codec.ReverseFloodPath(pkt)
+	if pkt.IsFlood() && pkt.HopCount() > 0 {
+		reply.FloodPath = append([]byte(nil), pkt.Path...)
+		reply.PathHashSize = pkt.PathHashSize
 	}
 
 	b.emitEvent(&event.AnonRequestReceived{
@@ -355,17 +361,18 @@ func (b *BaseNode) handlePath(pkt *codec.Packet, src transport.PacketSource) {
 }
 
 // decryptGroup tries every key registered under the channel hash and returns
-// the first plaintext whose MAC verifies. This mirrors firmware's
-// searchChannelsByHash + try-each-decrypt loop: a 1-byte hash can collide across
-// channels, so MAC verification is what actually selects the right key.
-func (b *BaseNode) decryptGroup(hash uint8, mac uint16, ciphertext []byte) ([]byte, bool) {
-	for _, key := range b.channelKeys(hash) {
-		plaintext, err := crypto.DecryptGroupMessage(codec.PrependMAC(mac, ciphertext), key)
+// the first plaintext whose MAC verifies, along with that key. This mirrors
+// firmware's searchChannelsByHash + try-each-decrypt loop: a 1-byte hash can
+// collide across channels, so MAC verification is what actually selects the
+// right key.
+func (b *BaseNode) decryptGroup(hash uint8, mac uint16, ciphertext []byte) (plaintext, key []byte, ok bool) {
+	for _, k := range b.channelKeys(hash) {
+		pt, err := crypto.DecryptGroupMessage(codec.PrependMAC(mac, ciphertext), k)
 		if err == nil {
-			return plaintext, true
+			return pt, append([]byte(nil), k...), true
 		}
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 // handleGrpTxt processes a group text message.
@@ -376,7 +383,7 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 		return
 	}
 
-	plaintext, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
+	plaintext, key, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
 	if !ok {
 		return // no registered key for this hash decrypted (MAC failed on all)
 	}
@@ -394,6 +401,7 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 	b.emitEvent(&event.GroupTextReceived{
 		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
 		ChannelHash: grp.ChannelHash,
+		ChannelKey:  key,
 		Message:     message,
 	})
 }
@@ -406,7 +414,7 @@ func (b *BaseNode) handleGrpData(pkt *codec.Packet, src transport.PacketSource) 
 		return
 	}
 
-	plaintext, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
+	plaintext, key, ok := b.decryptGroup(grp.ChannelHash, grp.MAC, grp.Ciphertext)
 	if !ok {
 		return // no registered key for this hash decrypted (MAC failed on all)
 	}
@@ -419,6 +427,7 @@ func (b *BaseNode) handleGrpData(pkt *codec.Packet, src transport.PacketSource) 
 	b.emitEvent(&event.GroupDataReceived{
 		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
 		ChannelHash: grp.ChannelHash,
+		ChannelKey:  key,
 		DataType:    content.DataType,
 		Data:        content.Data,
 	})

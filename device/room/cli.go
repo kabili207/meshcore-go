@@ -8,47 +8,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kabili207/meshcore-go/core"
-	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/router"
 )
-
-// handleCLICommand processes a CLI command from an admin client and sends the
-// reply as an encrypted TXT_MSG with TxtTypeCLI. The firmware does NOT send
-// an ACK for CLI commands — only the text reply.
-func (s *Server) handleCLICommand(pkt *codec.Packet, senderID core.MeshCoreID, secret []byte, content *codec.TxtMsgContent) {
-	cmd := content.Message
-
-	// Strip optional companion radio prefix (e.g. "04|get name" → "get name").
-	// The firmware reflects the prefix back in the reply so the app can correlate
-	// command/response pairs.
-	prefix := ""
-	if len(cmd) > 4 && cmd[2] == '|' {
-		prefix = cmd[:3]
-		cmd = cmd[3:]
-	}
-
-	s.log.Debug("cli command",
-		"peer", senderID.String(),
-		"cmd", cmd)
-
-	reply := s.executeCLI(cmd)
-	if reply == "" {
-		return
-	}
-	s.sendCLIReply(pkt, senderID, secret, prefix+reply)
-}
 
 // executeCLI dispatches a CLI command string and returns the reply text.
 // Returns "" for no reply.
 func (s *Server) executeCLI(cmd string) string {
 	// Config get/set access is serialized under s.mu (the command handlers use
 	// their own thread-safe stores, so the broader lock is harmless).
+	// Firmware v1.18 intercepts just this form; "set repeat off" and
+	// "get repeat" still reach the repeat key.
+	if strings.HasPrefix(strings.TrimLeft(cmd, " "), "set repeat on") {
+		return "ERR - " + errRepeatDeprecated.Error()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cli.Execute(cmd)
 }
+
+// errRepeatDeprecated is firmware's refusal to turn on repeat for a room server.
+var errRepeatDeprecated = errors.New("repeat now deprecated")
 
 // ExecuteCLI runs a raw CLI command line against the room server's dispatcher
 // and returns the reply text, exactly as a remote admin command would, but
@@ -192,6 +172,21 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 			return nil
 		},
 	})
+	d.Key("repeat", cli.ConfigKey{
+		Get: func() string {
+			if s.cfg.Router.GetForwardPackets() {
+				return "on"
+			}
+			return "off"
+		},
+		Set: func(v string) error {
+			if v != "off" {
+				return errRepeatDeprecated
+			}
+			s.cfg.Router.SetForwardPackets(false)
+			return nil
+		},
+	})
 	d.Key("loop.detect", cli.ConfigKey{
 		Get: func() string { return router.LoopDetectName(s.cfg.Router.GetLoopDetect()) },
 		Set: func(v string) error {
@@ -304,13 +299,6 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 	}
 
 	return d
-}
-
-// sendCLIReply sends a CLI reply text message to the client.
-func (s *Server) sendCLIReply(origPkt *codec.Packet, recipientID core.MeshCoreID, secret []byte, reply string) {
-	nowTS := s.cfg.Clock.GetCurrentTime()
-	content := codec.BuildTxtMsgContent(nowTS, codec.TxtTypeCLI, 0, reply, nil)
-	s.sendEncryptedResponse(origPkt, recipientID, secret, codec.PayloadTypeTxtMsg, content)
 }
 
 // --- Individual command implementations ---

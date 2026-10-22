@@ -14,15 +14,16 @@ const (
 
 // Text message types (firmware TXT_TYPE_*) in SEND_TXT_MSG and CONTACT_MSG_RECV.
 const (
-	TxtTypePlain  = 0
-	TxtTypeCLI    = 1 // remote-admin CLI command / reply
-	TxtTypeSigned = 2
+	TxtTypePlain      = 0
+	TxtTypeCLI        = 1 // remote-admin CLI command / reply
+	TxtTypeSigned     = 2
+	TxtTypeCLICommand = 3 // CLI command, explicitly (firmware v1.18)
 )
 
 // CompanionFirmwareVerCode is the FIRMWARE_VER_CODE the device reports as byte 1
-// of DEVICE_INFO. 13 corresponds to firmware v1.16.0 and gates which features
+// of DEVICE_INFO. 14 corresponds to firmware v1.18.0 and gates which features
 // the phone apps enable.
-const CompanionFirmwareVerCode = 13
+const CompanionFirmwareVerCode = 14
 
 // Response payload builders for the companion protocol (device -> app). Each
 // returns a payload whose first byte is the response code; wrap it with
@@ -121,17 +122,17 @@ const deviceInfoSize = 1 + 1 + 1 + 1 + 4 + 12 + 40 + 20 + 1 + 1 // 82
 // The layout is fixed-width: the official app reads FirmwareVersion at offset 60,
 // so all fields must sit at their firmware offsets (a compact form is rejected).
 type DeviceInfo struct {
-	// FirmwareVerCode is the protocol/firmware version code (13 for v1.16.0).
+	// FirmwareVerCode is the protocol/firmware version code (14 for v1.18.0).
 	FirmwareVerCode uint8
 	// MaxContactsDiv2 is max_contacts/2; MaxGroupChannels is the channel count.
 	MaxContactsDiv2  uint8
 	MaxGroupChannels uint8
 	BLEPin           uint32
-	// BuildDate ("6 Jun 2026") goes in a fixed 12-byte NUL-terminated field.
+	// BuildDate ("15 Oct 2026") goes in a fixed 12-byte NUL-terminated field.
 	BuildDate string
 	// Manufacturer/model goes in a fixed 40-byte field at offset 20.
 	Manufacturer string
-	// FirmwareVersion ("v1.16.0") goes in a fixed 20-byte field at offset 60.
+	// FirmwareVersion ("v1.18.0") goes in a fixed 20-byte field at offset 60.
 	FirmwareVersion string
 	// ClientRepeat (v9+) and PathHashMode (v10+) are the two trailing bytes.
 	ClientRepeat uint8
@@ -250,6 +251,15 @@ func EncodeLoginSuccess(pubKeyPrefix []byte, isAdmin bool, serverTimestamp uint3
 	return b
 }
 
+// EncodeLoginFail builds a PUSH_CODE_LOGIN_FAIL payload:
+// [code][reserved 1][pubkey_prefix 6].
+func EncodeLoginFail(pubKeyPrefix []byte) []byte {
+	b := make([]byte, 8)
+	b[0] = PushCodeLoginFail
+	copy(b[2:8], pubKeyPrefix)
+	return b
+}
+
 // EncodeTraceData builds a PUSH_CODE_TRACE_DATA payload (reply to a completed
 // SEND_TRACE_PATH): [code][reserved][path_len][flags][tag u32][auth u32]
 // [path_hashes path_len][path_snrs][last_snr i8]. path_hashes is the traced
@@ -279,6 +289,23 @@ func EncodeTelemetryResponse(pubKeyPrefix, cayenneData []byte) []byte {
 	b[0] = PushCodeTelemetryResponse
 	copy(b[2:8], pubKeyPrefix)
 	copy(b[8:], cayenneData)
+	return b
+}
+
+// EncodeCLIReply builds a RESP_CODE_CLI_REPLY payload: [code][reply text], with
+// no terminating NUL.
+func EncodeCLIReply(reply string) []byte {
+	return append([]byte{RespCodeCLIReply}, reply...)
+}
+
+// EncodeBinaryResponse builds a PUSH_CODE_BINARY_RESPONSE payload:
+// [code][reserved 1][tag u32 LE][body]. The tag is the request tag from
+// RESP_CODE_SENT, or a push tag for an unsolicited response.
+func EncodeBinaryResponse(tag uint32, body []byte) []byte {
+	b := make([]byte, 6+len(body))
+	b[0] = PushCodeBinaryResponse
+	binary.LittleEndian.PutUint32(b[2:6], tag)
+	copy(b[6:], body)
 	return b
 }
 

@@ -66,6 +66,7 @@ const (
 	CmdSetDefaultFloodScope = 63 // Set default flood scope (v1.15.0+)
 	CmdGetDefaultFloodScope = 64 // Get default flood scope (v1.15.0+)
 	CmdSendRawPacket        = 65 // Send a raw mesh packet (v1.16.0+)
+	CmdRunCLICommand        = 66 // Run a companion CLI command (v14+)
 )
 
 // Response codes sent from companion radio to host.
@@ -99,6 +100,7 @@ const (
 	RespAllowedRepeatFreq     = 26 // Allowed repeat frequencies
 	RespCodeChannelDataRecv   = 27 // Channel data received (v1.15.0+)
 	RespCodeDefaultFloodScope = 28 // Default flood scope info (v1.15.0+)
+	RespCodeCLIReply          = 29 // Reply to CMD_RUN_CLI_COMMAND (v14+)
 )
 
 // Push codes sent asynchronously from device to host (firmware PUSH_CODE_*).

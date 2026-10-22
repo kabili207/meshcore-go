@@ -111,7 +111,6 @@ func newTestHarness(t *testing.T) *testHarness {
 	clk := clock.New()
 
 	srv := NewServer(ServerConfig{
-		PrivateKey:    serverKey.PrivateKey,
 		PublicKey:     serverPub,
 		Clock:         clk,
 		AdminPassword: "admin123",
@@ -706,6 +705,51 @@ func TestHandleTextMessage_ReplayRejected(t *testing.T) {
 	}
 }
 
+// Firmware v1.18 added TXT_TYPE_CLI_COMMAND (3) and handles it like type 1.
+func TestHandleTextMessage_AdminCLITypes(t *testing.T) {
+	for _, txtType := range []uint8{codec.TxtTypeCLI, codec.TxtTypeCLICommand} {
+		t.Run(codec.TxtTypeName(txtType), func(t *testing.T) {
+			h := newTestHarness(t)
+			sender := &mockSender{}
+			h.server.SetSender(sender)
+
+			_, clientID := h.makeClientKeyAndContact(t)
+			if _, err := h.clients.AddClient(&ClientInfo{Client: acl.Client{ID: clientID, Permissions: codec.PermACLAdmin}}); err != nil {
+				t.Fatal(err)
+			}
+
+			cmdTS := h.clk.GetCurrentTime()
+			h.server.HandleTextMessage(&event.TextMessageReceived{
+				Event:     event.Event{From: clientID},
+				Message:   "ver",
+				TxtType:   txtType,
+				Timestamp: cmdTS,
+			})
+
+			if len(sender.replies) != 1 {
+				t.Fatalf("got %d replies, want 1", len(sender.replies))
+			}
+			// A reply with the command's timestamp can't be told apart in the
+			// apps' CLI view.
+			if ts := binary.LittleEndian.Uint32(sender.replies[0].plaintext); ts == cmdTS {
+				t.Error("CLI reply reused the command's timestamp")
+			}
+			content, err := codec.ParseTxtMsgContent(sender.replies[0].plaintext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if content.TxtType != codec.TxtTypeCLI {
+				t.Errorf("reply type = %d, want CLI (1)", content.TxtType)
+			}
+			// Unlike the repeater, firmware's room server uses the plain response
+			// delay for CLI replies.
+			if sender.replies[0].delay != router.ServerResponseDelay {
+				t.Errorf("reply delay = %v, want %v", sender.replies[0].delay, router.ServerResponseDelay)
+			}
+		})
+	}
+}
+
 func TestHandleLogin_FloodResetsOutPath(t *testing.T) {
 	h := newTestHarness(t)
 	h.server.SetSender(&mockSender{})
@@ -742,15 +786,23 @@ func TestHandleLogin_FloodResetsOutPath(t *testing.T) {
 type mockSender struct {
 	ackPayloads  [][]byte
 	contactSends []mockContactSend
+	replies      []mockContactSend
 }
 
 type mockContactSend struct {
 	to          core.MeshCoreID
 	payloadType uint8
 	plaintext   []byte
+	delay       time.Duration // ReplyContext.Delay, for replies
 }
 
-func (m *mockSender) SendReply(_ event.ReplyContext, _ core.MeshCoreID, _ uint8, _ []byte) error {
+func (m *mockSender) SendReply(reply event.ReplyContext, to core.MeshCoreID, payloadType uint8, plaintext []byte) error {
+	m.replies = append(m.replies, mockContactSend{
+		to:          to,
+		payloadType: payloadType,
+		plaintext:   append([]byte(nil), plaintext...),
+		delay:       reply.Delay,
+	})
 	return nil
 }
 func (m *mockSender) SendACK(_ core.MeshCoreID, _ uint32) {}
@@ -834,9 +886,9 @@ func TestHandleRequest_KeepaliveNoDirectPathSkips(t *testing.T) {
 	h.server.SetSender(ms)
 	clientID := keepaliveClient(t, h)
 
-	// Empty reply context => no direct path.
 	h.server.HandleRequest(&event.RequestReceived{
 		Event:       event.Event{From: clientID},
+		Reply:       event.ReplyContext{DirectPathLen: contact.PathUnknown},
 		RequestType: codec.ReqTypeKeepalive,
 		Tag:         200,
 	})

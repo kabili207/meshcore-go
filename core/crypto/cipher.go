@@ -23,6 +23,9 @@ var (
 	ErrInvalidKeySize = errors.New("invalid key size: must be 16 or 32 bytes")
 	ErrInvalidMACSize = errors.New("ciphertext too short for MAC")
 	ErrMACMismatch    = errors.New("MAC verification failed")
+	// ErrUnalignedCiphertext means the ciphertext is not a whole number of AES
+	// blocks. Firmware rejects these too (Utils::MACThenDecrypt, since v1.18).
+	ErrUnalignedCiphertext = errors.New("ciphertext is not block-aligned")
 )
 
 // encryptThenMAC encrypts plaintext using AES-128 ECB, then computes an
@@ -74,6 +77,12 @@ func macThenDecrypt(secret, data []byte) ([]byte, error) {
 
 	receivedMAC := data[:CipherMACSize]
 	ciphertext := data[CipherMACSize:]
+
+	// The MAC can't be trusted to guard this: anonymous requests and public
+	// channels let a sender compute a valid MAC for any length.
+	if len(ciphertext)%CipherBlockSize != 0 {
+		return nil, ErrUnalignedCiphertext
+	}
 
 	// Verify HMAC-SHA256 using full 32-byte key
 	hmacKey := make([]byte, SecretSize)

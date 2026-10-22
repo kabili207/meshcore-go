@@ -291,3 +291,23 @@ func TestRoomCLI_Stats(t *testing.T) {
 		t.Errorf("stats-radio = %q, want unsupported", got)
 	}
 }
+
+// Firmware v1.18 deprecates turning repeat on for a room server; turning it off
+// and reading it still work.
+func TestRoomCLI_RepeatDeprecated(t *testing.T) {
+	h := newTestHarness(t)
+	h.router.SetForwardPackets(true)
+
+	for _, tc := range []struct{ cmd, want string }{
+		{"get repeat", "on"},
+		{"set repeat on", "ERR - repeat now deprecated"},
+		{"set repeat off", "OK"},
+		{"get repeat", "off"},
+		{"set repeat on", "ERR - repeat now deprecated"},
+		{"get repeat", "off"},
+	} {
+		if got := h.server.executeCLI(tc.cmd); got != tc.want {
+			t.Errorf("%q = %q, want %q", tc.cmd, got, tc.want)
+		}
+	}
+}

@@ -63,8 +63,10 @@ func (r *Router) ResolveReplyScope(origPkt *codec.Packet) TransportKey {
 	requestWasUnscopedFlood := false
 
 	if origPkt != nil {
-		switch origPkt.RouteType() {
-		case codec.RouteTypeTransportFlood:
+		switch {
+		case origPkt.IsFlood() && isUnscoped(origPkt):
+			requestWasUnscopedFlood = true
+		case origPkt.RouteType() == codec.RouteTypeTransportFlood:
 			// Resolve the code back to a region we hold a key for. The code is
 			// an HMAC over the request's own payload, so this must be done
 			// against the original packet. A code matching no region leaves the
@@ -73,8 +75,6 @@ func (r *Router) ResolveReplyScope(origPkt *codec.Packet) TransportKey {
 				requestScope = key
 				requestScopeKnown = true
 			}
-		case codec.RouteTypeFlood:
-			requestWasUnscopedFlood = true
 		}
 	}
 

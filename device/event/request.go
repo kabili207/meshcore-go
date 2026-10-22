@@ -76,6 +76,13 @@ type LoginResponse struct {
 	FirmwareVerLevel uint8
 }
 
+// LoginFailed fires when a server with a pending login answers with anything
+// other than a successful login. The embedded Event's From field is the
+// server.
+type LoginFailed struct {
+	Event
+}
+
 // TelemetryResponse fires when a peer answers a SendTelemetryReq. The embedded
 // Event's From field is the responding peer.
 type TelemetryResponse struct {
@@ -84,6 +91,34 @@ type TelemetryResponse struct {
 	// Data is the CayenneLPP-encoded telemetry payload. Decoding is the
 	// application's responsibility.
 	Data []byte
+}
+
+// BinaryResponse fires when a peer answers a SendBinaryReq. The embedded
+// Event's From field is the responding peer.
+type BinaryResponse struct {
+	Event
+
+	// Tag is the request tag SendBinaryReq returned.
+	Tag uint32
+
+	// Data is the response body after the tag, possibly followed by AES
+	// padding.
+	Data []byte
+}
+
+// UnhandledResponse fires on a companion node for a RESPONSE that matches no
+// pending login, status, telemetry or binary request. Sensor push telemetry
+// arrives this way. Firmware v1.18 forwards these to the app as
+// PUSH_CODE_BINARY_RESPONSE.
+type UnhandledResponse struct {
+	Event
+
+	// Tag is the response's leading 4 bytes. For sensor pushes it is the
+	// subscription's push_tag.
+	Tag uint32
+
+	// Content is the response body after the tag.
+	Content []byte
 }
 
 // StatusResponse fires when a device-status reply (from SendStatusReq) is

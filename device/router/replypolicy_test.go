@@ -127,8 +127,9 @@ func TestResolveReplyScope_NilPacket(t *testing.T) {
 
 // The end-to-end property: a reply scoped to a mirrored request carries a
 // transport code the originating region can match, so it is forwarded rather
-// than dropped.
-func TestSendFloodReply_CarriesMatchingScope(t *testing.T) {
+// than dropped. BaseNode resolves the scope when the request arrives and sends
+// the reply with SendFloodWithKey.
+func TestReplyScope_CarriesMatchingScope(t *testing.T) {
 	rm := NewRegionMap(nil)
 	// Regions deny flood by default; clear the flag so FindMatch will accept it.
 	rm.PutRegion("#alpha", 0, 1).Flags &^= RegionDenyFlood
@@ -138,7 +139,7 @@ func TestSendFloodReply_CarriesMatchingScope(t *testing.T) {
 
 	req := scopedRequest(alpha)
 	reply := codec.NewPacket(codec.PayloadTypeResponse, codec.RouteTypeFlood, []byte{0xAA, 0xBB})
-	r.SendFloodReply(reply, req)
+	r.SendFloodWithKey(reply, r.ResolveReplyScope(req))
 
 	if reply.RouteType() != codec.RouteTypeTransportFlood {
 		t.Fatalf("reply route type = %d, want TransportFlood", reply.RouteType())

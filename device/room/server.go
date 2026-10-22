@@ -10,7 +10,6 @@ package room
 
 import (
 	"context"
-	"crypto/ed25519"
 	"log/slog"
 	"sync"
 
@@ -26,8 +25,7 @@ import (
 // ServerConfig configures a room Server.
 type ServerConfig struct {
 	// Identity
-	PrivateKey ed25519.PrivateKey
-	PublicKey  [32]byte
+	PublicKey [32]byte
 
 	// Clock for timestamps
 	Clock *clock.Clock

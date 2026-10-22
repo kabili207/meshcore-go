@@ -9,6 +9,7 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/ack"
+	"github.com/kabili207/meshcore-go/device/cli"
 )
 
 // SendOption configures optional behavior for SendText.
@@ -21,6 +22,11 @@ type sendOptions struct {
 	onTimeout  func()
 	maxChunks  int
 	chunkDelay time.Duration
+
+	// Set by SendCLIReply: hold the message in the send queue, and stamp it
+	// with cli.ReplyTimestamp against the command's timestamp.
+	delay     time.Duration
+	replyToTS *uint32
 }
 
 func defaultSendOptions() sendOptions {
@@ -109,8 +115,17 @@ func (n *CompanionNode) sendTextChunk(to core.MeshCoreID, message string, o send
 		return fmt.Errorf("get shared secret for %s: %w", to, err)
 	}
 
+	ts := n.clk.GetCurrentTime()
+	if o.txtType == codec.TxtTypeCLI || o.txtType == codec.TxtTypeCLICommand {
+		// Admin nodes treat a repeated timestamp as a retry and don't reply, so
+		// two commands in the same second would lose the second reply.
+		ts = n.clk.GetCurrentTimeUnique()
+	}
+	if o.replyToTS != nil {
+		ts = cli.ReplyTimestamp(ts, *o.replyToTS)
+	}
 	plaintext := codec.BuildTxtMsgContent(
-		n.clk.GetCurrentTime(),
+		ts,
 		o.txtType,
 		o.attempt,
 		message,
@@ -128,9 +143,9 @@ func (n *CompanionNode) sendTextChunk(to core.MeshCoreID, message string, o send
 
 	ct := n.base.contacts.GetByPubKey(to)
 	if ct != nil && ct.HasDirectPath() {
-		n.base.Router.SendDirect(pkt, ct.OutPath)
+		n.base.Router.SendDirectPath(pkt, ct.OutPathLen, ct.OutPath, o.delay)
 	} else {
-		n.base.Router.SendFloodScoped(pkt)
+		n.base.Router.SendFloodScopedDelayed(pkt, o.delay)
 	}
 
 	// Track ACK if callbacks are provided
@@ -152,6 +167,18 @@ func (n *CompanionNode) sendTextChunk(to core.MeshCoreID, message string, o send
 		"type", codec.TxtTypeName(o.txtType))
 
 	return nil
+}
+
+// SendCLIReply answers a remote CLI command (TXT_TYPE_CLI_COMMAND) with its
+// reply as TXT_TYPE_CLI, the way firmware's onCLICommandRecv does. The reply
+// waits cli.ReplyDelay in the send queue, and its timestamp never matches the
+// command's (see cli.ReplyTimestamp). The router must be started for the delay
+// to apply.
+func (n *CompanionNode) SendCLIReply(to core.MeshCoreID, text string, commandTS uint32) error {
+	return n.SendText(context.Background(), to, text, WithTxtType(codec.TxtTypeCLI), func(o *sendOptions) {
+		o.delay = cli.ReplyDelay
+		o.replyToTS = &commandTS
+	})
 }
 
 // splitMessage breaks a message into chunks that fit within the DM size limit.

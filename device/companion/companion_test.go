@@ -27,12 +27,37 @@ type fakeNode struct {
 	pk       [32]byte
 	clk      *clock.Clock
 	contacts contact.ContactStore
+	channels [][]byte // registered channel keys
 }
 
 func (f *fakeNode) PublicKey() [32]byte            { return f.pk }
 func (f *fakeNode) Contacts() contact.ContactStore { return f.contacts }
 func (f *fakeNode) Clock() *clock.Clock            { return f.clk }
-func (f *fakeNode) AddChannel([]byte) uint8        { return 0 }
+
+func (f *fakeNode) AddChannel(key []byte) uint8 {
+	if !f.hasChannel(key) {
+		f.channels = append(f.channels, append([]byte(nil), key...))
+	}
+	return crypto.ComputeChannelHash(key)
+}
+
+func (f *fakeNode) RemoveChannel(key []byte) {
+	for i, k := range f.channels {
+		if bytes.Equal(k, key) {
+			f.channels = append(f.channels[:i], f.channels[i+1:]...)
+			return
+		}
+	}
+}
+
+func (f *fakeNode) hasChannel(key []byte) bool {
+	for _, k := range f.channels {
+		if bytes.Equal(k, key) {
+			return true
+		}
+	}
+	return false
+}
 
 // stubStore is a small in-memory ContactStore for tests, backed by a slice.
 type stubStore struct{ list []*contact.ContactInfo }
@@ -450,7 +475,7 @@ func TestIncomingChannelDrain(t *testing.T) {
 	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
 
 	publicHash := crypto.ComputeChannelHash(crypto.DefaultChannelKey)
-	handler(&event.GroupTextReceived{Event: event.Event{}, ChannelHash: publicHash, Message: "hey"})
+	handler(&event.GroupTextReceived{ChannelHash: publicHash, ChannelKey: crypto.DefaultChannelKey, Message: "hey"})
 
 	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
 	if resp[0][0] != serial.RespCodeChannelMsgRecv {
@@ -469,8 +494,8 @@ func TestIncomingChannelUnknownDropped(t *testing.T) {
 	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
 	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
 
-	badHash := crypto.ComputeChannelHash(crypto.DefaultChannelKey) + 1
-	handler(&event.GroupTextReceived{Event: event.Event{}, ChannelHash: badHash, Message: "x"})
+	unknown := bytes.Repeat([]byte{0x5A}, 16)
+	handler(&event.GroupTextReceived{ChannelHash: crypto.ComputeChannelHash(unknown), ChannelKey: unknown, Message: "x"})
 
 	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
 	if resp[0][0] != serial.RespCodeNoMoreMessages {
@@ -684,6 +709,153 @@ func TestSetChannelRoundtrip(t *testing.T) {
 	}
 	if !bytes.Equal(resp[0][34:50], secret) {
 		t.Error("channel 1 secret mismatch")
+	}
+}
+
+// setChannelCmd builds a CMD_SET_CHANNEL frame. Apps delete a channel by sending
+// an empty name and an all-zero secret.
+func setChannelCmd(idx uint8, name string, secret []byte) []byte {
+	payload := make([]byte, 2+32, 2+32+16)
+	payload[0], payload[1] = serial.CmdSetChannel, idx
+	copy(payload[2:], name)
+	return cmd(append(payload, secret...)...)
+}
+
+var zeroSecret = make([]byte, 16)
+
+func TestSetChannelDeleteUnregistersKey(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+	team := bytes.Repeat([]byte{0xAB}, 16)
+
+	collectResponses(t, s, setChannelCmd(1, "Team", team))
+	if !node.hasChannel(team) {
+		t.Fatal("configured channel key was not registered")
+	}
+
+	resp := collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
+	if resp[0][0] != serial.RespCodeOK {
+		t.Fatalf("delete channel: expected OK, got %v", resp[0])
+	}
+	if node.hasChannel(team) {
+		t.Error("deleted channel's key is still registered")
+	}
+	if node.hasChannel(zeroSecret) {
+		t.Error("deleting a channel registered the all-zero key")
+	}
+}
+
+func TestSetChannelOverwriteUnregistersOldKey(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+	oldKey := bytes.Repeat([]byte{0xAB}, 16)
+	newKey := bytes.Repeat([]byte{0xCD}, 16)
+
+	collectResponses(t, s, setChannelCmd(1, "Old", oldKey))
+	collectResponses(t, s, setChannelCmd(1, "New", newKey))
+
+	if node.hasChannel(oldKey) {
+		t.Error("overwritten channel's key is still registered")
+	}
+	if !node.hasChannel(newKey) {
+		t.Error("new channel key was not registered")
+	}
+}
+
+func TestSetChannelDeleteKeepsKeySharedWithOtherSlot(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+	key := bytes.Repeat([]byte{0xAB}, 16)
+
+	collectResponses(t, s, setChannelCmd(1, "A", key))
+	collectResponses(t, s, setChannelCmd(2, "B", key))
+	collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
+
+	if !node.hasChannel(key) {
+		t.Error("key still used by slot 2 was unregistered")
+	}
+}
+
+func TestSetChannelEmptyNameNotRegistered(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node})
+	key := bytes.Repeat([]byte{0xAB}, 16)
+
+	collectResponses(t, s, setChannelCmd(1, "", key))
+	if node.hasChannel(key) {
+		t.Error("slot with an empty name registered its key")
+	}
+}
+
+// A deleted slot holds an all-zero secret. It must not claim messages from
+// nodes transmitting with an unset (zero) key.
+func TestIncomingNullKeyChannelDropped(t *testing.T) {
+	var handler func(any)
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
+
+	collectResponses(t, s, setChannelCmd(1, "Team", bytes.Repeat([]byte{0xAB}, 16)))
+	collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
+
+	handler(&event.GroupTextReceived{ChannelHash: crypto.ComputeChannelHash(zeroSecret), ChannelKey: zeroSecret, Message: "x"})
+	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
+	if resp[0][0] != serial.RespCodeNoMoreMessages {
+		t.Errorf("null-key message was delivered to a deleted slot: %v", resp[0])
+	}
+}
+
+func TestSendChannelMsgDeletedSlotNotFound(t *testing.T) {
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	sent := false
+	s := NewServer(Config{
+		Node:        node,
+		SendChannel: func(context.Context, []byte, string) error { sent = true; return nil },
+	})
+
+	collectResponses(t, s, setChannelCmd(1, "", zeroSecret))
+	resp := collectResponses(t, s, cmd(serial.CmdSendChannelTxtMsg, 0, 1, 0, 0, 0, 0, 'h', 'i'))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeNotFound {
+		t.Errorf("expected NotFound, got %v", resp[0])
+	}
+	if sent {
+		t.Error("sent a channel message with the all-zero key")
+	}
+}
+
+// collidingKey returns a 16-byte key with the same channel hash as key.
+func collidingKey(t *testing.T, key []byte) []byte {
+	t.Helper()
+	target := crypto.ComputeChannelHash(key)
+	k := make([]byte, 16)
+	for i := uint32(1); i != 0; i++ {
+		binary.LittleEndian.PutUint32(k, i)
+		if crypto.ComputeChannelHash(k) == target && !bytes.Equal(k, key) {
+			return k
+		}
+	}
+	t.Fatal("no colliding key found")
+	return nil
+}
+
+// Two channels can share a 1-byte hash. A message must land on the slot whose
+// key decrypted it, not the first slot with a matching hash.
+func TestIncomingChannelHashCollision(t *testing.T) {
+	var handler func(any)
+	node := &fakeNode{clk: clock.New(), contacts: &stubStore{}}
+	s := NewServer(Config{Node: node, Events: func(h func(any)) { handler = h }})
+
+	keyA := bytes.Repeat([]byte{0xAB}, 16)
+	keyB := collidingKey(t, keyA)
+	collectResponses(t, s, setChannelCmd(1, "A", keyA))
+	collectResponses(t, s, setChannelCmd(2, "B", keyB))
+
+	handler(&event.GroupTextReceived{ChannelHash: crypto.ComputeChannelHash(keyB), ChannelKey: keyB, Message: "on B"})
+	resp := collectResponses(t, s, cmd(serial.CmdSyncNextMessage))
+	if resp[0][0] != serial.RespCodeChannelMsgRecv {
+		t.Fatalf("expected ChannelMsgRecv, got %v", resp[0])
+	}
+	if resp[0][1] != 2 {
+		t.Errorf("channel index = %d, want 2 (the slot holding the decrypting key)", resp[0][1])
 	}
 }
 
@@ -999,6 +1171,59 @@ func TestCliSendZeroAck(t *testing.T) {
 	}
 }
 
+// Firmware v1.18 accepts TXT_TYPE_CLI_COMMAND (3) from the app and sends it like
+// type 1: no ACK tracking, expected_ack 0.
+func TestCliCommandSendZeroAck(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x11
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	var gotType uint8
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendDM: func(_ context.Context, _ core.MeshCoreID, _ string, txtType, _ uint8, onAck func()) (bool, error) {
+			gotType = txtType
+			if onAck != nil {
+				t.Error("CLI command send should not register an ACK callback")
+			}
+			return false, nil
+		},
+	})
+	payload := append([]byte{serial.CmdSendTxtMsg, serial.TxtTypeCLICommand, 0, 0, 0, 0, 0}, id[:6]...)
+	payload = append(payload, []byte("get role")...)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent {
+		t.Fatalf("expected SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 0 {
+		t.Errorf("expected_ack should be 0, got %d", binary.LittleEndian.Uint32(resp[0][2:6]))
+	}
+	if gotType != serial.TxtTypeCLICommand {
+		t.Errorf("txtType = %d, want CLI command (3)", gotType)
+	}
+}
+
+// Firmware only lets the app send plain, CLI data and CLI command text.
+func TestSendTxtMsgUnsupportedType(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x11
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendDM: func(context.Context, core.MeshCoreID, string, uint8, uint8, func()) (bool, error) {
+			t.Error("unsupported text type was sent")
+			return false, nil
+		},
+	})
+	for _, txtType := range []uint8{serial.TxtTypeSigned, 4} {
+		payload := append([]byte{serial.CmdSendTxtMsg, txtType, 0, 0, 0, 0, 0}, id[:6]...)
+		payload = append(payload, 'x')
+		resp := collectResponses(t, s, cmd(payload...))
+		if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeUnsupportedCmd {
+			t.Errorf("txt type %d: expected UnsupportedCmd, got %v", txtType, resp[0])
+		}
+	}
+}
+
 func TestSendStatusReq(t *testing.T) {
 	var id core.MeshCoreID
 	id[0] = 0x22
@@ -1201,5 +1426,158 @@ func TestTraceDataPush(t *testing.T) {
 	}
 	if !bytes.Equal(f[12:14], []byte{0xAA, 0xBB}) || int8(f[14]) != 5 || int8(f[15]) != -3 || int8(f[16]) != 7 {
 		t.Errorf("hashes/snrs/lastSnr wrong: %x", f[12:])
+	}
+}
+
+func TestSendBinaryReq(t *testing.T) {
+	var id core.MeshCoreID
+	id[0] = 0x33
+	store := &stubStore{list: []*contact.ContactInfo{{ID: id, OutPathLen: 0xFF}}}
+	var gotTo core.MeshCoreID
+	var gotData []byte
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: store},
+		SendBinaryReq: func(_ context.Context, to core.MeshCoreID, data []byte) (uint32, bool, error) {
+			gotTo, gotData = to, data
+			return 0x01020304, true, nil
+		},
+	})
+
+	// [50][pubkey 32][request data]
+	payload := append(append([]byte{serial.CmdSendBinaryReq}, id[:]...), 0x06, 0x00, 0x05)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent || resp[0][1] != serial.SentTypeFlood {
+		t.Fatalf("expected flood SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 0x01020304 {
+		t.Errorf("SENT tag = %08x, want the request tag", binary.LittleEndian.Uint32(resp[0][2:6]))
+	}
+	if gotTo != id || !bytes.Equal(gotData, []byte{0x06, 0x00, 0x05}) {
+		t.Errorf("SendBinaryReq got to=%x data=%x", gotTo[:4], gotData)
+	}
+}
+
+func TestSendBinaryReqErrors(t *testing.T) {
+	var known, unknown core.MeshCoreID
+	known[0], unknown[0] = 0x33, 0x44
+	store := &stubStore{list: []*contact.ContactInfo{{ID: known, OutPathLen: 0xFF}}}
+	send := func(context.Context, core.MeshCoreID, []byte) (uint32, bool, error) { return 1, false, nil }
+
+	for _, tc := range []struct {
+		name    string
+		cfgSend func(context.Context, core.MeshCoreID, []byte) (uint32, bool, error)
+		payload []byte
+		wantErr uint8
+	}{
+		{"no callback", nil, append(append([]byte{serial.CmdSendBinaryReq}, known[:]...), 1), serial.ErrCodeUnsupportedCmd},
+		{"unknown contact", send, append(append([]byte{serial.CmdSendBinaryReq}, unknown[:]...), 1), serial.ErrCodeNotFound},
+		{"no request data", send, append([]byte{serial.CmdSendBinaryReq}, known[:]...), serial.ErrCodeIllegalArg},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewServer(Config{Node: &fakeNode{clk: clock.New(), contacts: store}, SendBinaryReq: tc.cfgSend})
+			resp := collectResponses(t, s, cmd(tc.payload...))
+			if resp[0][0] != serial.RespCodeErr || resp[0][1] != tc.wantErr {
+				t.Errorf("expected error %d, got %v", tc.wantErr, resp[0])
+			}
+		})
+	}
+}
+
+// Matched binary responses and unmatched ones (sensor pushes) both reach the
+// app as PUSH_CODE_BINARY_RESPONSE: [code][reserved][tag u32][body].
+func TestBinaryResponsePush(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		evt  func(tag uint32, body []byte) any
+	}{
+		{"matched", func(tag uint32, body []byte) any { return &event.BinaryResponse{Tag: tag, Data: body} }},
+		{"unhandled", func(tag uint32, body []byte) any { return &event.UnhandledResponse{Tag: tag, Content: body} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var handler func(any)
+			s := NewServer(Config{
+				Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+				Events: func(h func(any)) { handler = h },
+			})
+			var out bytes.Buffer
+			s.addSession(&session{srv: s, w: &out, ctx: context.Background()})
+
+			handler(tc.evt(0xA1B2C3D4, []byte{0x01, 0x02}))
+
+			frames := decodeFrames(&out)
+			want := []byte{serial.PushCodeBinaryResponse, 0, 0xD4, 0xC3, 0xB2, 0xA1, 0x01, 0x02}
+			if len(frames) != 1 || !bytes.Equal(frames[0], want) {
+				t.Errorf("got %x, want %x", frames, want)
+			}
+		})
+	}
+}
+
+func TestLoginFailedPush(t *testing.T) {
+	var handler func(any)
+	s := NewServer(Config{
+		Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+		Events: func(h func(any)) { handler = h },
+	})
+	var out bytes.Buffer
+	s.addSession(&session{srv: s, w: &out, ctx: context.Background()})
+
+	var from core.MeshCoreID
+	copy(from[:], []byte{1, 2, 3, 4, 5, 6, 7})
+	handler(&event.LoginFailed{Event: event.Event{From: from}})
+
+	frames := decodeFrames(&out)
+	want := []byte{serial.PushCodeLoginFail, 0, 1, 2, 3, 4, 5, 6}
+	if len(frames) != 1 || !bytes.Equal(frames[0], want) {
+		t.Errorf("got %x, want %x", frames, want)
+	}
+}
+
+func TestSendAnonReq(t *testing.T) {
+	var to core.MeshCoreID
+	to[0] = 0x55
+	var gotTo core.MeshCoreID
+	var gotData []byte
+	s := NewServer(Config{
+		Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}}, // not a contact
+		SendAnonReq: func(_ context.Context, id core.MeshCoreID, data []byte) (uint32, bool, error) {
+			gotTo, gotData = id, data
+			return 0x0A0B0C0D, false, nil
+		},
+	})
+	payload := append(append([]byte{serial.CmdSendAnonReq}, to[:]...), 0x07, 0x00)
+	resp := collectResponses(t, s, cmd(payload...))
+	if resp[0][0] != serial.RespCodeSent || resp[0][1] != serial.SentTypeDirect {
+		t.Fatalf("expected direct SENT, got %v", resp[0])
+	}
+	if binary.LittleEndian.Uint32(resp[0][2:6]) != 0x0A0B0C0D {
+		t.Errorf("SENT tag = %08x", binary.LittleEndian.Uint32(resp[0][2:6]))
+	}
+	if gotTo != to || !bytes.Equal(gotData, []byte{0x07, 0x00}) {
+		t.Errorf("SendAnonReq got to=%x data=%x", gotTo[:2], gotData)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		cfg     Config
+		payload []byte
+		wantErr uint8
+	}{
+		{"no callback", Config{Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}}}, payload, serial.ErrCodeUnsupportedCmd},
+		{"no request data", Config{Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+			SendAnonReq: func(context.Context, core.MeshCoreID, []byte) (uint32, bool, error) { return 1, false, nil }},
+			append([]byte{serial.CmdSendAnonReq}, to[:]...), serial.ErrCodeIllegalArg},
+		{"send fails", Config{Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+			SendAnonReq: func(context.Context, core.MeshCoreID, []byte) (uint32, bool, error) {
+				return 0, false, errors.New("full")
+			}},
+			payload, serial.ErrCodeTableFull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := collectResponses(t, NewServer(tc.cfg), cmd(tc.payload...))
+			if resp[0][0] != serial.RespCodeErr || resp[0][1] != tc.wantErr {
+				t.Errorf("expected error %d, got %v", tc.wantErr, resp[0])
+			}
+		})
 	}
 }

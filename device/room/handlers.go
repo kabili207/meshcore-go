@@ -8,13 +8,15 @@ import (
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/acl"
+	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/router"
 	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
 // HandleLogin processes a login attempt from a decrypted AnonRequestReceived
-// event. This is the event-based equivalent of handleAnonReq.
+// event.
 func (s *Server) HandleLogin(evt *event.AnonRequestReceived) {
 	if len(evt.Plaintext) < loginDataMinSize {
 		s.log.Debug("anon req too short", "len", len(evt.Plaintext))
@@ -117,7 +119,6 @@ func (s *Server) sendLoginResponseEvent(reply event.ReplyContext, recipientID co
 }
 
 // HandleTextMessage processes a decrypted text message event from a client.
-// This is the event-based equivalent of handleTextMessage.
 func (s *Server) HandleTextMessage(evt *event.TextMessageReceived) {
 	senderID := evt.From
 
@@ -176,16 +177,16 @@ func (s *Server) HandleTextMessage(evt *event.TextMessageReceived) {
 		// Note: ACK is already sent by BaseNode's auto-ACK for TxtTypePlain.
 		// The room server does NOT need to send ACK separately.
 
-	case codec.TxtTypeCLI:
+	case codec.TxtTypeCLI, codec.TxtTypeCLICommand:
 		if !client.IsAdmin() {
 			return
 		}
-		s.handleCLICommandEvent(evt.Reply, senderID, evt.Message)
+		s.handleCLICommandEvent(evt.Reply, senderID, evt.Message, evt.Timestamp)
 	}
 }
 
 // handleCLICommandEvent processes a CLI command and sends the reply via the event-based sender.
-func (s *Server) handleCLICommandEvent(reply event.ReplyContext, senderID core.MeshCoreID, cmd string) {
+func (s *Server) handleCLICommandEvent(reply event.ReplyContext, senderID core.MeshCoreID, cmd string, cmdTS uint32) {
 	// Strip optional companion radio prefix
 	prefix := ""
 	if len(cmd) > 4 && cmd[2] == '|' {
@@ -202,8 +203,11 @@ func (s *Server) handleCLICommandEvent(reply event.ReplyContext, senderID core.M
 		return
 	}
 
-	nowTS := s.cfg.Clock.GetCurrentTime()
+	nowTS := cli.ReplyTimestamp(s.cfg.Clock.GetCurrentTimeUnique(), cmdTS)
 	content := codec.BuildTxtMsgContent(nowTS, codec.TxtTypeCLI, 0, prefix+replyText, nil)
+	// Firmware's room server answers CLI with the plain response delay; only the
+	// repeater uses the longer cli.ReplyDelay.
+	reply.Delay = router.ServerResponseDelay
 
 	if s.sender != nil {
 		if err := s.sender.SendReply(reply, senderID, codec.PayloadTypeTxtMsg, content); err != nil {
@@ -314,6 +318,19 @@ func (s *Server) handleGetTelemetryEvent(reply event.ReplyContext, tag uint32, c
 		s.sender.SendReply(reply, senderID, codec.PayloadTypeResponse, resp)
 	}
 }
+
+const (
+	// aclEntrySize is the wire size of one ACL entry in GET_ACCESS_LIST responses:
+	// pubkey_prefix(6) + permissions(1).
+	aclEntrySize = 7
+
+	// aclPrefixSize is the number of public key bytes included per ACL entry.
+	aclPrefixSize = 6
+
+	// maxReplySize is the maximum plaintext response size (firmware: sizeof(reply_data)).
+	// The firmware uses a 60-byte buffer: tag(4) + up to 56 bytes of data.
+	maxReplySize = 60
+)
 
 // handleGetAccessListEvent handles GET_ACCESS_LIST using the event-based sender.
 func (s *Server) handleGetAccessListEvent(reply event.ReplyContext, tag uint32, client *ClientInfo, senderID core.MeshCoreID, requestData []byte) {

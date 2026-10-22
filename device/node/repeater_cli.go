@@ -19,7 +19,7 @@ import (
 // and replies with the result. Non-admin senders and non-CLI text are ignored
 // (firmware only accepts CLI from admin clients and sends no ACK).
 func (n *RepeaterNode) handleCLIMessage(evt *event.TextMessageReceived) {
-	if evt.TxtType != codec.TxtTypeCLI {
+	if evt.TxtType != codec.TxtTypeCLI && evt.TxtType != codec.TxtTypeCLICommand {
 		return
 	}
 	client := n.acl.GetClient(evt.From)
@@ -41,8 +41,11 @@ func (n *RepeaterNode) handleCLIMessage(evt *event.TextMessageReceived) {
 	if reply == "" {
 		return
 	}
-	content := codec.BuildTxtMsgContent(n.base.Clock().GetCurrentTime(), codec.TxtTypeCLI, 0, prefix+reply, nil)
-	if err := n.base.SendReply(evt.Reply, evt.From, codec.PayloadTypeTxtMsg, content); err != nil {
+	ts := cli.ReplyTimestamp(n.base.Clock().GetCurrentTimeUnique(), evt.Timestamp)
+	content := codec.BuildTxtMsgContent(ts, codec.TxtTypeCLI, 0, prefix+reply, nil)
+	rc := evt.Reply
+	rc.Delay = cli.ReplyDelay
+	if err := n.base.SendReply(rc, evt.From, codec.PayloadTypeTxtMsg, content); err != nil {
 		n.log.Warn("failed to send CLI reply", "error", err)
 	}
 }

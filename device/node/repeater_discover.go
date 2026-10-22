@@ -37,9 +37,16 @@ func (n *RepeaterNode) handleControl(pkt *codec.Packet) {
 
 // handleDiscoverReq answers a NODE_DISCOVER_REQ that asks for repeaters, subject
 // to the discover rate limit, with a zero-hop response carrying our identity and
-// the request's inbound SNR.
+// the request's inbound SNR. Like firmware, it stays silent when forwarding is
+// off or when both advert intervals are 0 (isHiddenNode).
 func (n *RepeaterNode) handleDiscoverReq(pkt *codec.Packet, ctrl *codec.ControlPayload) {
+	if !n.base.Router.GetForwardPackets() {
+		return
+	}
 	if !n.discoverLimiter.allow(n.base.Clock().GetCurrentTime()) {
+		return
+	}
+	if n.advertSched.LocalInterval() == 0 && n.advertSched.FloodInterval() == 0 {
 		return
 	}
 	req, err := codec.ParseDiscoverReqFromControl(ctrl)

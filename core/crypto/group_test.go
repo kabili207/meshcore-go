@@ -2,6 +2,8 @@ package crypto
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"testing"
 )
 
@@ -123,6 +125,22 @@ func TestDecryptGroupMessageBadMAC(t *testing.T) {
 	_, err = DecryptGroupMessage(encrypted, DefaultChannelKey)
 	if err != ErrMACMismatch {
 		t.Errorf("DecryptGroupMessage() error = %v, want %v", err, ErrMACMismatch)
+	}
+}
+
+// The Public channel key is well known, so anyone can attach a valid MAC to a
+// ciphertext of any length. Unaligned lengths used to panic in the AES loop.
+func TestDecryptGroupMessageUnalignedCiphertext(t *testing.T) {
+	for _, n := range []int{1, 15, 17, 31, 33} {
+		ciphertext := make([]byte, n)
+		mac := hmac.New(sha256.New, append(append([]byte(nil), DefaultChannelKey...), make([]byte, 16)...))
+		mac.Write(ciphertext)
+		data := append(mac.Sum(nil)[:CipherMACSize], ciphertext...)
+
+		_, err := DecryptGroupMessage(data, DefaultChannelKey)
+		if err != ErrUnalignedCiphertext {
+			t.Errorf("ciphertext len %d: error = %v, want %v", n, err, ErrUnalignedCiphertext)
+		}
 	}
 }
 

@@ -6,8 +6,8 @@ import (
 	"github.com/kabili207/meshcore-go/core"
 )
 
-// DefaultMaxClients is the default client-store capacity (firmware MAX_CLIENTS = 20).
-const DefaultMaxClients = 20
+// DefaultMaxClients is the default client-store capacity (firmware MAX_CLIENTS = 32).
+const DefaultMaxClients = 32
 
 var _ Store = (*MemoryStore)(nil)
 

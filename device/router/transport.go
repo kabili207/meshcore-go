@@ -52,6 +52,20 @@ func (k TransportKey) CalcTransportCode(pkt *codec.Packet) uint16 {
 	return code
 }
 
+// isUnscoped reports whether pkt carries no region scope: it has no transport
+// codes, or transport code 0, which CalcTransportCode never produces.
+//
+// Firmware v1.18 (PR #3568, "treat transport code 0 the same as un-scoped")
+// applies this to region matching and reply scope, but still forwards a code 0
+// TRANSPORT_FLOOD past a wildcard that denies flooding and past
+// flood.max.unscoped. That lets anyone slip un-scoped traffic past repeaters
+// set up to block it, so we apply both limits here. REVISIT if upstream gives
+// code 0 a meaning of its own: the "home region" notes on transport_codes[1]
+// and the transport-code reuse in PR #3630 suggest it might.
+func isUnscoped(pkt *codec.Packet) bool {
+	return !pkt.HasTransportCodes() || pkt.TransportCodes[0] == 0
+}
+
 // IsNull returns true if the key is all zeros.
 func (k TransportKey) IsNull() bool {
 	for _, b := range k {
