@@ -165,6 +165,11 @@ contain breaking changes; those are called out explicitly below.
   public channel, so one packet was enough. Such ciphertext is now rejected with
   `crypto.ErrUnalignedCiphertext`, matching firmware v1.18.
 
+- **Signed messages were ACKed with a bare ACK.** A companion ACKing a room
+  post now does what firmware does, as it already did for plain messages: it
+  piggybacks the ACK on a path return when the post arrived by flood, and sends
+  the multi-ack copies otherwise.
+
 - **Path returns carried the path backwards.** A path return tells the
   requester its route to us, which is the flood path exactly as received:
   relays append their hash, and a direct route is consumed from the front.

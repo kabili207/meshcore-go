@@ -131,28 +131,14 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 			// (hash + tail attempt byte + random), keyed by the sender's pubkey.
 			ackData := codec.TrimTxtMsgContent(plaintext, content)
 			ackHash := crypto.ComputeAckHash(ackData, ct.ID[:])
-			ackPayload := codec.BuildPlainTextAck(ackHash, plaintext, ackData)
-
-			if reply.HasFloodPath() {
-				// Flood-received: send one packet that both tells the sender the
-				// return path and carries the ACK (firmware createPathReturn with
-				// an embedded PAYLOAD_TYPE_ACK). Without this the sender never
-				// learns the direct path and keeps flooding.
-				ackReply := reply
-				ackReply.Delay = router.TxtAckDelay
-				if err := b.sendPathReturn(ackReply, ct.ID, codec.PayloadTypeAck, ackPayload); err != nil {
-					b.log.Debug("failed to send path-return ack", "error", err)
-				}
-			} else {
-				b.sendTextAck(ct, ackPayload)
-			}
+			b.ackTextMessage(reply, ct, codec.BuildPlainTextAck(ackHash, plaintext, ackData))
 		case codec.TxtTypeSigned:
 			// Signed messages (e.g. a room server pushing a post) are ACKed with
 			// a 4-byte hash keyed by the receiver's own pubkey, over the signed
 			// content.
 			ackData := codec.TrimTxtMsgContent(plaintext, content)
 			ackHash := crypto.ComputeAckHash(ackData, b.id[:])
-			b.sendAckPayload(ct.ID, codec.BuildAckPayload(ackHash), router.TxtAckDelay)
+			b.ackTextMessage(reply, ct, codec.BuildAckPayload(ackHash))
 		}
 	}
 
@@ -165,6 +151,22 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 		Timestamp:          content.Timestamp,
 		SenderPubKeyPrefix: content.SenderPubKeyPrefix,
 	})
+}
+
+// ackTextMessage ACKs a received text message the way firmware's
+// onPeerDataRecv does for plain and signed text. A flooded message gets one
+// PATH return that both carries the ACK and tells the sender its route to us.
+// Without it the sender never learns the path and keeps flooding. Otherwise
+// the ACK goes out through sendTextAck.
+func (b *BaseNode) ackTextMessage(reply event.ReplyContext, ct *contact.ContactInfo, ackPayload []byte) {
+	if !reply.HasFloodPath() {
+		b.sendTextAck(ct, ackPayload)
+		return
+	}
+	reply.Delay = router.TxtAckDelay
+	if err := b.sendPathReturn(reply, ct.ID, codec.PayloadTypeAck, ackPayload); err != nil {
+		b.log.Debug("failed to send path-return ack", "error", err)
+	}
 }
 
 // handleAck processes an ACK packet: resolve in tracker, then emit AckReceived.
