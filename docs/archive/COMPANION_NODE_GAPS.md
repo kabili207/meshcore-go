@@ -14,7 +14,7 @@
 > out here.
 >
 > For current status see `docs/FEATURE_PARITY.md`; for remaining work see
-> `docs/PARITY_PLAN.md`.
+> `docs/TODO.md`, which carries item 6 as something to verify.
 
 This document catalogs everything that had to be built from scratch, worked around,
 or manually reimplemented when building a companion node (NodeTypeChat) using

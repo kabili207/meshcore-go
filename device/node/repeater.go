@@ -95,6 +95,11 @@ type RepeaterConfig struct {
 	// AdvertFloodInterval is the flood advert interval in hours. Default: 47.
 	AdvertFloodInterval uint8
 
+	// Radio is the LoRa setup of the mesh this repeater relays for. It sizes
+	// the random relay delays (txdelay, direct.txdelay) by packet airtime.
+	// Default: router.DefaultRadioParams.
+	Radio router.RadioParams
+
 	// EventHandlers registered during construction.
 	EventHandlers []event.Handler
 
@@ -159,6 +164,10 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 	// Firmware v1.18 repeater default. A persisted loop.detect, applied with
 	// LoadConfig, overrides it.
 	base.Router.SetLoopDetect(router.LoopDetectMinimal)
+	// Firmware's repeater relay delay defaults (txdelay, direct.txdelay).
+	base.Router.SetTxDelayFactor(0.5)
+	base.Router.SetDirectTxDelayFactor(0.3)
+	base.Router.SetRadio(cfg.Radio)
 
 	// Build advert scheduler. Keep the AppData pointer so CLI "set name/lat/lon"
 	// takes effect on subsequent adverts.

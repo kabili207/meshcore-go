@@ -35,12 +35,17 @@ this package does not implement BLE.
   store.
 - **Device state**: device time, battery/storage, channels (`GET_CHANNEL` /
   `SET_CHANNEL`, with the built-in Public channel at index 0 and configurable
-  128-bit channels at other indices), default flood scope, `GET_STATS`
+  128-bit channels at other indices), `GET_STATS`
   (core/radio/packets, wired to the router's packet counters), radio config
   (`SET_RADIO_PARAMS` / `SET_RADIO_TX_POWER` update the params reported in
   `SELF_INFO`, `GET`/`SET_TUNING_PARAMS`), auto-add config
   (`GET`/`SET_AUTOADD_CONFIG`), custom vars and advert-path reads, and the
-  flood-scope / advert-name / config setters.
+  advert name and location setters.
+- **Self advert**: `SEND_SELF_ADVERT`, zero-hop or flooded in the default
+  scope, through the `SendSelfAdvert` callback. The location is included when
+  the app shares it (`SET_OTHER_PARAMS`).
+- **Flood scope**: `SET_FLOOD_SCOPE_KEY` and `SET`/`GET_DEFAULT_FLOOD_SCOPE`,
+  resolved as firmware does and handed to the `SetFloodScope` callback.
 - **Direct messaging**: `SEND_TXT_MSG` → `SENT` with a `SEND_CONFIRMED` push on
   delivery, and incoming DMs delivered through the `MSG_WAITING` →
   `SYNC_NEXT_MESSAGE` queue as `CONTACT_MSG_RECV`.

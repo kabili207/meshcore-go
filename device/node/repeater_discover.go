@@ -64,7 +64,9 @@ func (n *RepeaterNode) handleDiscoverReq(pkt *codec.Packet, ctrl *codec.ControlP
 	}
 	respData := codec.BuildNodeDiscoverRespPayload(codec.NodeTypeRepeater, pkt.SNR, req.Tag, key)
 	resp := codec.NewPacket(codec.PayloadTypeControl, codec.RouteTypeDirect, respData)
-	n.base.Router.SendZeroHop(resp)
+	// Several repeaters answer the same request, so firmware widens the relay
+	// delay four times over.
+	n.base.Router.SendZeroHopDelayed(resp, 4*n.base.Router.RetransmitDelay(resp))
 }
 
 // handleDiscoverResp records a repeater that answered our own discover request.

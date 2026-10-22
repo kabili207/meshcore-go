@@ -1,6 +1,6 @@
 # Observer MQTT format
 
-meshcore-go has no observer publishing yet. An observer reports every packet it
+meshcore-go has no observer publishing of its own yet. An observer reports every packet it
 hears, plus a periodic status message, to an MQTT broker as JSON, for dashboards
 and analyzers. (`transport/mqtt` is something else: a packet bridge that carries
 mesh traffic between nodes.)
@@ -175,32 +175,22 @@ alternative.
 
 ### meshcore-room-server `observer/`
 
-This publisher was modeled on meshcoretomqtt, which explains `debug_flags`, the
-`offline` will and the `duration` key. Several fields have drifted even from that.
+Sends the recommended format above, on the `chore/meshcore-go-1.18` branch
+(`9aba263`, `e8f44c6`, `e673411`). The fixes there:
 
-Misparsed by a consumer today:
+- SNR (sent at 4× scale), RSSI and score (always `"0"`) are now omitted.
+- Times are UTC with an offset, so CoreScope no longer flags clock skew, and the
+  date is day first.
+- `path` is a hex array, so meshcore-hub counts hops correctly.
+- Status drops `radio: "MQTT"` and the always-zero stats, and sends
+  `repeat: "off"`.
+- The `offline` will is gone, because meshcore-hub read it as a sign of life.
+- An enabled observer needs a real IATA code, not `XXX`.
 
-| Field | Now | Problem | Fix |
-|---|---|---|---|
-| `SNR` | `%d` of `pkt.SNR`, the raw x4 value | both consumers store it as dB, 4x too high | dB, or omit |
-| `SNR` with no RF data | `"0"` | stored as a real 0 dB | omit |
-| `RSSI`, `score` | always `"0"` | CoreScope stores real zeros | omit |
-| `timestamp` | local time, no offset | CoreScope flags clock skew on non-UTC hosts | UTC with offset |
-| `path` | `"1->2->3"`, decimal per byte | meshcore-hub counts 7 hops for a 3-hop path | hex array |
-| `raw` | `null` when empty | dropped / undecodable | always send the frame |
-| `radio` | `"MQTT"` | CoreScope shows "MQTT MHz" | configured `freq,bw,sf,cr`, or omit |
-| `rx_air_secs`, `recv_errors` | hardcoded 0 | stored as real zeros | omit |
-| `repeat` | missing | CoreScope assumes the node relays | `"off"` for a room server |
-| Will | `offline` | meshcore-hub marks the observer as seen | drop it |
-
-Cosmetic only: the date is month first, `client_version` is `meshcore-go`,
-`duration` is `null`, and the JWT signature is lowercase hex. Nobody reads these.
-The tx path works: the router reports every send to the packet monitor as
-`PacketSourceLocal` (`device/router/router.go:264, 279`), and `classify` keeps
-only our own adverts.
-
-If the publisher moves into meshcore-go (below), the room server can switch to it
-rather than fixing these in place.
+Version strings follow the other uploaders: `firmware_version` is
+`v1.18.0-meshcore-go-<commit>`, and `client_version` is
+`meshcore-room-server/<version>`, where the version comes from a build flag or
+the stamped commit.
 
 ### mesh-mqtt-server
 
@@ -225,6 +215,9 @@ Two gaps:
 No observer code. It would get observer support from the meshcore-go package.
 
 ## Porting to meshcore-go
+
+Tracked in [TODO.md](TODO.md). The corrected room-server publisher is the
+starting point.
 
 Move the publisher into meshcore-go (for example `observer/`) using the format
 above, so the room server, mesh-bridge and the examples share one

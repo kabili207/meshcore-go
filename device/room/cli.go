@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/router"
 )
@@ -73,6 +74,9 @@ func (s *Server) buildCLI() *cli.Dispatcher {
 	d.Key("name", cli.ConfigKey{
 		Get: func() string { return s.cfg.Name },
 		Set: func(v string) error {
+			if !codec.IsValidAdvertName(v) {
+				return cli.ErrBadNameChars
+			}
 			s.cfg.Name = v
 			if s.cfg.AppData != nil {
 				s.cfg.AppData.Name = v

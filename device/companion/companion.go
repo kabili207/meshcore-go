@@ -39,6 +39,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/device/router"
 )
 
 // Node is the subset of a meshcore-go node the companion server reads. A
@@ -162,6 +163,19 @@ type Config struct {
 	// not store others' advert signatures).
 	ExportSelf func() []byte
 
+	// SetFloodScope, if set, is called with the scope the app's flood traffic
+	// should use whenever SET_FLOOD_SCOPE_KEY or SET_DEFAULT_FLOOD_SCOPE changes
+	// it. A null key means unscoped. CompanionNode.SetSendScope fits. Without
+	// it, the scope commands are remembered but have no effect on sends.
+	SetFloodScope func(key router.TransportKey)
+
+	// SendSelfAdvert, if set, sends this node's advert for CMD_SEND_SELF_ADVERT:
+	// zero-hop, or flooded with scope (the default flood scope, null for
+	// unscoped). appData holds the current name and role, plus the location
+	// when the app shares it. CompanionNode.SendSelfAdvert fits. Without it,
+	// CMD_SEND_SELF_ADVERT returns an error.
+	SendSelfAdvert func(ctx context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error
+
 	// Logger for connection events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -199,6 +213,8 @@ type Server struct {
 	sendTrace     func(ctx context.Context, tag, authCode uint32, flags uint8, path []byte) error
 	stats         func() Stats
 	exportSelf    func() []byte
+	setFloodScope func(key router.TransportKey)
+	sendAdvert    func(ctx context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error
 	startTime     time.Time
 	log           *slog.Logger
 
@@ -214,6 +230,9 @@ type Server struct {
 	radioCR       uint8
 	txPower       uint8
 	rxDelay       uint32
+	advLat        int32 // advertised location, degrees x1e6
+	advLon        int32
+	advLocPolicy  uint8 // CMD_SET_OTHER_PARAMS; nonzero shares the location in adverts
 	airtimeFactor uint32
 
 	tzOffset int8 // "tz.offset" CLI setting, hours from UTC
@@ -222,6 +241,13 @@ type Server struct {
 
 	autoaddConfig  uint8 // CMD_SET/GET_AUTOADD_CONFIG
 	autoaddMaxHops uint8
+
+	// Flood scope state, as firmware's send_scope, send_unscoped and
+	// default_scope. See floodScopeLocked.
+	scopeOverride    router.TransportKey
+	scopeUnscoped    bool
+	defaultScopeName string
+	defaultScopeKey  router.TransportKey
 
 	ackCounter atomic.Uint32 // per-send correlation token for SENT/SEND_CONFIRMED
 
@@ -319,6 +345,8 @@ func NewServer(cfg Config) *Server {
 		sendTrace:     cfg.SendTrace,
 		stats:         cfg.Stats,
 		exportSelf:    cfg.ExportSelf,
+		setFloodScope: cfg.SetFloodScope,
+		sendAdvert:    cfg.SendSelfAdvert,
 		startTime:     time.Now(),
 		log:           log.WithGroup("companion"),
 		name:          id.Name,
@@ -328,6 +356,8 @@ func NewServer(cfg Config) *Server {
 		radioSF:       id.RadioSF,
 		radioCR:       id.RadioCR,
 		txPower:       id.TxPower,
+		advLat:        degToFixed(id.Lat),
+		advLon:        degToFixed(id.Lon),
 		sessions:      make(map[*session]struct{}),
 		cliReplyDelay: cli.ReplyDelay,
 	}
@@ -517,8 +547,16 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 			s.id.BatteryMilliVolts, s.id.StorageUsedKB, s.id.StorageTotalKB))
 
 	case serial.CmdGetDefaultFloodScope:
-		// No default flood scope configured; report unset.
-		return ss.send(serial.EncodeDefaultFloodScope("", nil))
+		s.mu.RLock()
+		name, key := s.defaultScopeName, s.defaultScopeKey
+		s.mu.RUnlock()
+		return ss.send(serial.EncodeDefaultFloodScope(name, key[:]))
+
+	case serial.CmdSetFloodScopeKey:
+		return s.setFloodScopeKey(ss, payload)
+
+	case serial.CmdSetDefaultFloodScope:
+		return s.setDefaultFloodScope(ss, payload)
 
 	case serial.CmdGetStats:
 		return s.getStats(ss, payload)
@@ -560,12 +598,19 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 		return ss.send(serial.EncodeOK())
 
 	case serial.CmdSendSelfAdvert:
-		// The node's own scheduler advertises on its interval; acknowledge.
-		return ss.send(serial.EncodeOK())
+		return s.sendSelfAdvert(ss, payload)
 
-	case serial.CmdSetAdvertLatLon, serial.CmdSetOtherParams,
-		serial.CmdSetFloodScopeKey, serial.CmdSetDefaultFloodScope:
-		// Device-parameter writes we accept but do not persist on a virtual node.
+	case serial.CmdSetAdvertLatLon:
+		return s.setAdvertLatLon(ss, payload)
+
+	case serial.CmdSetOtherParams:
+		// Only the advert location policy (byte 3) is kept. The other
+		// preferences are accepted and dropped.
+		if len(payload) >= 4 {
+			s.mu.Lock()
+			s.advLocPolicy = payload[3]
+			s.mu.Unlock()
+		}
 		return ss.send(serial.EncodeOK())
 
 	default:
@@ -583,20 +628,126 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 func (s *Server) selfInfo() []byte {
 	s.mu.RLock()
 	si := &serial.SelfInfo{
-		AdvType:    s.id.AdvType,
-		TxPower:    s.txPower,
-		MaxTxPower: s.id.MaxTxPower,
-		PublicKey:  s.node.PublicKey(),
-		AdvLat:     degToFixed(s.id.Lat),
-		AdvLon:     degToFixed(s.id.Lon),
-		RadioFreq:  s.radioFreqKHz,
-		RadioBw:    s.radioBwHz,
-		RadioSf:    s.radioSF,
-		RadioCr:    s.radioCR,
-		Name:       s.name,
+		AdvType:      s.id.AdvType,
+		TxPower:      s.txPower,
+		MaxTxPower:   s.id.MaxTxPower,
+		PublicKey:    s.node.PublicKey(),
+		AdvLat:       s.advLat,
+		AdvLon:       s.advLon,
+		AdvLocPolicy: s.advLocPolicy,
+		RadioFreq:    s.radioFreqKHz,
+		RadioBw:      s.radioBwHz,
+		RadioSf:      s.radioSF,
+		RadioCr:      s.radioCR,
+		Name:         s.name,
 	}
 	s.mu.RUnlock()
 	return si.Encode()
+}
+
+// sendSelfAdvert answers CMD_SEND_SELF_ADVERT. Byte 1 set to 1 floods the
+// advert in the default scope; otherwise it goes out zero-hop.
+func (s *Server) sendSelfAdvert(ss *session, payload []byte) error {
+	if s.sendAdvert == nil {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	flood := len(payload) >= 2 && payload[1] == 1
+
+	s.mu.RLock()
+	ad := &codec.AdvertAppData{NodeType: s.id.AdvType, Name: s.name}
+	if s.advLocPolicy != 0 {
+		lat, lon := float64(s.advLat)/1e6, float64(s.advLon)/1e6
+		ad.Lat, ad.Lon = &lat, &lon
+	}
+	scope := s.defaultScopeKey
+	s.mu.RUnlock()
+
+	if err := s.sendAdvert(ss.ctx, ad, flood, scope); err != nil {
+		s.log.Warn("self advert failed", "error", err)
+		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
+	}
+	return ss.send(serial.EncodeOK())
+}
+
+// setAdvertLatLon answers CMD_SET_ADVERT_LATLON: [lat int32][lon int32] in
+// degrees x1e6, optionally followed by an altitude that firmware reserves for
+// future use.
+func (s *Server) setAdvertLatLon(ss *session, payload []byte) error {
+	if len(payload) < 9 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	lat := int32(binary.LittleEndian.Uint32(payload[1:5]))
+	lon := int32(binary.LittleEndian.Uint32(payload[5:9]))
+	if lat < -90e6 || lat > 90e6 || lon < -180e6 || lon > 180e6 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	}
+	s.mu.Lock()
+	s.advLat, s.advLon = lat, lon
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
+}
+
+// setFloodScopeKey answers CMD_SET_FLOOD_SCOPE_KEY. Byte 1 is 0 to set (with a
+// 16-byte key) or clear (without one) the override scope, or 1 to send
+// unscoped. Firmware handles no other value.
+func (s *Server) setFloodScopeKey(ss *session, payload []byte) error {
+	if len(payload) < 2 || payload[1] > 1 {
+		return ss.send(serial.EncodeErr(serial.ErrCodeUnsupportedCmd))
+	}
+	s.mu.Lock()
+	if payload[1] == 1 {
+		s.scopeUnscoped = true
+	} else {
+		s.scopeOverride = router.TransportKey{}
+		if len(payload) >= 2+16 {
+			copy(s.scopeOverride[:], payload[2:18])
+		}
+		s.scopeUnscoped = false
+	}
+	s.applyFloodScopeLocked()
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
+}
+
+// setDefaultFloodScope answers CMD_SET_DEFAULT_FLOOD_SCOPE: [name 31][key 16]
+// sets the default scope, and a shorter frame clears it. The name must be
+// NUL-terminated within its field and not empty.
+func (s *Server) setDefaultFloodScope(ss *session, payload []byte) error {
+	var name string
+	var key router.TransportKey
+	if len(payload) >= 1+31+16 {
+		n := bytes.IndexByte(payload[1:32], 0)
+		if n <= 0 {
+			return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+		}
+		name = string(payload[1 : 1+n])
+		copy(key[:], payload[32:48])
+	}
+	s.mu.Lock()
+	s.defaultScopeName, s.defaultScopeKey = name, key
+	s.applyFloodScopeLocked()
+	s.mu.Unlock()
+	return ss.send(serial.EncodeOK())
+}
+
+// floodScopeLocked returns the scope for the app's flood traffic, following
+// firmware's MyMesh::sendFloodScoped: unscoped if the app asked for it, else
+// the override, else the default scope.
+func (s *Server) floodScopeLocked() router.TransportKey {
+	switch {
+	case s.scopeUnscoped:
+		return router.TransportKey{}
+	case !s.scopeOverride.IsNull():
+		return s.scopeOverride
+	default:
+		return s.defaultScopeKey
+	}
+}
+
+func (s *Server) applyFloodScopeLocked() {
+	if s.setFloodScope != nil {
+		s.setFloodScope(s.floodScopeLocked())
+	}
 }
 
 // setName updates the advertised name reported in subsequent SELF_INFO replies.

@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
+	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/core/crypto"
 	"github.com/kabili207/meshcore-go/device/cli"
 	"github.com/kabili207/meshcore-go/device/router"
+	"github.com/kabili207/meshcore-go/transport"
 )
 
 // Without the opt-in callbacks, clock-setting and reboot report unsupported.
@@ -240,5 +242,53 @@ func TestRepeater_LoopDetectDefaultsToMinimal(t *testing.T) {
 	}
 	if got := n.base.Router.GetLoopDetect(); got != router.LoopDetectOff {
 		t.Errorf("loop detect after loading off = %d, want off", got)
+	}
+}
+
+// Firmware's repeater defaults to txdelay 0.5 and direct.txdelay 0.3, both
+// settable from 0 to 2.
+func TestRepeater_RelayDelayDefaultsAndCLI(t *testing.T) {
+	n, _ := newTestRepeater(t, "adminpw", "guestpw")
+	for key, want := range map[string]string{"txdelay": "0.5", "direct.txdelay": "0.3"} {
+		if got, _ := n.GetConfig(key); got != want {
+			t.Errorf("default %s = %q, want %q", key, got, want)
+		}
+	}
+	if got := n.ExecuteCLI("set txdelay 1.25"); got != "OK" {
+		t.Errorf("set txdelay 1.25 = %q", got)
+	}
+	if f := n.base.Router.GetTxDelayFactor(); f != 1.25 {
+		t.Errorf("router txdelay = %v, want 1.25", f)
+	}
+	for _, cmd := range []string{"set txdelay 3", "set direct.txdelay -1", "set direct.txdelay nope"} {
+		if got := n.ExecuteCLI(cmd); got != "Error: must be 0-2" {
+			t.Errorf("%q = %q, want Error: must be 0-2", cmd, got)
+		}
+	}
+}
+
+// multi.acks also governs the copies sent ahead of a forwarded ACK.
+func TestRepeater_MultiAcksReachesRouter(t *testing.T) {
+	n, ct := newTestRepeater(t, "adminpw", "guestpw")
+	n.base.Router.SetDirectTxDelayFactor(0) // relay at once, so the test needn't wait
+	if got := n.ExecuteCLI("set multi.acks 1"); got != "OK" {
+		t.Fatalf("set multi.acks 1 = %q", got)
+	}
+
+	self := n.base.ID()
+	ack := &codec.Packet{
+		Header:  (codec.PayloadTypeAck << codec.PHTypeShift) | codec.RouteTypeDirect,
+		PathLen: 2,
+		Path:    []byte{self[0], 0x99},
+		Payload: codec.BuildAckPayload(0x01020304),
+	}
+	n.base.Router.HandlePacket(ack, transport.PacketSourceMQTT)
+
+	var types []uint8
+	for _, p := range ct.snapshot() {
+		types = append(types, p.PayloadType())
+	}
+	if len(types) != 2 || types[0] != codec.PayloadTypeMultipart || types[1] != codec.PayloadTypeAck {
+		t.Errorf("forwarded %v, want the multipart copy then the ACK", types)
 	}
 }

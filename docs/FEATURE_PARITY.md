@@ -1,7 +1,8 @@
 # meshcore-go Feature Parity vs Official Firmware
 
 Compares meshcore-go against the official MeshCore C++ firmware, role by role, plus
-the shared base layer.
+the shared base layer. This file describes what works and where Go differs on
+purpose. Gaps are tracked in one place, [TODO.md](TODO.md).
 
 ## Version baseline
 
@@ -10,9 +11,8 @@ the shared base layer.
   `~/Projects/PlatformIO/MeshCore`. See `UPGRADE_1.17.md` and `UPGRADE_1.18.md`
   for each release's delta and what it required.
 
-Everything below was re-verified against the code on 2026-08-16. Claims here have a
-history of drifting behind the implementation; when in doubt, trust the code and fix
-this file.
+Reviewed against the code on 2026-10-22. Claims here have a history of drifting
+behind the implementation; when in doubt, trust the code and fix this file.
 
 Two structural facts shape everything:
 
@@ -29,10 +29,10 @@ Two structural facts shape everything:
 | Role | Firmware | Go | Overall parity |
 |---|---|---|---|
 | Companion / chat | `companion_radio` | `device/node/companion.go` + `device/companion` | Strong, both mesh and frame protocol |
-| Repeater | `simple_repeater` | `device/node/repeater.go` | Strong; no airtime/CSMA |
+| Repeater | `simple_repeater` | `device/node/repeater.go` | Strong; relay delays, no airtime budget/CSMA |
 | Room server | `simple_room_server` | `device/room/*` | Strong |
 | Sensor | `simple_sensor` | none | Wire format + telemetry only |
-| KISS modem | `kiss_modem` | none | Missing entirely |
+| KISS modem | `kiss_modem` | none | Not started |
 | Secure chat demo | `simple_secure_chat` | (companion covers it) | Reference app, not a gap |
 
 ---
@@ -46,20 +46,27 @@ append/remove/reverse, region map including the exact `/regions2` binary format,
 transport keys (Go implements the private-region keystore that firmware stubs as a
 hardware TODO), trace forwarding, multipart ACK handling, packet dedup.
 
-**Biggest gap: airtime / duty-cycle / CSMA is entirely missing.** Firmware's
-`Dispatcher` runs a token-bucket airtime budget (~50% duty cycle, 1-hour window),
-defers TX when budget is low, does CAD/channel sensing, applies SNR-weighted RX flood
-delay (better-SNR nodes rebroadcast first), and randomizes flood rebroadcast jitter.
-Go has none of it: the router drains its queue every 10ms
-(`DefaultDrainInterval`) and almost always sends with `delay=0`. The queue does
-support per-packet delay (`device/router/queue.go`) and uses it for
-`PathSendDelay` (300ms on PATH packets), so the mechanism exists and is simply never
-applied to airtime. Excusable for a transport-attached node, but any Go node fronting
-real RF would misbehave (collisions, storms, duty-cycle non-compliance).
+**Timing.** The send delays that keep neighbors from talking over each other match
+firmware:
 
-**Reply scoping** now matches firmware v1.17: a flooded reply mirrors the request's
-transport scope, falls back to `Config.DefaultReplyScope`, and only goes un-scoped
-when the requester did (`device/router/replypolicy.go`).
+- **Relays:** a random wait of up to 5 × airtime × `txdelay` (0.5) for floods and
+  `direct.txdelay` (0.3) for direct packets. Airtime is estimated by a port of
+  RadioLib's time-on-air formula, from `RadioParams` (default 869.618,62.5,8,5).
+- **Forwarded ACKs:** the multi-ack copies go first, 300ms apart, and relayed
+  multi-acks wait for the copies still coming.
+- **Replies:** responses wait 300ms, CLI replies 600ms (300ms on the room server),
+  text ACKs 200ms.
+
+The airtime budget, CAD and the SNR-weighted receive delay are not implemented
+(see [TODO.md](TODO.md)), so a Go node fronting real RF has no duty-cycle limit.
+
+**Reply scoping** matches firmware: a flooded reply mirrors the request's transport
+scope, falls back to `Config.DefaultReplyScope`, and only goes un-scoped when the
+requester did (`device/router/replypolicy.go`). Anonymous requests are scoped the
+same way.
+
+**Paths** keep their own hash size when sent direct, and path returns carry the
+path as received, as firmware's do.
 
 **Tiered flood caps** (`MaxFloodHops` / `MaxUnscopedFloodHops` / `MaxAdvertFloodHops`,
 defaults 64/64/8) are a parity match as of v1.17, which added the same three tiers in
@@ -91,12 +98,9 @@ login + keep-alive to repeaters and room servers, telemetry and status requests
 (`SendTelemetryReq`, `SendStatusReq`), path reset / path discovery / trace initiation,
 auto-ACK piggyback and multi-acks.
 
-**Divergences:**
-- Go defaults `MaxContacts` to 32 (firmware 100), plus 8 anon slots, so 40 total.
-- `CMD_SEND_SELF_ADVERT` returns OK without actually sending an advert
-  (`device/companion/companion.go`). Recurring adverts correctly default to disabled
-  to match firmware, so a companion currently has no working way to advertise on
-  demand through the frame protocol.
+Also binary and anonymous requests (`SendBinaryReq`, `SendAnonReq`), unmatched
+responses such as sensor pushes reported as `UnhandledResponse`, login failures,
+and remote CLI from contacts with the remote-CLI flag (`SendCLIReply`).
 
 ### Frame protocol server (`device/companion`)
 
@@ -105,31 +109,15 @@ A phone app can connect to a Go node today. `ListenAndServe` runs a TCP listener
 `'>'`/`'<'` + uint16-LE-length format the firmware uses on USB serial and, as of
 v1.17, on Ethernet — so the same client code works against either.
 
-**Implemented:** 38 dispatch arms covering 41 `CMD_*` codes, an offline message queue
-drained by `CMD_SYNC_NEXT_MESSAGE`, and unsolicited pushes to connected sessions.
-Unknown opcodes return `ERR_CODE_UNSUPPORTED_CMD`. This includes the v1.18 companion
-CLI (`CMD_RUN_CLI_COMMAND`, also reachable over the mesh by contacts with the
-remote-CLI flag), `CMD_SEND_BINARY_REQ` and `CMD_SEND_ANON_REQ`, with replies and
-unmatched responses such as sensor pushes forwarded as `PUSH_CODE_BINARY_RESPONSE`,
-and login failures pushed as `PUSH_CODE_LOGIN_FAIL`.
+**Implemented:** 41 of the 59 `CMD_*` codes are dispatched, with an offline message
+queue drained by `CMD_SYNC_NEXT_MESSAGE` and unsolicited pushes to connected
+sessions. Unknown opcodes return `ERR_CODE_UNSUPPORTED_CMD`. This includes the v1.18
+companion CLI (`CMD_RUN_CLI_COMMAND`), `CMD_SEND_BINARY_REQ` and `CMD_SEND_ANON_REQ`,
+with replies and unmatched responses forwarded as `PUSH_CODE_BINARY_RESPONSE`, and
+login failures pushed as `PUSH_CODE_LOGIN_FAIL`.
 
-**Divergence worth fixing:** the offline queue is **unbounded**. Firmware uses a fixed
-16-slot ring. A Go node that never has an app connect will grow the queue without
-limit.
-
-**Not dispatched** (18 of 59 constants defined, no handler). Hardware-bound and N/A:
-`CmdReboot`, `CmdFactoryReset`, `CmdSetDevicePin`, `CmdGetAllowedRepeatFreq`. Real
-gaps, roughly in priority order:
-
-- `CmdSendChannelData`, `CmdSendControlData`, `CmdSendPathDiscoveryReq` — send paths
-  `BaseNode` already implements internally, just not reachable from a connected app
-- `CmdSetPathHashMode` — config the router supports but an app cannot set
-- `CmdLogout`, `CmdHasConnection` — session lifecycle
-- `CmdSignStart` / `CmdSignData` / `CmdSignFinish` — message-signing sessions
-- `CmdSendRawData`, `CmdSendRawPacket` — raw packet injection
-- `CmdSetCustomVar` — the getter is implemented, the setter is not
-- `CmdExportPrivateKey` / `CmdImportPrivateKey` — key portability; worth a deliberate
-  decision rather than a default, since it moves private keys over the wire
+`CMD_SET_OTHER_PARAMS` is only partly handled, and 14 of the undispatched codes
+are real gaps. Both are listed in [TODO.md](TODO.md).
 
 **N/A by design:** BLE transport itself (Go speaks the framing, not GATT), radio/tx/
 tuning/BLE-pin/GPS/buzzer prefs.
@@ -157,10 +145,10 @@ timestamps, node discovery (`repeater_discover.go`), and rate limiting
 `SetConfig` / `LoadConfig` round-trip node settings, and `ACLPersistence` persists the
 access list. Nothing is persisted unless the host app wires these up.
 
-**Missing:** airtime budget and CSMA backoff (see the shared-layer note).
-
-**Behavioral note:** the Go repeater sends a flood advert on boot
-(`advertSched.SendNow(true)`); firmware sends zero-hop.
+**Timing:** relays wait firmware's random delay, sized by `RepeaterConfig.Radio`
+and the `txdelay` / `direct.txdelay` CLI keys (defaults 0.5 / 0.3), and forwarded
+ACKs send their multi-ack copies first. Discovery responses wait four times the
+flood delay.
 
 ---
 
@@ -180,13 +168,12 @@ reproduces `BaseNode`'s packet-to-event conversion, since `device/room` cannot i
 `device/node`. If a room test passes while the real node misbehaves, suspect that shim
 first.
 
-**Still open:**
-- On-demand `advert` CLI command. `RoomNode` does build an advert scheduler and wire
-  interval hooks; only the CLI command binding is missing.
-- `setperm` cannot add a brand-new admin by pubkey — it searches existing clients and
-  returns `ERR: client not found`. The repeater has the same limitation.
-- `MemoryClientStore` defaults to RAM-only; persistence is opt-in via
-  `WithPersistence`.
+**Forwarding:** off by default, as in firmware. `set repeat on` replies
+`ERR - repeat now deprecated`, and `RoomConfig.ForwardPackets` is a deprecated
+opt-in.
+
+**Persistence:** `MemoryClientStore` is RAM-only unless built with
+`WithPersistence`.
 
 ---
 
@@ -202,8 +189,7 @@ parse, and both the room server and repeater answer `GET_TELEMETRY` via the shar
 `telemetry.Provider` (the host app populates a CayenneLPP encoder, gated by the
 firmware permission mask), using go-cayenne-lib.
 
-Still missing: the sensor node type itself, drivers, GPS, time-series storage
-(`ReqTypeGetMinMaxAvg = 0x04` is defined but handled nowhere), and alerts.
+The sensor node itself is not started; see [TODO.md](TODO.md).
 
 ---
 
@@ -211,21 +197,47 @@ Still missing: the sensor node type itself, drivers, GPS, time-series storage
 
 Firmware `KissModem` is a raw radio pipe: KISS TNC serial framing (FEND/FESC), raw
 packet in/out, a CSMA TX state machine, and a `SETHARDWARE` sub-protocol (~26
-crypto/radio ops). `grep` for kiss/tnc across the Go tree returns zero hits. The
-companion protocol's `CmdSendRawData` is unrelated (app-frame packet injection, not a
-KISS TNC).
+crypto/radio ops). There's no Go equivalent. The `feat/kiss-modem` branch works on
+the other end of that link, a KISS transport so a Go node can drive such a modem.
 
 ---
 
+## Deliberate differences
+
+Places where Go behaves differently from firmware on purpose. Each is recorded
+where it was decided.
+
+- **CLI reply style.** The repeater and room server CLI share Go's dispatcher, which
+  answers `get` with the bare value, `set` with `OK`, and errors as `Error: ...`.
+  Firmware answers `> value` and words errors per command. The companion CLI uses
+  firmware's exact strings, since apps parse them.
+- **Transport code 0** is treated as fully unscoped: the wildcard's deny flag and
+  the unscoped hop cap apply. Firmware applies neither. See
+  [UPGRADE_1.18.md](UPGRADE_1.18.md), item 4, and `isUnscoped` in
+  `device/router/transport.go`.
+- **Anonymous contacts** keep their learned path when a real advert replaces them,
+  and are left alone when the advert isn't auto-added. Firmware drops both. Our
+  repeaters and room servers route replies to logged-in clients through these
+  entries (`device/contact/helpers.go`).
+- **Region names** are copied byte-wise, not truncated on a UTF-8 boundary, matching
+  firmware's `RegionMap` (only advert names get UTF-8 truncation). See
+  [UPGRADE_1.17.md](UPGRADE_1.17.md), item 4.
+- **`MaxContacts` defaults to 32** (firmware 100), plus 8 anonymous slots.
+- **`CMD_SET_DEVICE_TIME` is ignored.** A transport-attached node keeps its host
+  clock.
+- **The room server forwards only on request.** `RoomConfig.ForwardPackets` still
+  works, though firmware no longer allows it.
+
 ## Bottom line
 
-- Wire protocol / crypto / codec: near-complete parity.
+- Wire protocol, crypto, codec, routing and timing of relays and replies: at
+  parity with v1.18.0.
 - Companion: both halves are real. The mesh engine is a solid DM/channel client, and
-  the frame-protocol server means a phone app can drive a Go node over TCP. Bound the
-  offline queue and make `CMD_SEND_SELF_ADVERT` actually advertise.
-- Repeater: good forwarder with a working admin/config/stats surface, rate limiting,
-  discovery, and opt-in persistence.
+  the frame-protocol server lets a phone app drive a Go node over TCP. The remaining
+  frame-protocol gaps are in [TODO.md](TODO.md).
+- Repeater: a full forwarder with firmware's relay delays, admin/config/stats,
+  rate limiting, discovery, and opt-in persistence.
 - Room server: functionally close to firmware, on a single dispatch path.
 - Sensor and KISS modem: not started.
-- Systemic: no airtime/duty-cycle/CSMA anywhere. This is the one gap that would matter
-  immediately if a LoRa radio transport were ever added.
+- Systemic: no airtime budget, duty-cycle limit or CSMA, which would matter if a
+  LoRa radio transport were ever added.

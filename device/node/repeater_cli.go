@@ -59,7 +59,13 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 	// --- Config keys ---
 	d.Key("name", cli.ConfigKey{
 		Get: func() string { return n.appData.Name },
-		Set: func(v string) error { n.appData.Name = v; return nil },
+		Set: func(v string) error {
+			if !codec.IsValidAdvertName(v) {
+				return cli.ErrBadNameChars
+			}
+			n.appData.Name = v
+			return nil
+		},
 	})
 	d.Key("lat", cli.ConfigKey{
 		Get: func() string { return formatCoord(n.appData.Lat) },
@@ -157,6 +163,8 @@ func (n *RepeaterNode) buildCLI() *cli.Dispatcher {
 			return nil
 		},
 	})
+	d.Key("txdelay", delayFactorKey(r.GetTxDelayFactor, r.SetTxDelayFactor))
+	d.Key("direct.txdelay", delayFactorKey(r.GetDirectTxDelayFactor, r.SetDirectTxDelayFactor))
 	d.Key("owner.info", cli.ConfigKey{
 		Get: func() string { return n.cfg.OwnerInfo },
 		Set: func(v string) error { n.cfg.OwnerInfo = v; return nil },
@@ -364,4 +372,20 @@ func matchesPrefix(full, prefix []byte) bool {
 		}
 	}
 	return true
+}
+
+// delayFactorKey is a txdelay-style CLI key: a factor from 0 to 2, shown the way
+// firmware prints floats.
+func delayFactorKey(get func() float64, set func(float64)) cli.ConfigKey {
+	return cli.ConfigKey{
+		Get: func() string { return cli.Ftoa(float32(get())) },
+		Set: func(v string) error {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil || f < 0 || f > 2 {
+				return errors.New("must be 0-2")
+			}
+			set(f)
+			return nil
+		},
+	}
 }

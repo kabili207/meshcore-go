@@ -73,6 +73,28 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **Self adverts on request.** `CMD_SEND_SELF_ADVERT` now sends an advert
+  through the new `Config.SendSelfAdvert` callback, zero-hop or, with byte 1
+  set to 1, flooded in the default scope, as firmware does. It carries the
+  current name, and the location when the app turned on location sharing
+  (byte 3 of `CMD_SET_OTHER_PARAMS`, now reported back in `SELF_INFO`). The
+  new `CompanionNode.SendSelfAdvert` fits the callback. Without the callback
+  the command now returns `ERR_CODE_UNSUPPORTED_CMD` instead of an OK that sent
+  nothing.
+
+- **The app can set the node's location.** `CMD_SET_ADVERT_LATLON` now updates
+  the coordinates `SELF_INFO` reports, and rejects ones outside ±90° / ±180°
+  with `ERR_CODE_ILLEGAL_ARG`, as firmware does. Before, it replied OK and
+  dropped them.
+
+- **Flood scope from the app.** The companion server now handles
+  `CMD_SET_FLOOD_SCOPE_KEY`, `CMD_SET_DEFAULT_FLOOD_SCOPE` and
+  `CMD_GET_DEFAULT_FLOOD_SCOPE` like firmware. The app's flood traffic goes
+  unscoped if the app asked for that, else to the override key, else to the
+  default scope. The new `Config.SetFloodScope` callback receives that scope
+  whenever it changes; `CompanionNode.SetSendScope` fits it. Before, both
+  setters replied OK and did nothing, and the getter always reported no scope.
+
 - **Login failures reach the app.** When a server with a pending login answers
   with anything but success, the companion node emits the new
   `event.LoginFailed`, and the companion server pushes `PUSH_CODE_LOGIN_FAIL`,
@@ -185,6 +207,33 @@ contain breaking changes; those are called out explicitly below.
   old behavior, load `loop.detect off` with `LoadConfig`.
 
 ### Fixed
+
+- **Changing a router's send scope raced with sends.** `SetSendScope` and
+  `ClearSendScope` wrote the scope while senders read it unlocked. Both now
+  hold the router's lock, so a companion app can change scope safely.
+
+- **Relays went out instantly.** Firmware's repeater waits a random 0 to
+  5 × airtime × factor before relaying, so neighbors relaying the same packet
+  don't transmit over each other. The router now does too, which matters once a
+  transport bridges to RF.
+  - Floods use `TxDelayFactor` (firmware `txdelay`). Direct packets use
+    `DirectTxDelayFactor` (`direct.txdelay`).
+  - Forwarded direct ACKs send their `ExtraAckTransmits` multipart copies
+    first, 300ms apart. A relayed multipart ACK waits for the copies still
+    coming.
+  - Repeater discovery responses wait 4× the flood delay.
+  - `NewRepeater` sets firmware's 0.5 / 0.3 factors, and the repeater CLI gains
+    `txdelay` and `direct.txdelay` (0 to 2).
+  - Airtime comes from `router.RadioParams.Airtime`, a port of RadioLib's
+    time-on-air formula. Set `RepeaterConfig.Radio` (or `router.Config.Radio`)
+    to the mesh's radio, which defaults to firmware's 869.618,62.5,8,5.
+  - Other roles keep a zero delay factor and relay as before.
+
+- **`set name` accepted characters firmware rejects.** The repeater and room
+  server now refuse names containing `[ ] \ : , ? *` with `Error: bad chars`,
+  as firmware's CommonCLI does (`cli.ErrBadNameChars`). A name like that,
+  persisted before this change, fails `LoadConfig` and keeps the configured
+  default.
 
 - **A crafted packet could crash any node.** Decryption panicked when the
   ciphertext wasn't a whole number of AES blocks. A sender can produce a valid MAC

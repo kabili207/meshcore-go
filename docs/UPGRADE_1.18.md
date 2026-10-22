@@ -4,6 +4,10 @@ Analysis of upstream `meshcore-dev/MeshCore` between `companion-v1.17.1` (the
 previous Go baseline) and `companion-v1.18.0` (`81dbae59`; the repeater and room
 server tags point at the same commit), and what it means for this repo.
 
+> This is a record of the 1.18 work. Everything in it is done, a documented
+> difference, or not applicable. Open work, including the sensor role from item
+> 9, is tracked in [TODO.md](TODO.md).
+
 The local firmware checkout at `~/Projects/PlatformIO/MeshCore` is still at
 `d9296435` (1.17.1). The 1.18.0 tags are fetched, so everything here was read from
 the tags without touching the working tree.
@@ -65,8 +69,8 @@ Ordered by priority.
 > `c9668ff` stops room servers forwarding by default, matching firmware's
 > `disable_fwd = 1`.
 >
-> Still open: item 9 (no Go sensor role). The 1.17 leftovers are done (see
-> the end of this file).
+> Follow-ups after the merge: firmware's relay delays, including the direct ACK
+> forwarding delay (`6df5aaed`), and `set name` validation.
 
 ### 1. Unaligned ciphertext panics `macThenDecrypt` (critical)
 
@@ -303,10 +307,6 @@ The sensor also gained a region map, `region load/save`, default and reply scope
 
 ## Explicitly not actionable
 
-- **Direct ACK forwarding delay** (`6df5aaed`). Forwarded direct ACKs now wait
-  `getDirectRetransmitDelay()` and extra ACKs are spaced 300ms apart. We forward with
-  zero delay (`router.go:616`) and never send the extra multi-ACK copies on
-  forward. Both fall under the airtime/CSMA gap in `FEATURE_PARITY.md`.
 - **`CommonRadioPrefs` refactor.** Radio CLI moved into its own helper that runs
   before the rest of CommonCLI. Reply strings are unchanged, and we implement only
   `path.hash.mode` and `multi.acks` from it.
@@ -341,14 +341,3 @@ Done:
   take the reserved anon slots, which firmware never allows.
 
 Still deliberate: `truncateName` in `device/router/region.go` stays byte-wise.
-
-## Suggested order
-
-1. Item 1 (crypto panic). Small, and it's a remote crash.
-2. Item 2 (channel delete).
-3. Item 3 (type 3 on repeater and room), item 7 (`MAX_CLIENTS`), item 8 gates and
-   defaults.
-4. Item 4 (transport code 0), after deciding on the wildcard-deny question.
-5. Item 6 (binary response push), together with `CmdSendBinaryReq`.
-6. Item 5 (companion CLI), then the version bump to 14.
-7. The 1.17 leftovers.

@@ -83,6 +83,7 @@ type CompanionNode struct {
 	base        *BaseNode
 	ackTracker  *ack.Tracker
 	advertSched *advert.Scheduler
+	privateKey  ed25519.PrivateKey
 	connections *connection.Manager
 	clk         *clock.Clock
 	log         *slog.Logger
@@ -184,6 +185,7 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 		base:        base,
 		ackTracker:  tracker,
 		advertSched: scheduler,
+		privateKey:  cfg.PrivateKey,
 		connections: connection.NewManager(connection.ManagerConfig{
 			KeepAliveInterval: keepAlive,
 			Logger:            logger,
@@ -256,6 +258,28 @@ func (n *CompanionNode) SetSendScope(key router.TransportKey) {
 // ClearSendScope reverts to unscoped flood sending.
 func (n *CompanionNode) ClearSendScope() {
 	n.base.Router.ClearSendScope()
+}
+
+// SendSelfAdvert sends this node's advert with the given app data, which may
+// differ from the configured name and location. It goes out zero-hop, or as a
+// flood scoped to scope (null for unscoped), like firmware's
+// CMD_SEND_SELF_ADVERT. The companion server's Config.SendSelfAdvert fits it.
+func (n *CompanionNode) SendSelfAdvert(appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error {
+	pkt, err := advert.BuildSelfAdvert(&advert.SelfAdvertConfig{
+		PrivateKey: n.privateKey,
+		PublicKey:  n.base.PublicKey(),
+		Clock:      n.clk,
+		AppData:    appData,
+	})
+	if err != nil {
+		return err
+	}
+	if flood {
+		n.base.Router.SendFloodWithKey(pkt, scope)
+	} else {
+		n.base.Router.SendZeroHop(pkt)
+	}
+	return nil
 }
 
 // AdvertScheduler returns the advert scheduler for manual control
