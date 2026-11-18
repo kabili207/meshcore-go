@@ -1,0 +1,26 @@
+services:
+  companion:
+    build:
+      context: ../..
+      dockerfile: examples/companion/Dockerfile
+    restart: unless-stopped
+    command:
+      - -name=${COMPANION_NAME:-meshcore-go}
+      # Pick a transport to put the node on the mesh.
+      # - -mqtt=tcp://broker:1883
+      # - -serial=/dev/ttyUSB0
+    # The companion protocol has no authentication, so keep it on loopback
+    # unless the network in front of it is trusted.
+    ports:
+      - 127.0.0.1:${COMPANION_PORT:-5000}:5000
+    volumes:
+      - companion-data:/data
+    # For -serial, pass the radio through and use the host's GID for the device
+    # (stat -c %g /dev/ttyUSB0).
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    # group_add:
+    #   - "${SERIAL_GID:-20}"
+
+volumes:
+  companion-data:

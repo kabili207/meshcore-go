@@ -1,0 +1,8 @@
+*
+!go.mod
+!go.sum
+!core/
+!device/
+!transport/
+!examples/
+**/*.key
