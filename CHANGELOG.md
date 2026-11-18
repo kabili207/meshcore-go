@@ -73,6 +73,10 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **`LOG_RX_DATA` for companion apps.** `companion.Server.MonitorPacket` plugs
+  into `Router.SetPacketMonitor` and sends each received packet to connected
+  apps, as firmware does. `examples/companion` turns it on.
+
 - **SQLite storage for companion nodes.** `device/store/sqlite` saves contacts,
   channels and settings to one database, committing each change as it happens.
   `companion.Config.Persistence` restores channels and settings at startup, and

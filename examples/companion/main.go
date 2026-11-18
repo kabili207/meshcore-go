@@ -233,6 +233,8 @@ func run() error {
 		Logger: slog.Default(),
 	})
 
+	comp.Base().Router.SetPacketMonitor(srv.MonitorPacket)
+
 	// Push PUSH_CODE_CONTACT_DELETED when the contact table evicts an entry, so
 	// the app's contact list stays in sync.
 	if mgr, ok := comp.Base().Contacts().(*contact.ContactManager); ok {

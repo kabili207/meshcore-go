@@ -324,6 +324,17 @@ func EncodeStatusResponse(pubKeyPrefix, statusBlob []byte) []byte {
 // tells the app to drain the queue with CMD_SYNC_NEXT_MESSAGE.
 func EncodeMsgWaiting() []byte { return []byte{PushCodeMsgWaiting} }
 
+// EncodeLogRxData builds a PUSH_CODE_LOG_RX_DATA payload: [code][snr i8]
+// [rssi i8][raw packet]. snr is in 0.25 dB units and rssi in dBm.
+func EncodeLogRxData(snr, rssi int8, raw []byte) []byte {
+	b := make([]byte, 3+len(raw))
+	b[0] = PushCodeLogRxData
+	b[1] = byte(snr)
+	b[2] = byte(rssi)
+	copy(b[3:], raw)
+	return b
+}
+
 // EncodeSendConfirmed builds a PUSH_CODE_SEND_CONFIRMED payload:
 // [code][ack_code u32][round_trip_ms u32]. ackCode must equal the expectedAck
 // reported in the matching RESP_CODE_SENT.

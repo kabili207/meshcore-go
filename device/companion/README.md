@@ -63,6 +63,10 @@ this package does not implement BLE.
   CayenneLPP telemetry (a self request replies immediately, empty on a node
   without sensors), and `SEND_TRACE_PATH` → `TRACE_DATA` runs a traceroute along
   a relay-hash path (per-hop SNRs).
+- **Packet log**: `MonitorPacket` sends every received packet as `LOG_RX_DATA`
+  when passed to `Router.SetPacketMonitor`. Apps use it for relay routes and
+  packet views. RSSI is reported as 0. A slow app misses frames rather than
+  holding up the receive path.
 - **Live contact updates**: `NEW_ADVERT` (a first-seen node, sent as the full
   contact frame) and `ADVERT` (a re-heard node) are pushed automatically from the
   node's advert events, so the app's contact list updates without a manual

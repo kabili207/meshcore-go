@@ -40,7 +40,12 @@ import (
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
+	"github.com/kabili207/meshcore-go/transport"
 )
+
+// maxQueuedRxLogs bounds the LOG_RX_DATA frames waiting for a slow app. Beyond
+// it new frames are dropped, since they are diagnostics.
+const maxQueuedRxLogs = 64
 
 // Node is the subset of a meshcore-go node the companion server reads. A
 // *node.BaseNode satisfies it, so callers pass companionNode.Base().
@@ -421,9 +426,13 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 // Serve runs the companion protocol over rw until the stream closes or ctx is
 // cancelled. Use it directly to serve a pty (the serial path) instead of TCP.
 func (s *Server) Serve(ctx context.Context, rw io.ReadWriter) error {
-	sess := &session{srv: s, w: rw, ctx: ctx}
+	sess := &session{srv: s, w: rw, ctx: ctx, rxLogWake: make(chan struct{}, 1)}
 	s.addSession(sess)
 	defer s.removeSession(sess)
+
+	done := make(chan struct{})
+	defer close(done)
+	go sess.writeRxLogs(done)
 
 	fr := serial.NewFrameReader(rw)
 	for {
@@ -457,6 +466,10 @@ type session struct {
 	ctx          context.Context
 	mu           sync.Mutex // serializes frame writes (loop replies and async pushes)
 	appTargetVer uint8
+
+	rxLogMu   sync.Mutex
+	rxLogs    [][]byte
+	rxLogWake chan struct{}
 }
 
 // send frames a payload as a device->app frame and writes it.
@@ -467,8 +480,65 @@ func (ss *session) send(payload []byte) error {
 	}
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	if err := ss.flushRxLogsLocked(); err != nil {
+		return err
+	}
 	_, err = ss.w.Write(frame)
 	return err
+}
+
+// queueRxLog queues a LOG_RX_DATA payload without blocking, because it is called
+// from the router's receive path. Writing is left to writeRxLogs.
+func (ss *session) queueRxLog(payload []byte) {
+	ss.rxLogMu.Lock()
+	queued := len(ss.rxLogs) < maxQueuedRxLogs
+	if queued {
+		ss.rxLogs = append(ss.rxLogs, payload)
+	}
+	ss.rxLogMu.Unlock()
+	if !queued {
+		return
+	}
+	select {
+	case ss.rxLogWake <- struct{}{}:
+	default:
+	}
+}
+
+func (ss *session) writeRxLogs(done <-chan struct{}) {
+	for {
+		select {
+		case <-done:
+			return
+		case <-ss.rxLogWake:
+			ss.mu.Lock()
+			err := ss.flushRxLogsLocked()
+			ss.mu.Unlock()
+			if err != nil {
+				ss.srv.log.Debug("rx log write failed", "error", err)
+			}
+		}
+	}
+}
+
+// flushRxLogsLocked writes queued LOG_RX_DATA frames. send calls it first because
+// apps match a message to the LOG_RX_DATA that came before it. Callers hold ss.mu.
+func (ss *session) flushRxLogsLocked() error {
+	ss.rxLogMu.Lock()
+	logs := ss.rxLogs
+	ss.rxLogs = nil
+	ss.rxLogMu.Unlock()
+
+	for _, payload := range logs {
+		frame, err := serial.EncodeFrame(serial.FrameNodeToApp, payload)
+		if err != nil {
+			return err
+		}
+		if _, err := ss.w.Write(frame); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dispatch routes one command frame to its handler.
@@ -1277,17 +1347,40 @@ func (s *Server) enqueue(qm queuedMessage) {
 // pushToSessions writes an unsolicited push frame to every connected app. Apps
 // that are not connected simply miss it, matching the firmware.
 func (s *Server) pushToSessions(payload []byte) {
+	for _, sess := range s.connectedSessions() {
+		if err := sess.send(payload); err != nil {
+			s.log.Debug("push failed", "error", err)
+		}
+	}
+}
+
+func (s *Server) connectedSessions() []*session {
 	s.msgMu.Lock()
+	defer s.msgMu.Unlock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
 		sessions = append(sessions, sess)
 	}
-	s.msgMu.Unlock()
+	return sessions
+}
 
+// MonitorPacket sends each received packet to connected apps as LOG_RX_DATA,
+// which they use for relay routes and packet logs. Pass it to
+// Router.SetPacketMonitor. RSSI is reported as 0 because packets don't carry it.
+func (s *Server) MonitorPacket(pkt *codec.Packet, src transport.PacketSource) {
+	if src == transport.PacketSourceLocal {
+		return
+	}
+	sessions := s.connectedSessions()
+	if len(sessions) == 0 {
+		return
+	}
+	payload := serial.EncodeLogRxData(pkt.SNR, 0, pkt.WriteTo())
+	if len(payload) > serial.MaxFrameSize {
+		return
+	}
 	for _, sess := range sessions {
-		if err := sess.send(payload); err != nil {
-			s.log.Debug("push failed", "error", err)
-		}
+		sess.queueRxLog(payload)
 	}
 }
 
