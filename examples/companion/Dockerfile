@@ -14,4 +14,4 @@ COPY --from=build /companion /companion
 # A new named volume inherits this owner, so the nonroot user can write the key.
 COPY --from=build --chown=nonroot:nonroot /data /data
 EXPOSE 5000
-ENTRYPOINT ["/companion", "-listen=0.0.0.0:5000", "-key=/data/companion.key", "-contacts=/data/contacts.json"]
+ENTRYPOINT ["/companion", "-listen=0.0.0.0:5000", "-key=/data/companion.key", "-db=/data/companion.db"]

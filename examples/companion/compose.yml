@@ -5,6 +5,7 @@ services:
       dockerfile: examples/companion/Dockerfile
     restart: unless-stopped
     command:
+      # Only used on first start. After that the saved name applies.
       - -name=${COMPANION_NAME:-meshcore-go}
       # Pick a transport to put the node on the mesh.
       # - -mqtt=tcp://broker:1883

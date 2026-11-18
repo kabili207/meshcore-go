@@ -247,7 +247,7 @@ func (m *ContactManager) persist(c *ContactInfo) {
 		return
 	}
 	if err := m.persistence.Save(c); err != nil {
-		m.log.Debug("failed to persist contact", "error", err)
+		m.log.Warn("failed to persist contact", "error", err)
 	}
 }
 
@@ -258,7 +258,7 @@ func (m *ContactManager) unpersist(id core.MeshCoreID) {
 		return
 	}
 	if err := m.persistence.Delete(id); err != nil {
-		m.log.Debug("failed to persist contact removal", "error", err)
+		m.log.Warn("failed to persist contact removal", "error", err)
 	}
 }
 

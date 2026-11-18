@@ -73,6 +73,11 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **SQLite storage for companion nodes.** `device/store/sqlite` saves contacts,
+  channels and settings to one database, committing each change as it happens.
+  `companion.Config.Persistence` restores channels and settings at startup, and
+  `examples/companion` uses this through its new `-db` flag.
+
 - **Self adverts on request.** `CMD_SEND_SELF_ADVERT` now sends an advert
   through the new `Config.SendSelfAdvert` callback, zero-hop or, with byte 1
   set to 1, flooded in the default scope, as firmware does. It carries the
@@ -175,6 +180,9 @@ contain breaking changes; those are called out explicitly below.
 
 ### Changed
 
+- **Contact routes are learned only from PATH packets**, as in firmware. Adverts
+  and other flooded packets no longer set or replace a contact's direct path.
+
 - **Firmware v1.18.0 is now the target.** The companion server reports
   `FIRMWARE_VER_CODE` 14 (was 13), which tells apps `CMD_RUN_CLI_COMMAND`
   exists. `cli.FirmwareVersion`, the `ver` reply for the repeater and room
@@ -208,9 +216,17 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **Companion apps now get real routing data for received messages.** Messages
+  report the packet's `path_len` and SNR instead of always `0xFF` and 0, and
+  channel messages carry the sender's timestamp through the new
+  `GroupTextReceived.SenderTimestamp`.
+
+- **`CMD_ADD_UPDATE_CONTACT` keeps multi-byte paths.** `ParseContact` read the
+  packed path length as a byte count.
+
 - **Persisted contacts now match the contact table.** Evicted contacts are
   deleted from the `ContactPersistence` backend instead of returning on restart,
-  and paths learned from flood and PATH packets are saved.
+  and paths learned from PATH packets are saved.
 
 - **`ContactManager.UpdateContact` no longer zeroes the path when passed a stored
   contact.** Updating an existing contact with `CMD_ADD_UPDATE_CONTACT` hit this.

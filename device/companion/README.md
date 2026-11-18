@@ -135,6 +135,28 @@ read-only server, in which case the corresponding commands return an error.
 
 A runnable example lives in `examples/companion`.
 
+## Saving state
+
+Set `Config.Persistence` to keep app-configured settings and channels across
+restarts. They are restored in `NewServer` and take precedence over `Identity`,
+which then only supplies first-run values. `device/store/sqlite` implements this
+along with `contact.ContactPersistence`, so one database can hold everything:
+
+```go
+db, err := sqlite.Open("companion.db")
+if err != nil {
+    return err
+}
+defer db.Close()
+
+comp, err := node.NewCompanion(node.CompanionConfig{
+    Contacts: contact.NewManager(priv, contact.ManagerConfig{
+        MaxContacts: 256, OverwriteWhenFull: true, Persistence: db,
+    }),
+    /* key, transports, ... */
+})
+```
+
 ## Serving it: TCP vs pty
 
 - **TCP** (`ListenAndServe`): MeshMonitor's MeshCore backend connects to
@@ -168,10 +190,8 @@ comment in `core/codec/serial` restates this so future send handlers match it.
 - **One app at a time.** The incoming-message queue is shared across
   connections and drained by `SYNC_NEXT_MESSAGE`, which matches the firmware's
   single-queue model. Multiple simultaneous apps would race to drain it.
-- **Approximations.** Incoming messages report `path_len` as `0xFF`
-  (direct/unknown) and `snr` as 0, because the message events don't currently
-  surface the raw packet's hop/signal data. Channel messages use the node clock
-  as the sender timestamp, since the group event carries none. These are
-  cosmetic (hop count and signal strength in the app), not correctness.
+- **Message routing fields.** Incoming messages report the packet's `path_len`
+  when flooded and `0xFF` when direct, as firmware does. `snr` is whatever the
+  transport recorded, which is 0 for the serial, MQTT and UDP transports.
 - **Error codes and push codes** in `core/codec/serial` match the firmware
   `ERR_CODE_*` / `PUSH_CODE_*` values, which the app decodes directly.

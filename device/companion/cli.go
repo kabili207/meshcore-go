@@ -101,6 +101,7 @@ func (s *Server) cliCommand(command string) (string, bool) {
 		}
 		s.mu.Lock()
 		s.tzOffset = int8(tz)
+		s.saveSettingsLocked()
 		s.mu.Unlock()
 		return "OK", true
 

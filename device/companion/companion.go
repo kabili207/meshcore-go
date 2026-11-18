@@ -176,6 +176,11 @@ type Config struct {
 	// CMD_SEND_SELF_ADVERT returns an error.
 	SendSelfAdvert func(ctx context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error
 
+	// Persistence, if set, saves app-configured settings and channels and
+	// restores them in NewServer. Saved values take precedence over Identity.
+	// Without it, they last until the process exits.
+	Persistence Persistence
+
 	// Logger for connection events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -215,6 +220,7 @@ type Server struct {
 	exportSelf    func() []byte
 	setFloodScope func(key router.TransportKey)
 	sendAdvert    func(ctx context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error
+	persistence   Persistence
 	startTime     time.Time
 	log           *slog.Logger
 
@@ -258,6 +264,9 @@ type Server struct {
 
 // channelEntry is one configured group channel. secret is 16 bytes, or empty
 // for an unconfigured slot.
+// channelSecretLen is the size of the 128-bit channel secrets firmware supports.
+const channelSecretLen = 16
+
 type channelEntry struct {
 	name   string
 	secret []byte
@@ -347,6 +356,7 @@ func NewServer(cfg Config) *Server {
 		exportSelf:    cfg.ExportSelf,
 		setFloodScope: cfg.SetFloodScope,
 		sendAdvert:    cfg.SendSelfAdvert,
+		persistence:   cfg.Persistence,
 		startTime:     time.Now(),
 		log:           log.WithGroup("companion"),
 		name:          id.Name,
@@ -361,6 +371,7 @@ func NewServer(cfg Config) *Server {
 		sessions:      make(map[*session]struct{}),
 		cliReplyDelay: cli.ReplyDelay,
 	}
+	s.restore()
 	if cfg.Events != nil {
 		cfg.Events(s.handleEvent)
 	}
@@ -609,6 +620,7 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 		if len(payload) >= 4 {
 			s.mu.Lock()
 			s.advLocPolicy = payload[3]
+			s.saveSettingsLocked()
 			s.mu.Unlock()
 		}
 		return ss.send(serial.EncodeOK())
@@ -683,6 +695,7 @@ func (s *Server) setAdvertLatLon(ss *session, payload []byte) error {
 	}
 	s.mu.Lock()
 	s.advLat, s.advLon = lat, lon
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -726,6 +739,7 @@ func (s *Server) setDefaultFloodScope(ss *session, payload []byte) error {
 	s.mu.Lock()
 	s.defaultScopeName, s.defaultScopeKey = name, key
 	s.applyFloodScopeLocked()
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -755,6 +769,14 @@ func (s *Server) setName(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.name = name
+	s.saveSettingsLocked()
+}
+
+// Name returns the current advertised name, which the app can change.
+func (s *Server) Name() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.name
 }
 
 // getChannel answers CMD_GET_CHANNEL. Configured indices return their name and
@@ -794,6 +816,7 @@ func (s *Server) setChannel(ss *session, payload []byte) error {
 	}
 	old := s.channels[idx]
 	s.channels[idx] = entry
+	s.saveChannelLocked(idx)
 	// Another slot may hold the same key; it must keep decrypting.
 	dropOld := old.active() && !s.keyInUseLocked(old.secret)
 	s.mu.Unlock()
@@ -1437,6 +1460,7 @@ func (s *Server) setRadioParams(ss *session, payload []byte) error {
 	}
 	s.mu.Lock()
 	s.radioFreqKHz, s.radioBwHz, s.radioSF, s.radioCR = rp.Freq, rp.Bw, rp.SF, rp.CR
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -1452,6 +1476,7 @@ func (s *Server) setTxPower(ss *session, payload []byte) error {
 	}
 	s.mu.Lock()
 	s.txPower = uint8(power)
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -1464,6 +1489,7 @@ func (s *Server) setTuningParams(ss *session, payload []byte) error {
 	}
 	s.mu.Lock()
 	s.rxDelay, s.airtimeFactor = rx, af
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -1495,6 +1521,7 @@ func (s *Server) setAutoaddConfig(ss *session, payload []byte) error {
 	if hasHops {
 		s.autoaddMaxHops = hops
 	}
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
