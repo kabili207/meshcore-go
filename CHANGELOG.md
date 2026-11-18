@@ -216,6 +216,15 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **Companions answer flooded PATH packets with a reciprocal PATH**, so the
+  sender also learns a direct route. The reply to our own path discovery is
+  excluded, as in firmware.
+
+- **Zero-hop floods now get a PATH return.** They were treated as if they had no
+  flood path, so direct neighbors never learned a route to each other.
+  `ReplyContext.HasFloodPath` is now true for any flooded packet, and `FloodPath`
+  is empty rather than nil when there were no hops.
+
 - **Companion apps now get real routing data for received messages.** Messages
   report the packet's `path_len` and SNR instead of always `0xFF` and 0, and
   channel messages carry the sender's timestamp through the new

@@ -12,6 +12,7 @@ package node
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -34,6 +35,14 @@ type TransportOption struct {
 	Source    transport.PacketSource
 	Name      string // Human-readable name for events (e.g., "mqtt", "serial")
 }
+
+const (
+	// pathExtraNone is firmware's dummy extra type for a PATH with no payload.
+	pathExtraNone = 0xFF
+
+	// reciprocalPathDelay matches the delay firmware gives a reciprocal PATH.
+	reciprocalPathDelay = 500 * time.Millisecond
+)
 
 // BaseConfig contains configuration shared by all node types.
 type BaseConfig struct {
@@ -101,7 +110,12 @@ type BaseNode struct {
 	// Configuration
 	autoACK            bool
 	autoUpdateContacts bool
-	extraAckTransmits  int
+
+	// reciprocatePath decides whether a flooded PATH gets a reciprocal PATH. Nil
+	// means never, as on firmware repeaters and room servers.
+	reciprocatePath func(*codec.PathContent) bool
+
+	extraAckTransmits int
 
 	// Transports registered at construction time.
 	transports []TransportOption
@@ -292,17 +306,40 @@ func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, 
 	}
 	pathContent := codec.BuildPathContent(reply.FloodPath, hashSize, extraType, plaintext)
 
-	encrypted, err := crypto.EncryptAddressedWithSecret(pathContent, reply.SharedSecret)
+	pkt, err := b.buildPathPacket(reply.SharedSecret, to, pathContent)
 	if err != nil {
 		return err
 	}
 
-	mac, ciphertext := codec.SplitMAC(encrypted)
-	payload := codec.BuildAddressedPayload(to.Hash(), b.id.Hash(), mac, ciphertext)
-	pkt := codec.NewPacket(codec.PayloadTypePath, codec.RouteTypeFlood, payload)
-
 	b.Router.SendFloodPathWithKeyDelayed(pkt, reply.ReplyScope, reply.Delay)
 	return nil
+}
+
+// sendReciprocalPath answers a flooded PATH with the route that flood took, so
+// the sender can reach us directly too. It goes straight down the route the PATH
+// just gave us, as in firmware's Mesh::onRecvPacket.
+func (b *BaseNode) sendReciprocalPath(flood *codec.Packet, secret []byte, to core.MeshCoreID, route *codec.PathContent) error {
+	// With no real payload, a random blob keeps the packet hash unique.
+	blob := make([]byte, 4)
+	_, _ = rand.Read(blob)
+	content := codec.BuildPathContent(flood.Path, flood.PathInfo().HashSize, pathExtraNone, blob)
+
+	pkt, err := b.buildPathPacket(secret, to, content)
+	if err != nil {
+		return err
+	}
+	b.Router.SendDirectPath(pkt, route.PathLen, route.Path, reciprocalPathDelay)
+	return nil
+}
+
+func (b *BaseNode) buildPathPacket(secret []byte, to core.MeshCoreID, content []byte) (*codec.Packet, error) {
+	encrypted, err := crypto.EncryptAddressedWithSecret(content, secret)
+	if err != nil {
+		return nil, err
+	}
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	payload := codec.BuildAddressedPayload(to.Hash(), b.id.Hash(), mac, ciphertext)
+	return codec.NewPacket(codec.PayloadTypePath, codec.RouteTypeFlood, payload), nil
 }
 
 // SendACK sends a 4-byte ACK packet to the recipient as the reply to a request,
@@ -409,8 +446,8 @@ func (b *BaseNode) buildReplyContext(pkt *codec.Packet, ct *contact.ContactInfo,
 		reply.DirectPath = make([]byte, len(ct.OutPath))
 		copy(reply.DirectPath, ct.OutPath)
 	}
-	if pkt.IsFlood() && pkt.HopCount() > 0 {
-		reply.FloodPath = append([]byte(nil), pkt.Path...)
+	if pkt.IsFlood() {
+		reply.FloodPath = append([]byte{}, pkt.Path...) // non-nil even with no hops
 		reply.PathHashSize = pkt.PathHashSize
 	}
 	return reply

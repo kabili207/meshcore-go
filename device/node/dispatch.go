@@ -222,8 +222,8 @@ func (b *BaseNode) handleAnonReq(pkt *codec.Packet, src transport.PacketSource) 
 		DirectPathLen: contact.PathUnknown,
 		ReplyScope:    b.Router.ResolveReplyScope(pkt),
 	}
-	if pkt.IsFlood() && pkt.HopCount() > 0 {
-		reply.FloodPath = append([]byte(nil), pkt.Path...)
+	if pkt.IsFlood() {
+		reply.FloodPath = append([]byte{}, pkt.Path...) // non-nil even with no hops
 		reply.PathHashSize = pkt.PathHashSize
 	}
 
@@ -301,6 +301,12 @@ func (b *BaseNode) handlePath(pkt *codec.Packet, src transport.PacketSource) {
 	// Update contact's direct routing path from PATH content
 	nowTS := b.clock.GetCurrentTime()
 	contact.ProcessPath(b.contacts, ct.ID, pathContent, nowTS)
+
+	if pkt.IsFlood() && b.reciprocatePath != nil && b.reciprocatePath(pathContent) {
+		if err := b.sendReciprocalPath(pkt, secret, ct.ID, pathContent); err != nil {
+			b.log.Debug("failed to send reciprocal path", "error", err)
+		}
+	}
 
 	reply := b.buildReplyContext(pkt, ct, secret)
 
