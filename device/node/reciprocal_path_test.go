@@ -2,8 +2,10 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"testing"
+	"time"
 
 	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
@@ -141,5 +143,151 @@ func TestZeroHopFloodGetsPathReturn(t *testing.T) {
 
 	if sent := sentPaths(ct); len(sent) != 1 {
 		t.Fatalf("sent %d PATH packets, want 1", len(sent))
+	}
+}
+
+// openFrom decrypts a packet node addressed to peer.
+func openFrom(t *testing.T, node *BaseNode, peer *crypto.KeyPair, pkt *codec.Packet) []byte {
+	t.Helper()
+	addr, err := codec.ParseAddressedPayload(pkt.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := crypto.ComputeSharedSecret(peer.PrivateKey, node.publicKey[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := crypto.DecryptAddressedWithSecret(codec.PrependMAC(addr.MAC, addr.Ciphertext), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plain
+}
+
+func buildResponseFrom(t *testing.T, node *BaseNode, peer *crypto.KeyPair, routeType uint8, path []byte) *codec.Packet {
+	t.Helper()
+	secret, err := crypto.ComputeSharedSecret(peer.PrivateKey, node.publicKey[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := crypto.EncryptAddressedWithSecret([]byte{1, 2, 3, 4, 5}, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac, ciphertext := codec.SplitMAC(encrypted)
+	payload := codec.BuildAddressedPayload(node.id.Hash(), peer.PublicKey[0], mac, ciphertext)
+	pkt := codec.NewPacket(codec.PayloadTypeResponse, routeType, payload)
+	pkt.PathLen, pkt.PathHashSize, pkt.Path = uint8(len(path)), 1, path
+	return pkt
+}
+
+func setRoute(t *testing.T, node *BaseNode, id core.MeshCoreID, route []byte) {
+	t.Helper()
+	ct := node.contacts.GetByPubKey(id)
+	ct.OutPathLen, ct.OutPath = uint8(len(route)), route
+	if err := node.contacts.UpdateContact(ct); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFloodedResponseRetriesReturnPath(t *testing.T) {
+	comp, ct := newTestCompanion(t)
+	peer, id := addPathPeer(t, comp.base)
+	floodPath, route := []byte{0x11, 0x22}, []byte{0x33}
+
+	// Without a route there is nothing to retry over.
+	comp.base.processPacket(buildResponseFrom(t, comp.base, peer, codec.RouteTypeFlood, floodPath), transport.PacketSourceMQTT)
+	if sent := sentPaths(ct); len(sent) != 0 {
+		t.Fatalf("sent %d PATH packets with no route, want none", len(sent))
+	}
+
+	setRoute(t, comp.base, id, route)
+	comp.base.processPacket(buildResponseFrom(t, comp.base, peer, codec.RouteTypeDirect, nil), transport.PacketSourceMQTT)
+	if sent := sentPaths(ct); len(sent) != 0 {
+		t.Fatalf("sent %d PATH packets for a direct response, want none", len(sent))
+	}
+
+	comp.base.processPacket(buildResponseFrom(t, comp.base, peer, codec.RouteTypeFlood, floodPath), transport.PacketSourceMQTT)
+	sent := sentPaths(ct)
+	if len(sent) != 1 {
+		t.Fatalf("sent %d PATH packets, want 1", len(sent))
+	}
+	if !sent[0].IsDirect() || !bytes.Equal(sent[0].Path, route) {
+		t.Errorf("retry went route %d via %x, want direct via %x", sent[0].RouteType(), sent[0].Path, route)
+	}
+	content, err := codec.ParsePathContent(openFrom(t, comp.base, peer, sent[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(content.Path, floodPath) {
+		t.Errorf("retry carries %x, want %x", content.Path, floodPath)
+	}
+}
+
+func TestFloodedAckForOurMessageRetriesReturnPath(t *testing.T) {
+	comp, ct := newTestCompanion(t)
+	peer, id := addPathPeer(t, comp.base)
+	setRoute(t, comp.base, id, []byte{0x33})
+
+	if err := comp.SendText(context.Background(), id, "hi", WithOnACK(func() {})); err != nil {
+		t.Fatal(err)
+	}
+	var msg *codec.Packet
+	for _, p := range ct.snapshot() {
+		if p.PayloadType() == codec.PayloadTypeTxtMsg {
+			msg = p
+		}
+	}
+	if msg == nil {
+		t.Fatal("message was not sent")
+	}
+	plain := openFrom(t, comp.base, peer, msg)
+	content, err := codec.ParseTxtMsgContent(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := crypto.ComputeAckHash(codec.TrimTxtMsgContent(plain, content), id[:])
+
+	unknown := codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeFlood, codec.BuildAckPayload(hash+1))
+	comp.base.processPacket(unknown, transport.PacketSourceMQTT)
+	if sent := sentPaths(ct); len(sent) != 0 {
+		t.Fatalf("sent %d PATH packets for an unknown ACK, want none", len(sent))
+	}
+
+	ackPkt := codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeFlood, codec.BuildAckPayload(hash))
+	comp.base.processPacket(ackPkt, transport.PacketSourceMQTT)
+	if sent := sentPaths(ct); len(sent) != 1 {
+		t.Errorf("sent %d PATH packets, want 1", len(sent))
+	}
+}
+
+func TestOnlyCompanionsRetryReturnPath(t *testing.T) {
+	node, _ := testNode(t)
+	ct := &captureTransport{}
+	node.Router.AddTransport(ct, transport.PacketSourceMQTT)
+	peer, id := addPathPeer(t, node)
+	setRoute(t, node, id, []byte{0x33})
+
+	node.processPacket(buildResponseFrom(t, node, peer, codec.RouteTypeFlood, []byte{0x11}), transport.PacketSourceMQTT)
+	if sent := sentPaths(ct); len(sent) != 0 {
+		t.Errorf("sent %d PATH packets, want none", len(sent))
+	}
+}
+
+func TestReturnPathRetryDelayed(t *testing.T) {
+	t.Parallel()
+	node, ct, peer := startedNode(t, []byte{0x33})
+	node.reciprocatePath = func(*codec.PathContent) bool { return true }
+
+	start := time.Now()
+	node.processPacket(buildResponseFrom(t, node, peer, codec.RouteTypeFlood, []byte{0x11}), transport.PacketSourceMQTT)
+	for len(sentPaths(ct)) == 0 {
+		if time.Since(start) > returnPathRetryDelay+2*time.Second {
+			t.Fatal("retry was never sent")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := time.Since(start); got < returnPathRetryDelay {
+		t.Errorf("retry sent after %v, want at least %v", got, returnPathRetryDelay)
 	}
 }

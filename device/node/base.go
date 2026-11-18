@@ -42,6 +42,9 @@ const (
 
 	// reciprocalPathDelay matches the delay firmware gives a reciprocal PATH.
 	reciprocalPathDelay = 500 * time.Millisecond
+
+	// returnPathRetryDelay matches firmware's handleReturnPathRetry.
+	returnPathRetryDelay = 3 * time.Second
 )
 
 // BaseConfig contains configuration shared by all node types.
@@ -318,7 +321,7 @@ func (b *BaseNode) sendPathReturn(reply event.ReplyContext, to core.MeshCoreID, 
 // sendReciprocalPath answers a flooded PATH with the route that flood took, so
 // the sender can reach us directly too. It goes straight down the route the PATH
 // just gave us, as in firmware's Mesh::onRecvPacket.
-func (b *BaseNode) sendReciprocalPath(flood *codec.Packet, secret []byte, to core.MeshCoreID, route *codec.PathContent) error {
+func (b *BaseNode) sendReciprocalPath(flood *codec.Packet, secret []byte, to core.MeshCoreID, routeLen uint8, route []byte, delay time.Duration) error {
 	// With no real payload, a random blob keeps the packet hash unique.
 	blob := make([]byte, 4)
 	_, _ = rand.Read(blob)
@@ -328,8 +331,25 @@ func (b *BaseNode) sendReciprocalPath(flood *codec.Packet, secret []byte, to cor
 	if err != nil {
 		return err
 	}
-	b.Router.SendDirectPath(pkt, route.PathLen, route.Path, reciprocalPathDelay)
+	b.Router.SendDirectPath(pkt, routeLen, route, delay)
 	return nil
+}
+
+// retryReturnPath resends our route when a peer we can reach directly is still
+// flooding to us, since it may have missed the reciprocal PATH. Firmware's
+// handleReturnPathRetry does this for ACKs and responses on companions.
+func (b *BaseNode) retryReturnPath(flood *codec.Packet, ct *contact.ContactInfo) {
+	if b.reciprocatePath == nil || !flood.IsFlood() || !ct.HasDirectPath() {
+		return
+	}
+	secret, err := b.contacts.GetSharedSecret(ct.ID)
+	if err != nil {
+		b.log.Debug("failed to get secret for return path retry", "error", err)
+		return
+	}
+	if err := b.sendReciprocalPath(flood, secret, ct.ID, ct.OutPathLen, ct.OutPath, returnPathRetryDelay); err != nil {
+		b.log.Debug("failed to retry return path", "error", err)
+	}
 }
 
 func (b *BaseNode) buildPathPacket(secret []byte, to core.MeshCoreID, content []byte) (*codec.Packet, error) {

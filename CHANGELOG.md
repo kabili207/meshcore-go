@@ -222,7 +222,8 @@ contain breaking changes; those are called out explicitly below.
 
 - **Companions answer flooded PATH packets with a reciprocal PATH**, so the
   sender also learns a direct route. The reply to our own path discovery is
-  excluded, as in firmware.
+  excluded, as in firmware. If a peer with a known route keeps flooding ACKs or
+  responses, the PATH is sent again after 3 seconds.
 
 - **Zero-hop floods now get a PATH return.** They were treated as if they had no
   flood path, so direct neighbors never learned a route to each other.

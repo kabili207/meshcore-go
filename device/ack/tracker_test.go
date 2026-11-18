@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kabili207/meshcore-go/core"
 )
 
 func TestTracker_NewTracker_Defaults(t *testing.T) {
@@ -329,5 +331,25 @@ func TestTracker_Stop_Context(t *testing.T) {
 		// OK
 	case <-time.After(2 * time.Second):
 		t.Fatal("tracker did not stop within timeout")
+	}
+}
+
+func TestTracker_ResolvePeer(t *testing.T) {
+	tr := NewTracker(TrackerConfig{ACKTimeout: time.Minute})
+	var peer core.MeshCoreID
+	peer[0] = 0x42
+
+	var acked atomic.Bool
+	tr.Track(1, PendingACK{Peer: peer, OnACK: func() { acked.Store(true) }})
+
+	got, ok := tr.ResolvePeer(1)
+	if !ok || got != peer {
+		t.Errorf("ResolvePeer = %x, %v, want %x, true", got, ok, peer)
+	}
+	if !acked.Load() {
+		t.Error("OnACK was not called")
+	}
+	if _, ok := tr.ResolvePeer(1); ok {
+		t.Error("a resolved entry should be gone")
 	}
 }

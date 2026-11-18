@@ -173,7 +173,11 @@ func (b *BaseNode) handleAck(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Resolve pending ACK if tracker is configured
 	if b.ack != nil {
-		b.ack.Resolve(ackPayload.Checksum)
+		if peer, ok := b.ack.ResolvePeer(ackPayload.Checksum); ok {
+			if ct := b.contacts.GetByPubKey(peer); ct != nil {
+				b.retryReturnPath(pkt, ct)
+			}
+		}
 	}
 
 	b.emitEvent(&event.AckReceived{
@@ -274,6 +278,8 @@ func (b *BaseNode) handleResponse(pkt *codec.Packet, src transport.PacketSource)
 		return
 	}
 
+	b.retryReturnPath(pkt, ct)
+
 	reply := b.buildReplyContext(pkt, ct, secret)
 
 	b.emitEvent(&event.ResponseReceived{
@@ -303,7 +309,7 @@ func (b *BaseNode) handlePath(pkt *codec.Packet, src transport.PacketSource) {
 	contact.ProcessPath(b.contacts, ct.ID, pathContent, nowTS)
 
 	if pkt.IsFlood() && b.reciprocatePath != nil && b.reciprocatePath(pathContent) {
-		if err := b.sendReciprocalPath(pkt, secret, ct.ID, pathContent); err != nil {
+		if err := b.sendReciprocalPath(pkt, secret, ct.ID, pathContent.PathLen, pathContent.Path, reciprocalPathDelay); err != nil {
 			b.log.Debug("failed to send reciprocal path", "error", err)
 		}
 	}
