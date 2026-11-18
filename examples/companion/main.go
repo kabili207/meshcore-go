@@ -54,9 +54,10 @@ func main() {
 
 func run() error {
 	var (
-		listen  = flag.String("listen", "127.0.0.1:5000", "companion server TCP listen address")
-		name    = flag.String("name", "meshcore-go", "node advertised name")
-		keyPath = flag.String("key", "companion.key", "path to the node key file (created if missing)")
+		listen       = flag.String("listen", "127.0.0.1:5000", "companion server TCP listen address")
+		name         = flag.String("name", "meshcore-go", "node advertised name")
+		keyPath      = flag.String("key", "companion.key", "path to the node key file (created if missing)")
+		contactsPath = flag.String("contacts", "contacts.json", "path to the contacts file (created if missing)")
 
 		serialPort = flag.String("serial", "", "serial port for the LoRa radio (optional, e.g. /dev/ttyUSB0)")
 		baud       = flag.Int("baud", 115200, "serial baud rate")
@@ -116,11 +117,30 @@ func run() error {
 		return err
 	}
 
+	contactFile := contact.NewFileContactStore(*contactsPath)
+	// The manager only warns on a bad file and would then overwrite it, so
+	// refuse to start instead.
+	if _, err := contactFile.Load(); err != nil {
+		slog.Error("Failed to load contacts", "path", *contactsPath, "error", err)
+		return err
+	}
+	defer func() {
+		if err := contactFile.Close(); err != nil {
+			slog.Error("Failed to save contacts", "path", *contactsPath, "error", err)
+		}
+	}()
+
 	comp, err := node.NewCompanion(node.CompanionConfig{
 		PrivateKey: priv,
 		Transports: transports,
-		Name:       *name,
-		Logger:     slog.Default(),
+		Contacts: contact.NewManager(priv, contact.ManagerConfig{
+			MaxContacts:       256,
+			OverwriteWhenFull: true,
+			Logger:            slog.Default(),
+			Persistence:       contactFile,
+		}),
+		Name:   *name,
+		Logger: slog.Default(),
 	})
 	if err != nil {
 		slog.Error("Failed to create companion node", "error", err)

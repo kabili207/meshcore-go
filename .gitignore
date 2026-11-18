@@ -22,3 +22,4 @@ config.yml
 *.db-wal
 *.db-shm
 *.key
+contacts.json
