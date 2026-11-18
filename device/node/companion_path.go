@@ -18,6 +18,7 @@ const telemPermBase = 0x01
 func (n *CompanionNode) ResetPath(to core.MeshCoreID) {
 	if ct := n.base.Contacts().GetByPubKey(to); ct != nil {
 		ct.OutPathLen = contact.PathUnknown
+		_ = n.base.Contacts().UpdateContact(ct)
 	}
 }
 

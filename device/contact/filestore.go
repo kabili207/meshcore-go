@@ -38,6 +38,10 @@ type FileContactStore struct {
 	path     string
 	debounce time.Duration
 
+	// flushMu serializes writers: they share a temp file, and the last rename
+	// must carry the newest snapshot. Acquired before mu.
+	flushMu sync.Mutex
+
 	mu       sync.Mutex
 	contacts map[core.MeshCoreID]persistedContact
 	timer    *time.Timer
@@ -106,6 +110,9 @@ func (f *FileContactStore) Delete(id core.MeshCoreID) error {
 
 // Flush writes the current contacts to disk immediately.
 func (f *FileContactStore) Flush() error {
+	f.flushMu.Lock()
+	defer f.flushMu.Unlock()
+
 	f.mu.Lock()
 	if f.timer != nil {
 		f.timer.Stop()

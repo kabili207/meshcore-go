@@ -191,7 +191,6 @@ func ProcessPath(
 		return nil, 0, nil, ErrContactNotFound
 	}
 
-	// Update the direct routing path directly on the stored reference.
 	// PathLen is the encoded wire byte (mode bits | hop count).
 	found.OutPathLen = pathContent.PathLen
 	if len(pathContent.Path) > 0 {
@@ -201,6 +200,7 @@ func ProcessPath(
 		found.OutPath = nil
 	}
 	found.LastMod = nowTimestamp
+	_ = store.UpdateContact(found)
 
 	return found, pathContent.ExtraType, pathContent.Extra, nil
 }

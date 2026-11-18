@@ -208,6 +208,16 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **Persisted contacts now match the contact table.** Evicted contacts are
+  deleted from the `ContactPersistence` backend instead of returning on restart,
+  and paths learned from flood and PATH packets are saved.
+
+- **`ContactManager.UpdateContact` no longer zeroes the path when passed a stored
+  contact.** Updating an existing contact with `CMD_ADD_UPDATE_CONTACT` hit this.
+
+- **`FileContactStore.Flush` is safe to call concurrently.** Overlapping writes
+  could fail or leave an older snapshot on disk.
+
 - **Changing a router's send scope raced with sends.** `SetSendScope` and
   `ClearSendScope` wrote the scope while senders read it unlocked. Both now
   hold the router's lock, so a companion app can change scope safely.

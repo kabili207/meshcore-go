@@ -426,4 +426,5 @@ func (b *BaseNode) updateContactPathFromFlood(pkt *codec.Packet, ct *contact.Con
 	ct.OutPathLen = pkt.PathLen // preserve the encoded wire byte (mode + hop count)
 	ct.OutPath = reversed
 	ct.LastMod = b.clock.GetCurrentTime()
+	_ = b.contacts.UpdateContact(ct)
 }
