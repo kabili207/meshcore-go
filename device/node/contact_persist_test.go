@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/kabili207/meshcore-go/core"
-	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/device/contact"
 )
 
@@ -30,26 +29,16 @@ func (r *recordingPersistence) Delete(id core.MeshCoreID) error {
 	return nil
 }
 
-func TestPathChangesArePersisted(t *testing.T) {
+func TestResetPathIsPersisted(t *testing.T) {
 	comp, _ := newTestCompanion(t)
 	store := &recordingPersistence{saved: map[core.MeshCoreID]savedPath{}}
 	comp.base.contacts = contact.NewManager(comp.base.privateKey, contact.ManagerConfig{Persistence: store})
 
 	var id core.MeshCoreID
 	id[0] = 0x42
-	ct, err := comp.base.Contacts().AddContact(&contact.ContactInfo{ID: id, OutPathLen: contact.PathUnknown})
+	_, err := comp.base.Contacts().AddContact(&contact.ContactInfo{ID: id, OutPathLen: 1, OutPath: []byte{0x0A}})
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	comp.base.updateContactPathFromFlood(&codec.Packet{
-		Header:       codec.RouteTypeFlood,
-		PathLen:      2,
-		PathHashSize: 1,
-		Path:         []byte{0x0A, 0x0B},
-	}, ct)
-	if got, want := store.saved[id].OutPath, []byte{0x0B, 0x0A}; !bytes.Equal(got, want) {
-		t.Errorf("saved path = %x, want %x", got, want)
 	}
 
 	comp.ResetPath(id)

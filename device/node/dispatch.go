@@ -54,7 +54,7 @@ func (b *BaseNode) baseEvent(pkt *codec.Packet, src transport.PacketSource, from
 }
 
 // handleAdvert processes an ADVERT packet: verify signature, update contacts,
-// extract flood path, then emit AdvertReceived.
+// then emit AdvertReceived.
 func (b *BaseNode) handleAdvert(pkt *codec.Packet, src transport.PacketSource) {
 	advert, err := codec.ParseAdvertPayload(pkt.Payload)
 	if err != nil {
@@ -84,11 +84,6 @@ func (b *BaseNode) handleAdvert(pkt *codec.Packet, src transport.PacketSource) {
 			return
 		}
 
-		// Update path from flood route if available
-		if result.Contact != nil {
-			b.updateContactPathFromFlood(pkt, result.Contact)
-		}
-
 		b.emitEvent(&event.AdvertReceived{
 			Event:   b.baseEvent(pkt, src, advertID),
 			Advert:  advert,
@@ -105,7 +100,7 @@ func (b *BaseNode) handleAdvert(pkt *codec.Packet, src transport.PacketSource) {
 }
 
 // handleTxtMsg processes an addressed TXT_MSG packet: find sender, decrypt,
-// parse content, auto-ACK, update contact path, then emit TextMessageReceived.
+// parse content, auto-ACK, then emit TextMessageReceived.
 func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 	ct, secret, plaintext := b.decryptAddressed(pkt)
 	if ct == nil {
@@ -117,9 +112,6 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 		b.log.Debug("failed to parse txt msg", "error", err)
 		return
 	}
-
-	// Update contact path from flood route
-	b.updateContactPathFromFlood(pkt, ct)
 
 	reply := b.buildReplyContext(pkt, ct, secret)
 
@@ -257,9 +249,6 @@ func (b *BaseNode) handleReq(pkt *codec.Packet, src transport.PacketSource) {
 		return
 	}
 
-	// Update contact path from flood route
-	b.updateContactPathFromFlood(pkt, ct)
-
 	reply := b.buildReplyContext(pkt, ct, secret)
 
 	b.emitEvent(&event.RequestReceived{
@@ -284,9 +273,6 @@ func (b *BaseNode) handleResponse(pkt *codec.Packet, src transport.PacketSource)
 		b.log.Debug("failed to parse response", "error", err)
 		return
 	}
-
-	// Update contact path from flood route
-	b.updateContactPathFromFlood(pkt, ct)
 
 	reply := b.buildReplyContext(pkt, ct, secret)
 

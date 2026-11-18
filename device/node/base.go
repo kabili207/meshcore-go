@@ -415,16 +415,3 @@ func (b *BaseNode) buildReplyContext(pkt *codec.Packet, ct *contact.ContactInfo,
 	}
 	return reply
 }
-
-// updateContactPathFromFlood updates a contact's direct path from an incoming
-// flood packet by reversing the flood path.
-func (b *BaseNode) updateContactPathFromFlood(pkt *codec.Packet, ct *contact.ContactInfo) {
-	if !pkt.IsFlood() || pkt.HopCount() == 0 {
-		return
-	}
-	reversed := codec.ReverseFloodPath(pkt)
-	ct.OutPathLen = pkt.PathLen // preserve the encoded wire byte (mode + hop count)
-	ct.OutPath = reversed
-	ct.LastMod = b.clock.GetCurrentTime()
-	_ = b.contacts.UpdateContact(ct)
-}
