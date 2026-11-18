@@ -167,8 +167,8 @@ type Contact struct {
 	PublicKey [32]byte
 	Type      uint8
 	Flags     uint8
-	// OutPathLen is the cached out-path hop count; 0xFF means the route is
-	// unknown (OUT_PATH_UNKNOWN).
+	// OutPathLen is the cached out-path wire byte (hash size | hop count); 0xFF
+	// means the route is unknown (OUT_PATH_UNKNOWN).
 	OutPathLen uint8
 	// OutPath holds up to 64 hop-hash bytes; zero-padded to 64 on the wire.
 	OutPath []byte
