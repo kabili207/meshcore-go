@@ -1581,3 +1581,43 @@ func TestSendAnonReq(t *testing.T) {
 		})
 	}
 }
+
+func TestReceivedMessagesReportRoute(t *testing.T) {
+	flood := &codec.Packet{Header: codec.RouteTypeFlood, PathLen: 0x43, SNR: 22}
+	direct := &codec.Packet{Header: codec.RouteTypeDirect, PathLen: 2, SNR: -8}
+
+	for _, tc := range []struct {
+		name    string
+		pkt     *codec.Packet
+		pathLen uint8
+		snr     int8
+	}{
+		{"flood", flood, 0x43, 22},
+		{"direct", direct, serial.PathLenUnknown, -8},
+		{"no packet", nil, serial.PathLenUnknown, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var handler func(any)
+			s := NewServer(Config{
+				Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+				Events: func(h func(any)) { handler = h },
+			})
+			handler(&event.GroupTextReceived{
+				Event:           event.Event{RawPacket: tc.pkt},
+				ChannelKey:      crypto.DefaultChannelKey,
+				SenderTimestamp: 1234,
+				Message:         "hey",
+			})
+			handler(&event.TextMessageReceived{Event: event.Event{RawPacket: tc.pkt}, Message: "hi"})
+
+			for _, qm := range s.queue {
+				if qm.pathLen != tc.pathLen || qm.snr != tc.snr {
+					t.Errorf("path_len/snr = %#x/%d, want %#x/%d", qm.pathLen, qm.snr, tc.pathLen, tc.snr)
+				}
+			}
+			if s.queue[0].senderTS != 1234 {
+				t.Errorf("channel timestamp = %d, want the sender's", s.queue[0].senderTS)
+			}
+		})
+	}
+}

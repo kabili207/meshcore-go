@@ -1198,10 +1198,12 @@ func (s *Server) NotifyContactsFull() {
 
 // enqueueDM queues an incoming direct message and tickles connected apps.
 func (s *Server) enqueueDM(e *event.TextMessageReceived) {
+	pathLen, snr := receivedRoute(e.RawPacket)
 	qm := queuedMessage{
-		pathLen:  serial.PathLenUnknown, // direct/unknown; refined when packet path is exposed
+		pathLen:  pathLen,
 		txtType:  e.TxtType,
 		senderTS: e.Timestamp,
+		snr:      snr,
 		text:     e.Message,
 	}
 	copy(qm.senderPrefix[:], e.From[:])
@@ -1216,14 +1218,29 @@ func (s *Server) enqueueChannel(e *event.GroupTextReceived) {
 		s.log.Debug("dropping message for unknown channel", "hash", e.ChannelHash)
 		return
 	}
+	pathLen, snr := receivedRoute(e.RawPacket)
 	s.enqueue(queuedMessage{
 		isChannel:  true,
 		channelIdx: idx,
-		pathLen:    serial.PathLenUnknown,
+		pathLen:    pathLen,
 		txtType:    0, // plain
-		senderTS:   s.node.Clock().GetCurrentTime(),
+		senderTS:   e.SenderTimestamp,
+		snr:        snr,
 		text:       e.Message,
 	})
+}
+
+// receivedRoute returns the path_len byte and SNR (0.25 dB units) reported for a
+// received message. As in firmware, only floods carry a path_len; 0xFF means the
+// message arrived direct.
+func receivedRoute(pkt *codec.Packet) (pathLen uint8, snr int8) {
+	if pkt == nil {
+		return serial.PathLenUnknown, 0
+	}
+	if !pkt.IsFlood() {
+		return serial.PathLenUnknown, pkt.SNR
+	}
+	return pkt.PathLen, pkt.SNR
 }
 
 // enqueue appends a message to the offline queue and tickles connected apps.

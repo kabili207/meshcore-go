@@ -373,7 +373,7 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 	if !ok {
 		return // no registered key for this hash decrypted (MAC failed on all)
 	}
-	_, txtType, message, err := crypto.ParseGrpTxtPlaintext(plaintext)
+	timestamp, txtType, message, err := crypto.ParseGrpTxtPlaintext(plaintext)
 	if err != nil {
 		b.log.Debug("failed to parse group text plaintext", "error", err)
 		return
@@ -385,10 +385,11 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 	}
 
 	b.emitEvent(&event.GroupTextReceived{
-		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
-		ChannelHash: grp.ChannelHash,
-		ChannelKey:  key,
-		Message:     message,
+		Event:           b.baseEvent(pkt, src, core.MeshCoreID{}),
+		ChannelHash:     grp.ChannelHash,
+		ChannelKey:      key,
+		SenderTimestamp: timestamp,
+		Message:         message,
 	})
 }
 
