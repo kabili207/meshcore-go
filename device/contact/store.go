@@ -12,7 +12,8 @@ import "github.com/kabili207/meshcore-go/core"
 type ContactStore interface {
 	// AddContact adds a new contact. Returns a pointer to the stored contact.
 	// If the store is full and overwrite is enabled, the oldest non-favorite
-	// contact is evicted. Returns ErrContactsFull if no slot is available.
+	// contact is evicted. Returns ErrContactsFull if no slot is available, and
+	// ErrInvalidContact if the public key is all zeros.
 	AddContact(c *ContactInfo) (*ContactInfo, error)
 
 	// UpdateContact updates mutable fields of an existing contact identified

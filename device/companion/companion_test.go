@@ -599,6 +599,20 @@ func TestAddAndGetContact(t *testing.T) {
 	}
 }
 
+func TestAddContactZeroKey(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(nil)
+	store := contact.NewManager(priv, contact.ManagerConfig{})
+	s := NewServer(Config{Node: &fakeNode{clk: clock.New(), contacts: store}})
+
+	resp := collectResponses(t, s, cmd(addUpdateFrame(core.MeshCoreID{}, "Null", 0xFF)...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeIllegalArg {
+		t.Fatalf("expected IllegalArg, got %v", resp[0])
+	}
+	if store.Count() != 0 {
+		t.Errorf("Count() = %d, want 0", store.Count())
+	}
+}
+
 func TestGetContactByKeyNotFound(t *testing.T) {
 	s, _ := newTestServer()
 	var id core.MeshCoreID

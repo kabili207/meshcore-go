@@ -29,6 +29,9 @@ var (
 
 	// ErrContactNotFound is returned when a contact lookup fails.
 	ErrContactNotFound = errors.New("contact not found")
+
+	// ErrInvalidContact is returned when a contact has an all-zero public key.
+	ErrInvalidContact = errors.New("contact has an all-zero public key")
 )
 
 // Compile-time assertion that ContactManager implements ContactStore.
@@ -106,8 +109,8 @@ func NewManager(localPrivKey ed25519.PrivateKey, cfg ManagerConfig) *ContactMana
 			m.log.Warn("failed to load persisted contacts", "error", err)
 		} else {
 			for _, c := range loaded {
-				if _, err := m.AddContact(c); err != nil {
-					break // store full
+				if _, err := m.AddContact(c); errors.Is(err, ErrContactsFull) {
+					break
 				}
 			}
 		}
@@ -149,6 +152,12 @@ func (m *ContactManager) SetOnContactOverwrite(fn func(id core.MeshCoreID)) {
 // Returns a pointer to the stored contact. The caller should not hold
 // references to the input ContactInfo after calling AddContact.
 func (m *ContactManager) AddContact(c *ContactInfo) (*ContactInfo, error) {
+	// The all-zero key is a small-order point: ECDH with it yields an all-zero
+	// shared secret for any private key, and it would match hash 0x00.
+	if c.ID.IsZero() {
+		return nil, ErrInvalidContact
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

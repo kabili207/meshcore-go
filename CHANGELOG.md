@@ -220,6 +220,14 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **Contacts with an all-zero public key are rejected.** That key is a
+  small-order point, so its ECDH shared secret is all zeros, and an advert for
+  it can be forged without a private key. `AddContact` returns the new
+  `contact.ErrInvalidContact`, `ProcessAdvert` rejects such adverts before
+  touching the store, persisted records with it are skipped on load, and the
+  companion answers `CMD_ADD_UPDATE_CONTACT` with `ERR_CODE_ILLEGAL_ARG`.
+  Ported from firmware `dev` (`060fd219`), which skips empty contact slots.
+
 - **Companions answer flooded PATH packets with a reciprocal PATH**, so the
   sender also learns a direct route. The reply to our own path discovery is
   excluded, as in firmware. If a peer with a known route keeps flooding ACKs or

@@ -74,6 +74,12 @@ func ProcessAdvert(
 	// Step 3: look up existing contact by full pubkey
 	var advertID core.MeshCoreID
 	copy(advertID[:], advert.PubKey[:])
+	if advertID.IsZero() {
+		return AdvertResult{
+			Rejected:     true,
+			RejectReason: ErrInvalidContact.Error(),
+		}
+	}
 
 	existing := store.GetByPubKey(advertID)
 

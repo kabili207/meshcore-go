@@ -1485,7 +1485,9 @@ func (s *Server) addUpdateContact(ss *session, payload []byte) error {
 		GPSLon:              c.GPSLon,
 		LastMod:             lastMod,
 	}
-	if _, err := store.AddContact(ci); err != nil {
+	if _, err := store.AddContact(ci); errors.Is(err, contact.ErrInvalidContact) {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	} else if err != nil {
 		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
 	}
 	return ss.send(serial.EncodeOK())
