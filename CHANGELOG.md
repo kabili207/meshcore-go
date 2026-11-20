@@ -228,6 +228,9 @@ contain breaking changes; those are called out explicitly below.
   companion answers `CMD_ADD_UPDATE_CONTACT` with `ERR_CODE_ILLEGAL_ARG`.
   Ported from firmware `dev` (`060fd219`), which skips empty contact slots.
 
+- **Duplicate packet counts in repeater and room server stats saturate at
+  65535** instead of wrapping, as on firmware `dev` (`26e43890`).
+
 - **Companions answer flooded PATH packets with a reciprocal PATH**, so the
   sender also learns a direct route. The reply to our own path discovery is
   excluded, as in firmware. If a peer with a known route keeps flooding ACKs or

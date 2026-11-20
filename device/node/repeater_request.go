@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/binary"
+	"math"
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -82,8 +83,8 @@ func (n *RepeaterNode) buildStats() RepeaterStats {
 		NSentDirect:     c.SentDirect,
 		NRecvFlood:      c.RecvFlood,
 		NRecvDirect:     c.RecvDirect,
-		NFloodDups:      uint16(c.FloodDups),
-		NDirectDups:     uint16(c.DirectDups),
+		NFloodDups:      uint16(min(c.FloodDups, math.MaxUint16)),
+		NDirectDups:     uint16(min(c.DirectDups, math.MaxUint16)),
 		TotalUpTimeSecs: uint32(time.Since(n.startTime).Seconds()),
 	}
 }
