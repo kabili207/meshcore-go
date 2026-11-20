@@ -2,6 +2,7 @@ package room
 
 import (
 	"encoding/binary"
+	"math"
 	"sync"
 	"time"
 
@@ -121,8 +122,8 @@ func (p *DefaultStatsProvider) GetStats() ServerStats {
 		NSentDirect:     c.SentDirect,
 		NRecvFlood:      c.RecvFlood,
 		NRecvDirect:     c.RecvDirect,
-		NFloodDups:      uint16(c.FloodDups),
-		NDirectDups:     uint16(c.DirectDups),
+		NFloodDups:      uint16(min(c.FloodDups, math.MaxUint16)),
+		NDirectDups:     uint16(min(c.DirectDups, math.MaxUint16)),
 		NPosted:         posted,
 		NPostPush:       postPush,
 	}

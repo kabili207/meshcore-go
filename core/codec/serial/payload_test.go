@@ -201,3 +201,15 @@ func TestParseSetDeviceTime(t *testing.T) {
 		t.Fatalf("ParseSetDeviceTime = %d, %v", epoch, err)
 	}
 }
+
+func TestParseContactMultibytePath(t *testing.T) {
+	hops := []byte{0xA1, 0xA2, 0xB1, 0xB2}
+	c := &Contact{Type: 1, OutPathLen: 0x42, OutPath: hops} // 2-byte hashes, 2 hops
+	got, err := ParseContact(c.EncodeWithCode(CmdAddUpdateContact))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.OutPath, hops) {
+		t.Errorf("OutPath = %x, want %x", got.OutPath, hops)
+	}
+}

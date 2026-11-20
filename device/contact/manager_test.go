@@ -747,3 +747,39 @@ func TestManager_RegularsLeaveAnonPoolReserved(t *testing.T) {
 		}
 	}
 }
+
+func TestManager_AddContact_ZeroKey(t *testing.T) {
+	m := newTestManager(t, 10, false)
+
+	if _, err := m.AddContact(makeContactWithID(core.MeshCoreID{}, "Null", 1)); err != ErrInvalidContact {
+		t.Fatalf("expected ErrInvalidContact, got %v", err)
+	}
+	if m.Count() != 0 {
+		t.Errorf("Count() = %d, want 0", m.Count())
+	}
+	if got := m.SearchByHash(0x00); len(got) != 0 {
+		t.Errorf("SearchByHash(0x00) = %d contacts, want 0", len(got))
+	}
+}
+
+type staticPersistence struct{ contacts []*ContactInfo }
+
+func (p *staticPersistence) Load() ([]*ContactInfo, error) { return p.contacts, nil }
+func (p *staticPersistence) Save(*ContactInfo) error       { return nil }
+func (p *staticPersistence) Delete(core.MeshCoreID) error  { return nil }
+
+func TestManager_SeedSkipsZeroKey(t *testing.T) {
+	kp := generateTestKeyPair(t)
+	good := makeIDWithHash(0x10)
+	m := NewManager(kp.PrivateKey, ManagerConfig{
+		MaxContacts: 10,
+		Persistence: &staticPersistence{contacts: []*ContactInfo{
+			makeContactWithID(core.MeshCoreID{}, "Null", 1),
+			makeContactWithID(good, "Good", 2),
+		}},
+	})
+
+	if m.Count() != 1 || m.GetByPubKey(good) == nil {
+		t.Errorf("expected only the valid contact to load, Count() = %d", m.Count())
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kabili207/meshcore-go/core"
@@ -89,6 +90,8 @@ type CompanionNode struct {
 	log         *slog.Logger
 
 	keepAliveEvery time.Duration
+
+	pendingDiscovery atomic.Uint32 // tag of the outstanding path discovery
 
 	pendingMu        sync.Mutex
 	pendingLogins    map[core.MeshCoreID]uint32 // server -> login send time
@@ -201,6 +204,8 @@ func NewCompanion(cfg CompanionConfig) (*CompanionNode, error) {
 
 	// Watch responses for login-OK correlation and connection liveness.
 	base.OnEvent(n.onInternalEvent)
+
+	base.reciprocatePath = n.shouldReciprocatePath
 
 	return n, nil
 }

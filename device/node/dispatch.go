@@ -54,7 +54,7 @@ func (b *BaseNode) baseEvent(pkt *codec.Packet, src transport.PacketSource, from
 }
 
 // handleAdvert processes an ADVERT packet: verify signature, update contacts,
-// extract flood path, then emit AdvertReceived.
+// then emit AdvertReceived.
 func (b *BaseNode) handleAdvert(pkt *codec.Packet, src transport.PacketSource) {
 	advert, err := codec.ParseAdvertPayload(pkt.Payload)
 	if err != nil {
@@ -84,11 +84,6 @@ func (b *BaseNode) handleAdvert(pkt *codec.Packet, src transport.PacketSource) {
 			return
 		}
 
-		// Update path from flood route if available
-		if result.Contact != nil {
-			b.updateContactPathFromFlood(pkt, result.Contact)
-		}
-
 		b.emitEvent(&event.AdvertReceived{
 			Event:   b.baseEvent(pkt, src, advertID),
 			Advert:  advert,
@@ -105,7 +100,7 @@ func (b *BaseNode) handleAdvert(pkt *codec.Packet, src transport.PacketSource) {
 }
 
 // handleTxtMsg processes an addressed TXT_MSG packet: find sender, decrypt,
-// parse content, auto-ACK, update contact path, then emit TextMessageReceived.
+// parse content, auto-ACK, then emit TextMessageReceived.
 func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 	ct, secret, plaintext := b.decryptAddressed(pkt)
 	if ct == nil {
@@ -117,9 +112,6 @@ func (b *BaseNode) handleTxtMsg(pkt *codec.Packet, src transport.PacketSource) {
 		b.log.Debug("failed to parse txt msg", "error", err)
 		return
 	}
-
-	// Update contact path from flood route
-	b.updateContactPathFromFlood(pkt, ct)
 
 	reply := b.buildReplyContext(pkt, ct, secret)
 
@@ -181,7 +173,11 @@ func (b *BaseNode) handleAck(pkt *codec.Packet, src transport.PacketSource) {
 
 	// Resolve pending ACK if tracker is configured
 	if b.ack != nil {
-		b.ack.Resolve(ackPayload.Checksum)
+		if peer, ok := b.ack.ResolvePeer(ackPayload.Checksum); ok {
+			if ct := b.contacts.GetByPubKey(peer); ct != nil {
+				b.retryReturnPath(pkt, ct)
+			}
+		}
 	}
 
 	b.emitEvent(&event.AckReceived{
@@ -230,8 +226,8 @@ func (b *BaseNode) handleAnonReq(pkt *codec.Packet, src transport.PacketSource) 
 		DirectPathLen: contact.PathUnknown,
 		ReplyScope:    b.Router.ResolveReplyScope(pkt),
 	}
-	if pkt.IsFlood() && pkt.HopCount() > 0 {
-		reply.FloodPath = append([]byte(nil), pkt.Path...)
+	if pkt.IsFlood() {
+		reply.FloodPath = append([]byte{}, pkt.Path...) // non-nil even with no hops
 		reply.PathHashSize = pkt.PathHashSize
 	}
 
@@ -256,9 +252,6 @@ func (b *BaseNode) handleReq(pkt *codec.Packet, src transport.PacketSource) {
 		b.log.Debug("failed to parse request", "error", err)
 		return
 	}
-
-	// Update contact path from flood route
-	b.updateContactPathFromFlood(pkt, ct)
 
 	reply := b.buildReplyContext(pkt, ct, secret)
 
@@ -285,8 +278,7 @@ func (b *BaseNode) handleResponse(pkt *codec.Packet, src transport.PacketSource)
 		return
 	}
 
-	// Update contact path from flood route
-	b.updateContactPathFromFlood(pkt, ct)
+	b.retryReturnPath(pkt, ct)
 
 	reply := b.buildReplyContext(pkt, ct, secret)
 
@@ -315,6 +307,12 @@ func (b *BaseNode) handlePath(pkt *codec.Packet, src transport.PacketSource) {
 	// Update contact's direct routing path from PATH content
 	nowTS := b.clock.GetCurrentTime()
 	contact.ProcessPath(b.contacts, ct.ID, pathContent, nowTS)
+
+	if pkt.IsFlood() && b.reciprocatePath != nil && b.reciprocatePath(pathContent) {
+		if err := b.sendReciprocalPath(pkt, secret, ct.ID, pathContent.PathLen, pathContent.Path, reciprocalPathDelay); err != nil {
+			b.log.Debug("failed to send reciprocal path", "error", err)
+		}
+	}
 
 	reply := b.buildReplyContext(pkt, ct, secret)
 
@@ -387,7 +385,7 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 	if !ok {
 		return // no registered key for this hash decrypted (MAC failed on all)
 	}
-	_, txtType, message, err := crypto.ParseGrpTxtPlaintext(plaintext)
+	timestamp, txtType, message, err := crypto.ParseGrpTxtPlaintext(plaintext)
 	if err != nil {
 		b.log.Debug("failed to parse group text plaintext", "error", err)
 		return
@@ -399,10 +397,11 @@ func (b *BaseNode) handleGrpTxt(pkt *codec.Packet, src transport.PacketSource) {
 	}
 
 	b.emitEvent(&event.GroupTextReceived{
-		Event:       b.baseEvent(pkt, src, core.MeshCoreID{}),
-		ChannelHash: grp.ChannelHash,
-		ChannelKey:  key,
-		Message:     message,
+		Event:           b.baseEvent(pkt, src, core.MeshCoreID{}),
+		ChannelHash:     grp.ChannelHash,
+		ChannelKey:      key,
+		SenderTimestamp: timestamp,
+		Message:         message,
 	})
 }
 

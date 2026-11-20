@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"testing"
+	"time"
 
 	"encoding/binary"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/advert"
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
+	"github.com/kabili207/meshcore-go/transport"
 )
 
 // --- test doubles -----------------------------------------------------------
@@ -593,6 +596,20 @@ func TestAddAndGetContact(t *testing.T) {
 	}
 	if !bytes.Equal(resp[0][1:33], id[:]) || string(resp[0][100:105]) != "Alice" {
 		t.Errorf("contact roundtrip mismatch: key=%x name=%q", resp[0][1:33], resp[0][100:132])
+	}
+}
+
+func TestAddContactZeroKey(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(nil)
+	store := contact.NewManager(priv, contact.ManagerConfig{})
+	s := NewServer(Config{Node: &fakeNode{clk: clock.New(), contacts: store}})
+
+	resp := collectResponses(t, s, cmd(addUpdateFrame(core.MeshCoreID{}, "Null", 0xFF)...))
+	if resp[0][0] != serial.RespCodeErr || resp[0][1] != serial.ErrCodeIllegalArg {
+		t.Fatalf("expected IllegalArg, got %v", resp[0])
+	}
+	if store.Count() != 0 {
+		t.Errorf("Count() = %d, want 0", store.Count())
 	}
 }
 
@@ -1579,5 +1596,120 @@ func TestSendAnonReq(t *testing.T) {
 				t.Errorf("expected error %d, got %v", tc.wantErr, resp[0])
 			}
 		})
+	}
+}
+
+func TestReceivedMessagesReportRoute(t *testing.T) {
+	flood := &codec.Packet{Header: codec.RouteTypeFlood, PathLen: 0x43, SNR: 22}
+	direct := &codec.Packet{Header: codec.RouteTypeDirect, PathLen: 2, SNR: -8}
+
+	for _, tc := range []struct {
+		name    string
+		pkt     *codec.Packet
+		pathLen uint8
+		snr     int8
+	}{
+		{"flood", flood, 0x43, 22},
+		{"direct", direct, serial.PathLenUnknown, -8},
+		{"no packet", nil, serial.PathLenUnknown, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var handler func(any)
+			s := NewServer(Config{
+				Node:   &fakeNode{clk: clock.New(), contacts: &stubStore{}},
+				Events: func(h func(any)) { handler = h },
+			})
+			handler(&event.GroupTextReceived{
+				Event:           event.Event{RawPacket: tc.pkt},
+				ChannelKey:      crypto.DefaultChannelKey,
+				SenderTimestamp: 1234,
+				Message:         "hey",
+			})
+			handler(&event.TextMessageReceived{Event: event.Event{RawPacket: tc.pkt}, Message: "hi"})
+
+			for _, qm := range s.queue {
+				if qm.pathLen != tc.pathLen || qm.snr != tc.snr {
+					t.Errorf("path_len/snr = %#x/%d, want %#x/%d", qm.pathLen, qm.snr, tc.pathLen, tc.snr)
+				}
+			}
+			if s.queue[0].senderTS != 1234 {
+				t.Errorf("channel timestamp = %d, want the sender's", s.queue[0].senderTS)
+			}
+		})
+	}
+}
+
+// connectForRxLogs serves one app over an unbuffered pipe and waits until the
+// session exists.
+func connectForRxLogs(t *testing.T) (*Server, net.Conn) {
+	t.Helper()
+	s := NewServer(Config{Node: &fakeNode{clk: clock.New(), contacts: &stubStore{}}})
+	app, conn := net.Pipe()
+	t.Cleanup(func() { app.Close(); conn.Close() })
+	go s.Serve(context.Background(), conn)
+	for deadline := time.Now().Add(2 * time.Second); len(s.connectedSessions()) == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("session did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	app.SetDeadline(time.Now().Add(2 * time.Second))
+	return s, app
+}
+
+func TestMonitorPacketSendsLogRxData(t *testing.T) {
+	s, app := connectForRxLogs(t)
+	pkt := codec.NewPacket(codec.PayloadTypeGrpTxt, codec.RouteTypeFlood, []byte{1, 2, 3})
+	pkt.PathLen, pkt.PathHashSize, pkt.Path, pkt.SNR = 1, 1, []byte{0x42}, -6
+
+	s.MonitorPacket(codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeFlood, []byte{9}), transport.PacketSourceLocal)
+	s.MonitorPacket(pkt, transport.PacketSourceMQTT)
+	go s.pushToSessions(serial.EncodeMsgWaiting()) // blocks until the app reads
+
+	fr := serial.NewFrameReader(app)
+	_, first, err := fr.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[0] != serial.PushCodeLogRxData || int8(first[1]) != -6 || first[2] != 0 {
+		t.Fatalf("first frame = %x, want LOG_RX_DATA for the received packet", first)
+	}
+	var got codec.Packet
+	if err := got.ReadFrom(first[3:]); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Path, pkt.Path) || !bytes.Equal(got.Payload, pkt.Payload) {
+		t.Errorf("logged packet = %+v", got)
+	}
+	_, second, err := fr.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second[0] != serial.PushCodeMsgWaiting {
+		t.Errorf("second frame = %x, want MSG_WAITING after the log", second)
+	}
+}
+
+func TestMonitorPacketDoesNotBlockOnStalledApp(t *testing.T) {
+	s, _ := connectForRxLogs(t) // nothing reads the pipe
+	pkt := codec.NewPacket(codec.PayloadTypeAck, codec.RouteTypeFlood, []byte{1})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range maxQueuedRxLogs * 3 {
+			s.MonitorPacket(pkt, transport.PacketSourceMQTT)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("MonitorPacket blocked on a stalled app")
+	}
+	sess := s.connectedSessions()[0]
+	sess.rxLogMu.Lock()
+	defer sess.rxLogMu.Unlock()
+	if len(sess.rxLogs) > maxQueuedRxLogs {
+		t.Errorf("queued %d frames, limit is %d", len(sess.rxLogs), maxQueuedRxLogs)
 	}
 }

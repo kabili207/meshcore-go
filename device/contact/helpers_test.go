@@ -517,3 +517,31 @@ func TestProcessPath_UnknownSender(t *testing.T) {
 		t.Errorf("expected ErrContactNotFound, got %v", err)
 	}
 }
+
+// The all-zero key has order 4, so R = identity, S = 0 is a valid signature
+// whenever the challenge hash is a multiple of 4. No private key is needed.
+func TestProcessAdvert_ForgedZeroKeyRejected(t *testing.T) {
+	m := newTestManager(t, 10, false)
+
+	advert := &codec.AdvertPayload{
+		AppData: &codec.AdvertAppData{Name: "Null", NodeType: codec.NodeTypeChat},
+	}
+	advert.Signature[0] = 0x01 // encoded identity point
+	for ts := uint32(1); ; ts++ {
+		advert.Timestamp = ts
+		if crypto.VerifyAdvert(advert) {
+			break
+		}
+		if ts > 1000 {
+			t.Fatal("no forgeable timestamp found")
+		}
+	}
+
+	result := ProcessAdvert(m, advert, 5000, true)
+	if !result.Rejected || result.RejectReason != ErrInvalidContact.Error() {
+		t.Errorf("result = %+v, want rejected with %q", result, ErrInvalidContact)
+	}
+	if m.Count() != 0 {
+		t.Errorf("Count() = %d, want 0", m.Count())
+	}
+}

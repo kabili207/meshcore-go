@@ -156,6 +156,7 @@ func (n *CompanionNode) sendTextChunk(to core.MeshCoreID, message string, o send
 		})
 		ackHash := crypto.ComputeAckHash(ackData, to[:])
 		n.ackTracker.Track(ackHash, ack.PendingACK{
+			Peer:      to,
 			OnACK:     o.onACK,
 			OnTimeout: o.onTimeout,
 		})

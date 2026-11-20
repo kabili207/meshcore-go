@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+
+	"github.com/kabili207/meshcore-go/core/codec"
 )
 
 // Command payload parsers for the companion protocol (app -> device). Each takes
@@ -190,8 +192,11 @@ func ParseContact(payload []byte) (*Contact, error) {
 		LastAdvert: binary.LittleEndian.Uint32(payload[132:136]),
 	}
 	copy(c.PublicKey[:], payload[1:33])
-	if c.OutPathLen != PathLenUnknown && int(c.OutPathLen) <= 64 {
-		c.OutPath = append([]byte(nil), payload[36:36+int(c.OutPathLen)]...)
+	if c.OutPathLen != PathLenUnknown {
+		// OutPathLen is the packed wire byte (hash size | hop count).
+		if n := codec.PathInfoFromWireByte(c.OutPathLen).ByteLen(); n <= 64 {
+			c.OutPath = append([]byte(nil), payload[36:36+n]...)
+		}
 	}
 	if len(payload) >= contactFixedLen+8 {
 		c.GPSLat = int32(binary.LittleEndian.Uint32(payload[136:140]))

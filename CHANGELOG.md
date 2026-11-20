@@ -73,6 +73,15 @@ contain breaking changes; those are called out explicitly below.
 
 ### Added
 
+- **`LOG_RX_DATA` for companion apps.** `companion.Server.MonitorPacket` plugs
+  into `Router.SetPacketMonitor` and sends each received packet to connected
+  apps, as firmware does. `examples/companion` turns it on.
+
+- **SQLite storage for companion nodes.** `device/store/sqlite` saves contacts,
+  channels and settings to one database, committing each change as it happens.
+  `companion.Config.Persistence` restores channels and settings at startup, and
+  `examples/companion` uses this through its new `-db` flag.
+
 - **Self adverts on request.** `CMD_SEND_SELF_ADVERT` now sends an advert
   through the new `Config.SendSelfAdvert` callback, zero-hop or, with byte 1
   set to 1, flooded in the default scope, as firmware does. It carries the
@@ -175,6 +184,9 @@ contain breaking changes; those are called out explicitly below.
 
 ### Changed
 
+- **Contact routes are learned only from PATH packets**, as in firmware. Adverts
+  and other flooded packets no longer set or replace a contact's direct path.
+
 - **Firmware v1.18.0 is now the target.** The companion server reports
   `FIRMWARE_VER_CODE` 14 (was 13), which tells apps `CMD_RUN_CLI_COMMAND`
   exists. `cli.FirmwareVersion`, the `ver` reply for the repeater and room
@@ -207,6 +219,45 @@ contain breaking changes; those are called out explicitly below.
   old behavior, load `loop.detect off` with `LoadConfig`.
 
 ### Fixed
+
+- **Contacts with an all-zero public key are rejected.** That key is a
+  small-order point, so its ECDH shared secret is all zeros, and an advert for
+  it can be forged without a private key. `AddContact` returns the new
+  `contact.ErrInvalidContact`, `ProcessAdvert` rejects such adverts before
+  touching the store, persisted records with it are skipped on load, and the
+  companion answers `CMD_ADD_UPDATE_CONTACT` with `ERR_CODE_ILLEGAL_ARG`.
+  Ported from firmware `dev` (`060fd219`), which skips empty contact slots.
+
+- **Duplicate packet counts in repeater and room server stats saturate at
+  65535** instead of wrapping, as on firmware `dev` (`26e43890`).
+
+- **Companions answer flooded PATH packets with a reciprocal PATH**, so the
+  sender also learns a direct route. The reply to our own path discovery is
+  excluded, as in firmware. If a peer with a known route keeps flooding ACKs or
+  responses, the PATH is sent again after 3 seconds.
+
+- **Zero-hop floods now get a PATH return.** They were treated as if they had no
+  flood path, so direct neighbors never learned a route to each other.
+  `ReplyContext.HasFloodPath` is now true for any flooded packet, and `FloodPath`
+  is empty rather than nil when there were no hops.
+
+- **Companion apps now get real routing data for received messages.** Messages
+  report the packet's `path_len` and SNR instead of always `0xFF` and 0, and
+  channel messages carry the sender's timestamp through the new
+  `GroupTextReceived.SenderTimestamp`.
+
+- **`CMD_ADD_UPDATE_CONTACT` keeps multi-byte paths.** `ParseContact` read the
+  packed path length as a byte count.
+
+- **Persisted contacts now match the contact table.** Evicted contacts are
+  deleted from the `ContactPersistence` backend instead of returning on restart,
+  and paths learned from PATH packets are saved.
+
+- **`ContactManager.UpdateContact` no longer zeroes the path when passed a stored
+  contact.** Updating an existing contact with `CMD_ADD_UPDATE_CONTACT` hit this.
+
+- **`FileContactStore.Flush` is safe to call concurrently.** Overlapping writes
+  could fail or leave an older snapshot on disk.
 
 - **Changing a router's send scope raced with sends.** `SetSendScope` and
   `ClearSendScope` wrote the scope while senders read it unlocked. Both now

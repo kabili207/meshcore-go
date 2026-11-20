@@ -319,7 +319,7 @@ func TestHandleTxtMsg_SignedAutoACK(t *testing.T) {
 	}
 	mac, ciphertext := codec.SplitMAC(encrypted)
 	payload := codec.BuildAddressedPayload(node.id.Hash(), peerID.Hash(), mac, ciphertext)
-	pkt := codec.NewPacket(codec.PayloadTypeTxtMsg, codec.RouteTypeFlood, payload)
+	pkt := codec.NewPacket(codec.PayloadTypeTxtMsg, codec.RouteTypeDirect, payload)
 
 	node.processPacket(pkt, transport.PacketSourceMQTT)
 

@@ -37,6 +37,7 @@ import (
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/node"
 	"github.com/kabili207/meshcore-go/device/router"
+	"github.com/kabili207/meshcore-go/device/store/sqlite"
 	"github.com/kabili207/meshcore-go/transport"
 	mqtttransport "github.com/kabili207/meshcore-go/transport/mqtt"
 	serialtransport "github.com/kabili207/meshcore-go/transport/serial"
@@ -55,8 +56,9 @@ func main() {
 func run() error {
 	var (
 		listen  = flag.String("listen", "127.0.0.1:5000", "companion server TCP listen address")
-		name    = flag.String("name", "meshcore-go", "node advertised name")
+		name    = flag.String("name", "meshcore-go", "initial advertised name (the saved name is used after the first run)")
 		keyPath = flag.String("key", "companion.key", "path to the node key file (created if missing)")
+		dbPath  = flag.String("db", "companion.db", "path to the SQLite database for contacts, channels and settings (created if missing)")
 
 		serialPort = flag.String("serial", "", "serial port for the LoRa radio (optional, e.g. /dev/ttyUSB0)")
 		baud       = flag.Int("baud", 115200, "serial baud rate")
@@ -73,10 +75,10 @@ func run() error {
 		udpPort   = flag.Int("udp-port", udptransport.DefaultPort, "UDP multicast port")
 		udpIface  = flag.String("udp-iface", "", "network interface for UDP multicast (optional, e.g. eth0)")
 
-		freq = flag.Float64("freq", 915.0, "radio frequency in MHz (reported to the app)")
-		bw   = flag.Float64("bw", 250, "radio bandwidth in kHz (reported to the app)")
-		sf   = flag.Int("sf", 11, "radio spreading factor (reported to the app)")
-		cr   = flag.Int("cr", 5, "radio coding rate (reported to the app)")
+		freq = flag.Float64("freq", 915.0, "initial radio frequency in MHz (reported to the app)")
+		bw   = flag.Float64("bw", 250, "initial radio bandwidth in kHz (reported to the app)")
+		sf   = flag.Int("sf", 11, "initial radio spreading factor (reported to the app)")
+		cr   = flag.Int("cr", 5, "initial radio coding rate (reported to the app)")
 	)
 	flag.Parse()
 
@@ -116,11 +118,28 @@ func run() error {
 		return err
 	}
 
+	db, err := sqlite.Open(*dbPath)
+	if err != nil {
+		slog.Error("Failed to open database", "path", *dbPath, "error", err)
+		return err
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			slog.Error("Failed to close database", "path", *dbPath, "error", err)
+		}
+	}()
+
 	comp, err := node.NewCompanion(node.CompanionConfig{
 		PrivateKey: priv,
 		Transports: transports,
-		Name:       *name,
-		Logger:     slog.Default(),
+		Contacts: contact.NewManager(priv, contact.ManagerConfig{
+			MaxContacts:       256,
+			OverwriteWhenFull: true,
+			Logger:            slog.Default(),
+			Persistence:       db,
+		}),
+		Name:   *name,
+		Logger: slog.Default(),
 	})
 	if err != nil {
 		slog.Error("Failed to create companion node", "error", err)
@@ -138,8 +157,10 @@ func run() error {
 		}
 	})
 
-	srv := companion.NewServer(companion.Config{
-		Node: comp.Base(),
+	var srv *companion.Server
+	srv = companion.NewServer(companion.Config{
+		Node:        comp.Base(),
+		Persistence: db,
 		Identity: companion.Identity{
 			Name:         *name,
 			RadioFreqMHz: *freq,
@@ -190,7 +211,7 @@ func run() error {
 				PrivateKey: priv,
 				PublicKey:  comp.Base().PublicKey(),
 				Clock:      comp.Base().Clock(),
-				AppData:    &codec.AdvertAppData{Name: *name, NodeType: codec.NodeTypeChat},
+				AppData:    &codec.AdvertAppData{Name: srv.Name(), NodeType: codec.NodeTypeChat},
 			})
 			pkt := builder()
 			if pkt == nil {
@@ -212,6 +233,8 @@ func run() error {
 		Logger: slog.Default(),
 	})
 
+	comp.Base().Router.SetPacketMonitor(srv.MonitorPacket)
+
 	// Push PUSH_CODE_CONTACT_DELETED when the contact table evicts an entry, so
 	// the app's contact list stays in sync.
 	if mgr, ok := comp.Base().Contacts().(*contact.ContactManager); ok {
@@ -231,7 +254,7 @@ func run() error {
 	}
 	go func() { errc <- srv.ListenAndServe(ctx, *listen) }()
 
-	slog.Info("companion example running", "listen", *listen, "id", comp.ID().String(), "name", *name)
+	slog.Info("companion example running", "listen", *listen, "id", comp.ID().String(), "name", srv.Name())
 
 	select {
 	case <-ctx.Done():

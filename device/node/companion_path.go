@@ -18,6 +18,7 @@ const telemPermBase = 0x01
 func (n *CompanionNode) ResetPath(to core.MeshCoreID) {
 	if ct := n.base.Contacts().GetByPubKey(to); ct != nil {
 		ct.OutPathLen = contact.PathUnknown
+		_ = n.base.Contacts().UpdateContact(ct)
 	}
 }
 
@@ -38,6 +39,7 @@ func (n *CompanionNode) SendPathDiscovery(to core.MeshCoreID) error {
 	reqData[0] = ^uint8(telemPermBase)
 	_, _ = rand.Read(reqData[4:8])
 	content := codec.BuildRequestContent(tag, codec.ReqTypeGetTelemetry, reqData)
+	n.pendingDiscovery.Store(tag)
 
 	encrypted, err := crypto.EncryptAddressedWithSecret(content, secret)
 	if err != nil {
@@ -50,6 +52,18 @@ func (n *CompanionNode) SendPathDiscovery(to core.MeshCoreID) error {
 	// Always flood, even if a (possibly stale) direct path is known.
 	n.base.Router.SendFloodScoped(pkt)
 	return nil
+}
+
+// shouldReciprocatePath reports whether a flooded PATH should get a reciprocal
+// PATH. The answer to our own path discovery does not, as in firmware.
+func (n *CompanionNode) shouldReciprocatePath(content *codec.PathContent) bool {
+	if content.ExtraType == codec.PayloadTypeResponse && len(content.Extra) > 4 {
+		resp, err := codec.ParseResponseContent(content.Extra)
+		if err == nil && resp.Tag != 0 && n.pendingDiscovery.CompareAndSwap(resp.Tag, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // SendTrace broadcasts a TRACE along the given relay-hash route, collecting the

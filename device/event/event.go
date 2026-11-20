@@ -63,8 +63,8 @@ type ReplyContext struct {
 	SharedSecret []byte
 
 	// FloodPath is the flood path of the original packet, exactly as received.
-	// Non-nil only when it arrived by flood with at least one hop. SendReply
-	// returns it in a PATH packet, as firmware's createPathReturn does. It is
+	// Non-nil only when it arrived by flood, and empty if it took no hops.
+	// SendReply returns it in a PATH packet, as firmware's createPathReturn does. It is
 	// the requester's route to us (relays append their hash, and a direct
 	// route is consumed from the front), so it must not be reversed. Our own
 	// route back to the requester is the reverse, see codec.ReverseFloodPath.
@@ -95,10 +95,10 @@ type ReplyContext struct {
 	Delay time.Duration
 }
 
-// HasFloodPath returns true if the original packet arrived via flood routing
-// and a reversed path is available for PATH-wrapped responses.
+// HasFloodPath returns true if the original packet arrived via flood routing, so
+// a response can be wrapped in a PATH packet.
 func (r *ReplyContext) HasFloodPath() bool {
-	return len(r.FloodPath) > 0
+	return r.FloodPath != nil
 }
 
 // HasDirectPath returns true if a direct routing path to the sender is known.

@@ -29,6 +29,9 @@ var (
 
 	// ErrContactNotFound is returned when a contact lookup fails.
 	ErrContactNotFound = errors.New("contact not found")
+
+	// ErrInvalidContact is returned when a contact has an all-zero public key.
+	ErrInvalidContact = errors.New("contact has an all-zero public key")
 )
 
 // Compile-time assertion that ContactManager implements ContactStore.
@@ -106,8 +109,8 @@ func NewManager(localPrivKey ed25519.PrivateKey, cfg ManagerConfig) *ContactMana
 			m.log.Warn("failed to load persisted contacts", "error", err)
 		} else {
 			for _, c := range loaded {
-				if _, err := m.AddContact(c); err != nil {
-					break // store full
+				if _, err := m.AddContact(c); errors.Is(err, ErrContactsFull) {
+					break
 				}
 			}
 		}
@@ -149,6 +152,12 @@ func (m *ContactManager) SetOnContactOverwrite(fn func(id core.MeshCoreID)) {
 // Returns a pointer to the stored contact. The caller should not hold
 // references to the input ContactInfo after calling AddContact.
 func (m *ContactManager) AddContact(c *ContactInfo) (*ContactInfo, error) {
+	// The all-zero key is a small-order point: ECDH with it yields an all-zero
+	// shared secret for any private key, and it would match hash 0x00.
+	if c.ID.IsZero() {
+		return nil, ErrInvalidContact
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -199,12 +208,8 @@ func (m *ContactManager) UpdateContact(c *ContactInfo) error {
 			existing.Type = c.Type
 			existing.Flags = c.Flags
 			existing.OutPathLen = c.OutPathLen
-			if len(c.OutPath) > 0 {
-				existing.OutPath = make([]byte, len(c.OutPath))
-				copy(existing.OutPath, c.OutPath)
-			} else {
-				existing.OutPath = nil
-			}
+			// c may be existing itself (GetByPubKey returns stored pointers).
+			existing.OutPath = append([]byte(nil), c.OutPath...)
 			existing.LastAdvertTimestamp = c.LastAdvertTimestamp
 			existing.LastMod = c.LastMod
 			existing.GPSLat = c.GPSLat
@@ -237,11 +242,7 @@ func (m *ContactManager) RemoveContact(id core.MeshCoreID) error {
 			if m.onContactRemoved != nil {
 				m.onContactRemoved(id)
 			}
-			if m.persistence != nil {
-				if err := m.persistence.Delete(id); err != nil {
-					m.log.Debug("failed to persist contact removal", "error", err)
-				}
-			}
+			m.unpersist(id)
 			return nil
 		}
 	}
@@ -255,7 +256,18 @@ func (m *ContactManager) persist(c *ContactInfo) {
 		return
 	}
 	if err := m.persistence.Save(c); err != nil {
-		m.log.Debug("failed to persist contact", "error", err)
+		m.log.Warn("failed to persist contact", "error", err)
+	}
+}
+
+// unpersist removes a contact from the persistence backend, if configured.
+// Called with m.mu held, so the backend must not block.
+func (m *ContactManager) unpersist(id core.MeshCoreID) {
+	if m.persistence == nil {
+		return
+	}
+	if err := m.persistence.Delete(id); err != nil {
+		m.log.Warn("failed to persist contact removal", "error", err)
 	}
 }
 
@@ -368,6 +380,7 @@ func (m *ContactManager) allocateSlot(transientOnly bool) *ContactInfo {
 		}
 		// Recycling an anon slot does not fire onContactOverwrite: the entry was
 		// never a real contact. Firmware notes the same exemption.
+		m.unpersist(m.contacts[oldestIdx].ID)
 		m.contacts[oldestIdx] = &ContactInfo{}
 		return m.contacts[oldestIdx]
 	}
@@ -408,6 +421,7 @@ func (m *ContactManager) allocateSlot(transientOnly bool) *ContactInfo {
 	if m.onContactOverwrite != nil {
 		m.onContactOverwrite(m.contacts[oldestIdx].ID)
 	}
+	m.unpersist(m.contacts[oldestIdx].ID)
 
 	m.contacts[oldestIdx] = &ContactInfo{}
 	return m.contacts[oldestIdx]

@@ -167,8 +167,8 @@ type Contact struct {
 	PublicKey [32]byte
 	Type      uint8
 	Flags     uint8
-	// OutPathLen is the cached out-path hop count; 0xFF means the route is
-	// unknown (OUT_PATH_UNKNOWN).
+	// OutPathLen is the cached out-path wire byte (hash size | hop count); 0xFF
+	// means the route is unknown (OUT_PATH_UNKNOWN).
 	OutPathLen uint8
 	// OutPath holds up to 64 hop-hash bytes; zero-padded to 64 on the wire.
 	OutPath []byte
@@ -323,6 +323,17 @@ func EncodeStatusResponse(pubKeyPrefix, statusBlob []byte) []byte {
 // EncodeMsgWaiting builds a PUSH_CODE_MSG_WAITING payload (single byte). It
 // tells the app to drain the queue with CMD_SYNC_NEXT_MESSAGE.
 func EncodeMsgWaiting() []byte { return []byte{PushCodeMsgWaiting} }
+
+// EncodeLogRxData builds a PUSH_CODE_LOG_RX_DATA payload: [code][snr i8]
+// [rssi i8][raw packet]. snr is in 0.25 dB units and rssi in dBm.
+func EncodeLogRxData(snr, rssi int8, raw []byte) []byte {
+	b := make([]byte, 3+len(raw))
+	b[0] = PushCodeLogRxData
+	b[1] = byte(snr)
+	b[2] = byte(rssi)
+	copy(b[3:], raw)
+	return b
+}
 
 // EncodeSendConfirmed builds a PUSH_CODE_SEND_CONFIRMED payload:
 // [code][ack_code u32][round_trip_ms u32]. ackCode must equal the expectedAck

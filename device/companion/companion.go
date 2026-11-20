@@ -40,7 +40,12 @@ import (
 	"github.com/kabili207/meshcore-go/device/contact"
 	"github.com/kabili207/meshcore-go/device/event"
 	"github.com/kabili207/meshcore-go/device/router"
+	"github.com/kabili207/meshcore-go/transport"
 )
+
+// maxQueuedRxLogs bounds the LOG_RX_DATA frames waiting for a slow app. Beyond
+// it new frames are dropped, since they are diagnostics.
+const maxQueuedRxLogs = 64
 
 // Node is the subset of a meshcore-go node the companion server reads. A
 // *node.BaseNode satisfies it, so callers pass companionNode.Base().
@@ -176,6 +181,11 @@ type Config struct {
 	// CMD_SEND_SELF_ADVERT returns an error.
 	SendSelfAdvert func(ctx context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error
 
+	// Persistence, if set, saves app-configured settings and channels and
+	// restores them in NewServer. Saved values take precedence over Identity.
+	// Without it, they last until the process exits.
+	Persistence Persistence
+
 	// Logger for connection events. Falls back to slog.Default() if nil.
 	Logger *slog.Logger
 }
@@ -215,6 +225,7 @@ type Server struct {
 	exportSelf    func() []byte
 	setFloodScope func(key router.TransportKey)
 	sendAdvert    func(ctx context.Context, appData *codec.AdvertAppData, flood bool, scope router.TransportKey) error
+	persistence   Persistence
 	startTime     time.Time
 	log           *slog.Logger
 
@@ -258,6 +269,9 @@ type Server struct {
 
 // channelEntry is one configured group channel. secret is 16 bytes, or empty
 // for an unconfigured slot.
+// channelSecretLen is the size of the 128-bit channel secrets firmware supports.
+const channelSecretLen = 16
+
 type channelEntry struct {
 	name   string
 	secret []byte
@@ -347,6 +361,7 @@ func NewServer(cfg Config) *Server {
 		exportSelf:    cfg.ExportSelf,
 		setFloodScope: cfg.SetFloodScope,
 		sendAdvert:    cfg.SendSelfAdvert,
+		persistence:   cfg.Persistence,
 		startTime:     time.Now(),
 		log:           log.WithGroup("companion"),
 		name:          id.Name,
@@ -361,6 +376,7 @@ func NewServer(cfg Config) *Server {
 		sessions:      make(map[*session]struct{}),
 		cliReplyDelay: cli.ReplyDelay,
 	}
+	s.restore()
 	if cfg.Events != nil {
 		cfg.Events(s.handleEvent)
 	}
@@ -410,9 +426,13 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 // Serve runs the companion protocol over rw until the stream closes or ctx is
 // cancelled. Use it directly to serve a pty (the serial path) instead of TCP.
 func (s *Server) Serve(ctx context.Context, rw io.ReadWriter) error {
-	sess := &session{srv: s, w: rw, ctx: ctx}
+	sess := &session{srv: s, w: rw, ctx: ctx, rxLogWake: make(chan struct{}, 1)}
 	s.addSession(sess)
 	defer s.removeSession(sess)
+
+	done := make(chan struct{})
+	defer close(done)
+	go sess.writeRxLogs(done)
 
 	fr := serial.NewFrameReader(rw)
 	for {
@@ -446,6 +466,10 @@ type session struct {
 	ctx          context.Context
 	mu           sync.Mutex // serializes frame writes (loop replies and async pushes)
 	appTargetVer uint8
+
+	rxLogMu   sync.Mutex
+	rxLogs    [][]byte
+	rxLogWake chan struct{}
 }
 
 // send frames a payload as a device->app frame and writes it.
@@ -456,8 +480,65 @@ func (ss *session) send(payload []byte) error {
 	}
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	if err := ss.flushRxLogsLocked(); err != nil {
+		return err
+	}
 	_, err = ss.w.Write(frame)
 	return err
+}
+
+// queueRxLog queues a LOG_RX_DATA payload without blocking, because it is called
+// from the router's receive path. Writing is left to writeRxLogs.
+func (ss *session) queueRxLog(payload []byte) {
+	ss.rxLogMu.Lock()
+	queued := len(ss.rxLogs) < maxQueuedRxLogs
+	if queued {
+		ss.rxLogs = append(ss.rxLogs, payload)
+	}
+	ss.rxLogMu.Unlock()
+	if !queued {
+		return
+	}
+	select {
+	case ss.rxLogWake <- struct{}{}:
+	default:
+	}
+}
+
+func (ss *session) writeRxLogs(done <-chan struct{}) {
+	for {
+		select {
+		case <-done:
+			return
+		case <-ss.rxLogWake:
+			ss.mu.Lock()
+			err := ss.flushRxLogsLocked()
+			ss.mu.Unlock()
+			if err != nil {
+				ss.srv.log.Debug("rx log write failed", "error", err)
+			}
+		}
+	}
+}
+
+// flushRxLogsLocked writes queued LOG_RX_DATA frames. send calls it first because
+// apps match a message to the LOG_RX_DATA that came before it. Callers hold ss.mu.
+func (ss *session) flushRxLogsLocked() error {
+	ss.rxLogMu.Lock()
+	logs := ss.rxLogs
+	ss.rxLogs = nil
+	ss.rxLogMu.Unlock()
+
+	for _, payload := range logs {
+		frame, err := serial.EncodeFrame(serial.FrameNodeToApp, payload)
+		if err != nil {
+			return err
+		}
+		if _, err := ss.w.Write(frame); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dispatch routes one command frame to its handler.
@@ -609,6 +690,7 @@ func (s *Server) dispatch(ss *session, payload []byte) error {
 		if len(payload) >= 4 {
 			s.mu.Lock()
 			s.advLocPolicy = payload[3]
+			s.saveSettingsLocked()
 			s.mu.Unlock()
 		}
 		return ss.send(serial.EncodeOK())
@@ -683,6 +765,7 @@ func (s *Server) setAdvertLatLon(ss *session, payload []byte) error {
 	}
 	s.mu.Lock()
 	s.advLat, s.advLon = lat, lon
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -726,6 +809,7 @@ func (s *Server) setDefaultFloodScope(ss *session, payload []byte) error {
 	s.mu.Lock()
 	s.defaultScopeName, s.defaultScopeKey = name, key
 	s.applyFloodScopeLocked()
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -755,6 +839,14 @@ func (s *Server) setName(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.name = name
+	s.saveSettingsLocked()
+}
+
+// Name returns the current advertised name, which the app can change.
+func (s *Server) Name() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.name
 }
 
 // getChannel answers CMD_GET_CHANNEL. Configured indices return their name and
@@ -794,6 +886,7 @@ func (s *Server) setChannel(ss *session, payload []byte) error {
 	}
 	old := s.channels[idx]
 	s.channels[idx] = entry
+	s.saveChannelLocked(idx)
 	// Another slot may hold the same key; it must keep decrypting.
 	dropOld := old.active() && !s.keyInUseLocked(old.secret)
 	s.mu.Unlock()
@@ -1198,10 +1291,12 @@ func (s *Server) NotifyContactsFull() {
 
 // enqueueDM queues an incoming direct message and tickles connected apps.
 func (s *Server) enqueueDM(e *event.TextMessageReceived) {
+	pathLen, snr := receivedRoute(e.RawPacket)
 	qm := queuedMessage{
-		pathLen:  serial.PathLenUnknown, // direct/unknown; refined when packet path is exposed
+		pathLen:  pathLen,
 		txtType:  e.TxtType,
 		senderTS: e.Timestamp,
+		snr:      snr,
 		text:     e.Message,
 	}
 	copy(qm.senderPrefix[:], e.From[:])
@@ -1216,14 +1311,29 @@ func (s *Server) enqueueChannel(e *event.GroupTextReceived) {
 		s.log.Debug("dropping message for unknown channel", "hash", e.ChannelHash)
 		return
 	}
+	pathLen, snr := receivedRoute(e.RawPacket)
 	s.enqueue(queuedMessage{
 		isChannel:  true,
 		channelIdx: idx,
-		pathLen:    serial.PathLenUnknown,
+		pathLen:    pathLen,
 		txtType:    0, // plain
-		senderTS:   s.node.Clock().GetCurrentTime(),
+		senderTS:   e.SenderTimestamp,
+		snr:        snr,
 		text:       e.Message,
 	})
+}
+
+// receivedRoute returns the path_len byte and SNR (0.25 dB units) reported for a
+// received message. As in firmware, only floods carry a path_len; 0xFF means the
+// message arrived direct.
+func receivedRoute(pkt *codec.Packet) (pathLen uint8, snr int8) {
+	if pkt == nil {
+		return serial.PathLenUnknown, 0
+	}
+	if !pkt.IsFlood() {
+		return serial.PathLenUnknown, pkt.SNR
+	}
+	return pkt.PathLen, pkt.SNR
 }
 
 // enqueue appends a message to the offline queue and tickles connected apps.
@@ -1237,17 +1347,40 @@ func (s *Server) enqueue(qm queuedMessage) {
 // pushToSessions writes an unsolicited push frame to every connected app. Apps
 // that are not connected simply miss it, matching the firmware.
 func (s *Server) pushToSessions(payload []byte) {
+	for _, sess := range s.connectedSessions() {
+		if err := sess.send(payload); err != nil {
+			s.log.Debug("push failed", "error", err)
+		}
+	}
+}
+
+func (s *Server) connectedSessions() []*session {
 	s.msgMu.Lock()
+	defer s.msgMu.Unlock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for sess := range s.sessions {
 		sessions = append(sessions, sess)
 	}
-	s.msgMu.Unlock()
+	return sessions
+}
 
+// MonitorPacket sends each received packet to connected apps as LOG_RX_DATA,
+// which they use for relay routes and packet logs. Pass it to
+// Router.SetPacketMonitor. RSSI is reported as 0 because packets don't carry it.
+func (s *Server) MonitorPacket(pkt *codec.Packet, src transport.PacketSource) {
+	if src == transport.PacketSourceLocal {
+		return
+	}
+	sessions := s.connectedSessions()
+	if len(sessions) == 0 {
+		return
+	}
+	payload := serial.EncodeLogRxData(pkt.SNR, 0, pkt.WriteTo())
+	if len(payload) > serial.MaxFrameSize {
+		return
+	}
 	for _, sess := range sessions {
-		if err := sess.send(payload); err != nil {
-			s.log.Debug("push failed", "error", err)
-		}
+		sess.queueRxLog(payload)
 	}
 }
 
@@ -1352,7 +1485,9 @@ func (s *Server) addUpdateContact(ss *session, payload []byte) error {
 		GPSLon:              c.GPSLon,
 		LastMod:             lastMod,
 	}
-	if _, err := store.AddContact(ci); err != nil {
+	if _, err := store.AddContact(ci); errors.Is(err, contact.ErrInvalidContact) {
+		return ss.send(serial.EncodeErr(serial.ErrCodeIllegalArg))
+	} else if err != nil {
 		return ss.send(serial.EncodeErr(serial.ErrCodeTableFull))
 	}
 	return ss.send(serial.EncodeOK())
@@ -1420,6 +1555,7 @@ func (s *Server) setRadioParams(ss *session, payload []byte) error {
 	}
 	s.mu.Lock()
 	s.radioFreqKHz, s.radioBwHz, s.radioSF, s.radioCR = rp.Freq, rp.Bw, rp.SF, rp.CR
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -1435,6 +1571,7 @@ func (s *Server) setTxPower(ss *session, payload []byte) error {
 	}
 	s.mu.Lock()
 	s.txPower = uint8(power)
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -1447,6 +1584,7 @@ func (s *Server) setTuningParams(ss *session, payload []byte) error {
 	}
 	s.mu.Lock()
 	s.rxDelay, s.airtimeFactor = rx, af
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }
@@ -1478,6 +1616,7 @@ func (s *Server) setAutoaddConfig(ss *session, payload []byte) error {
 	if hasHops {
 		s.autoaddMaxHops = hops
 	}
+	s.saveSettingsLocked()
 	s.mu.Unlock()
 	return ss.send(serial.EncodeOK())
 }

@@ -149,3 +149,14 @@ func TestRepeaterRequest_NonClientIgnored(t *testing.T) {
 		t.Error("request from a non-ACL client should be ignored")
 	}
 }
+
+func TestRepeaterBuildStats_SaturatesDups(t *testing.T) {
+	n, _ := newTestRepeater(t, "adminpw", "guestpw")
+	n.base.Router.Counters().FloodDups.Store(70000)
+	n.base.Router.Counters().DirectDups.Store(65534)
+
+	s := n.buildStats()
+	if s.NFloodDups != 0xFFFF || s.NDirectDups != 65534 {
+		t.Errorf("dups = flood %d, direct %d; want 65535, 65534", s.NFloodDups, s.NDirectDups)
+	}
+}

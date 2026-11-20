@@ -14,6 +14,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/kabili207/meshcore-go/core"
 )
 
 const (
@@ -31,6 +33,9 @@ const (
 
 // PendingACK represents an outbound message awaiting acknowledgement.
 type PendingACK struct {
+	// Peer is the node expected to send the ACK. Optional; ResolvePeer reports it.
+	Peer core.MeshCoreID
+
 	// OnACK is called when the ACK is received. May be nil.
 	OnACK func()
 
@@ -105,6 +110,12 @@ func (t *Tracker) Track(hash uint32, pending PendingACK) {
 // Resolve marks an ACK as received. Returns true if the hash was pending.
 // If found, the entry's OnACK callback is called and the entry is removed.
 func (t *Tracker) Resolve(hash uint32) bool {
+	_, ok := t.ResolvePeer(hash)
+	return ok
+}
+
+// ResolvePeer is Resolve that also returns the entry's Peer.
+func (t *Tracker) ResolvePeer(hash uint32) (core.MeshCoreID, bool) {
 	t.mu.Lock()
 	p, ok := t.pending[hash]
 	if ok {
@@ -112,10 +123,13 @@ func (t *Tracker) Resolve(hash uint32) bool {
 	}
 	t.mu.Unlock()
 
-	if ok && p.OnACK != nil {
+	if !ok {
+		return core.MeshCoreID{}, false
+	}
+	if p.OnACK != nil {
 		p.OnACK()
 	}
-	return ok
+	return p.Peer, true
 }
 
 // Cancel removes a pending ACK without calling any callbacks.

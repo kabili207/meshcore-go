@@ -44,6 +44,9 @@ type GroupTextReceived struct {
 	// It identifies the channel exactly.
 	ChannelKey []byte
 
+	// SenderTimestamp is the sender's clock when the message was written.
+	SenderTimestamp uint32
+
 	// Message is the decrypted text content.
 	Message string
 }
