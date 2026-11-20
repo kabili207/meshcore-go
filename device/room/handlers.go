@@ -15,6 +15,39 @@ import (
 	"github.com/kabili207/meshcore-go/device/telemetry"
 )
 
+// syncPeers makes the contact store hold exactly the room's clients. Firmware's
+// room server looks peers up in its ACL (searchPeersByHash), so only logged-in
+// clients can send it addressed packets, and adverts never crowd them out.
+func (s *Server) syncPeers() {
+	if s.cfg.Contacts == nil || s.cfg.Clients == nil || s.cfg.Clock == nil {
+		return
+	}
+	var stale []core.MeshCoreID
+	s.cfg.Contacts.ForEach(func(ct *contact.ContactInfo) bool {
+		if s.cfg.Clients.GetClient(ct.ID) == nil {
+			stale = append(stale, ct.ID)
+		}
+		return true
+	})
+	for _, id := range stale {
+		_ = s.cfg.Contacts.RemoveContact(id)
+	}
+
+	nowTS := s.cfg.Clock.GetCurrentTime()
+	s.cfg.Clients.ForEach(func(c *ClientInfo) bool {
+		if s.cfg.Contacts.GetByPubKey(c.ID) == nil {
+			if _, err := s.cfg.Contacts.AddContact(&contact.ContactInfo{
+				ID:         c.ID,
+				OutPathLen: contact.PathUnknown,
+				LastMod:    nowTS,
+			}); err != nil {
+				s.log.Warn("failed to add client as peer", "peer", c.ID.String(), "error", err)
+			}
+		}
+		return true
+	})
+}
+
 // HandleLogin processes a login attempt from a decrypted AnonRequestReceived
 // event.
 func (s *Server) HandleLogin(evt *event.AnonRequestReceived) {
@@ -61,15 +94,13 @@ func (s *Server) HandleLogin(evt *event.AnonRequestReceived) {
 	client.PushFailures = 0
 	client.LastActivity = nowTS
 	client.Permissions = uint8(perm)
-
-	// Ensure the client exists in the contact store
-	if s.cfg.Contacts.GetByPubKey(senderID) == nil {
-		s.cfg.Contacts.AddContact(&contact.ContactInfo{
-			ID:         senderID,
-			OutPathLen: contact.PathUnknown,
-			LastMod:    nowTS,
-		})
+	// Stores persist on Add/Update, and the Add above saw none of these fields.
+	if err := s.cfg.Clients.UpdateClient(client); err != nil {
+		s.log.Warn("failed to update client", "error", err)
 	}
+
+	// The login may have evicted another client, so resync rather than just add.
+	s.syncPeers()
 
 	// A flood-routed login means any stored direct path may be stale (the client
 	// moved or lost the route). Reset it so the path is rediscovered, matching

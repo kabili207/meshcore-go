@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 
+	"github.com/kabili207/meshcore-go/core"
 	"github.com/kabili207/meshcore-go/core/codec"
 	"github.com/kabili207/meshcore-go/device/acl"
 	"github.com/kabili207/meshcore-go/device/contact"
@@ -79,14 +80,8 @@ func (n *RepeaterNode) handleLogin(evt *event.AnonRequestReceived) {
 		return
 	}
 
-	// Ensure the client is a contact so later addressed REQ/CLI packets decrypt.
-	if n.base.Contacts().GetByPubKey(senderID) == nil {
-		n.base.Contacts().AddContact(&contact.ContactInfo{
-			ID:         senderID,
-			OutPathLen: contact.PathUnknown,
-			LastMod:    nowTS,
-		})
-	}
+	// The login may have evicted another client, so resync rather than just add.
+	n.syncPeers()
 
 	// A flood-routed login means any stored direct path may be stale; reset it so
 	// the path is rediscovered (firmware sets out_path_len to UNKNOWN here).
@@ -103,6 +98,37 @@ func (n *RepeaterNode) handleLogin(evt *event.AnonRequestReceived) {
 	if err := n.base.SendReply(rc, senderID, codec.PayloadTypeResponse, resp); err != nil {
 		n.log.Warn("failed to send login response", "error", err)
 	}
+}
+
+// syncPeers makes the peer table hold exactly the ACL's clients. Firmware's
+// repeater looks peers up in its ACL (searchPeersByHash), so only logged-in
+// clients can send it addressed packets, and adverts never crowd them out.
+func (n *RepeaterNode) syncPeers() {
+	peers := n.base.Contacts()
+	var stale []core.MeshCoreID
+	peers.ForEach(func(ct *contact.ContactInfo) bool {
+		if n.acl.GetClient(ct.ID) == nil {
+			stale = append(stale, ct.ID)
+		}
+		return true
+	})
+	for _, id := range stale {
+		_ = peers.RemoveContact(id)
+	}
+
+	nowTS := n.base.Clock().GetCurrentTime()
+	n.acl.ForEach(func(c *acl.Client) bool {
+		if peers.GetByPubKey(c.ID) == nil {
+			if _, err := peers.AddContact(&contact.ContactInfo{
+				ID:         c.ID,
+				OutPathLen: contact.PathUnknown,
+				LastMod:    nowTS,
+			}); err != nil {
+				n.log.Warn("failed to add ACL client as peer", "peer", c.ID.String(), "error", err)
+			}
+		}
+		return true
+	})
 }
 
 // buildRepeaterLoginResponse builds the 13-byte login-OK response. The admin flag

@@ -184,6 +184,20 @@ contain breaking changes; those are called out explicitly below.
 
 ### Changed
 
+- **Repeaters keep peers only for their ACL clients**, as firmware does. Adverts
+  no longer enter the repeater's contact table, so on a busy mesh they can't
+  evict a logged-in admin and stop its commands decrypting. Admins restored
+  from `ACLPersistence` can send commands without logging in again. Every
+  verified advert is still emitted as `AdvertReceived`, now with a nil
+  `Contact`. `RepeaterConfig.Contacts` is deprecated and ignored.
+
+- **Room servers keep their contact store holding only logged-in clients.**
+  Adverts no longer enter `RoomConfig.Contacts`, which fixes the same eviction
+  for room clients, whose posts and pushed sync both depend on it. The store
+  is still the caller's, so it stays persisted, but the room server removes
+  anything that isn't a current client, including contacts an app loaded from
+  its own database. Size it for at least `Room.Clients`' capacity.
+
 - **Contact routes are learned only from PATH packets**, as in firmware. Adverts
   and other flooded packets no longer set or replace a contact's direct path.
 
@@ -219,6 +233,14 @@ contain breaking changes; those are called out explicitly below.
   old behavior, load `loop.detect off` with `LoadConfig`.
 
 ### Fixed
+
+- **Room server admins are persisted when they log in.** Login set the
+  client's permissions after `AddClient` and never called `UpdateClient`, so
+  `MemoryClientStore` never saw an admin to save.
+
+- **`UpdateClient` no longer zeroes the path when passed a stored client**, in
+  both `acl.MemoryStore` and `room.MemoryClientStore`. The repeater's
+  `setperm` command hit this.
 
 - **Contacts with an all-zero public key are rejected.** That key is a
   small-order point, so its ECDH shared secret is all zeros, and an advert for

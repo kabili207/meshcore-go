@@ -209,13 +209,9 @@ func (s *MemoryClientStore) allocateSlot() *ClientInfo {
 // copyClientFields copies mutable fields from src to dst.
 func copyClientFields(dst, src *ClientInfo) {
 	dst.Client = src.Client // includes ID, Name, Permissions, routing, timestamps
-	// Deep-copy the routing path (the struct copy above shares the slice).
-	if len(src.OutPath) > 0 {
-		dst.OutPath = make([]byte, len(src.OutPath))
-		copy(dst.OutPath, src.OutPath)
-	} else {
-		dst.OutPath = nil
-	}
+	// Deep-copy the path. src may be dst itself (GetClient returns stored
+	// pointers), so read src.OutPath before assigning.
+	dst.OutPath = append([]byte(nil), src.OutPath...)
 	dst.SyncSince = src.SyncSince
 	dst.PushPostTimestamp = src.PushPostTimestamp
 	dst.PushFailures = src.PushFailures

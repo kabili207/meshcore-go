@@ -229,6 +229,7 @@ func NewServer(cfg ServerConfig) *Server {
 		log: logger.WithGroup("room"),
 	}
 	s.cli = s.buildCLI()
+	s.syncPeers() // clients restored from persistence
 	return s
 }
 

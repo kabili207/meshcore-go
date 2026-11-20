@@ -27,8 +27,9 @@ type RepeaterConfig struct {
 	// Transports to connect to the mesh network.
 	Transports []TransportOption
 
-	// Contacts is the contact store for neighbor tracking. If nil, a default
-	// ContactManager is created.
+	// Deprecated: Ignored. The repeater keeps its own peer table holding only
+	// its ACL clients, as firmware does. Adverts are still emitted as
+	// AdvertReceived events for apps that track nodes themselves.
 	Contacts contact.ContactStore
 
 	// AdminPassword grants admin access on login. Empty disables admin login.
@@ -138,25 +139,27 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 
 	// Repeaters don't need auto-ACK
 	autoACK := false
+	autoUpdateContacts := false
 
-	// Default contact store: needed for neighbor tracking and ACL login (a nil
-	// store would panic on first use).
-	contacts := cfg.Contacts
-	if contacts == nil {
-		contacts = contact.NewManager(cfg.PrivateKey, contact.ManagerConfig{
-			MaxContacts:       256,
-			OverwriteWhenFull: true,
-		})
+	maxClients := cfg.MaxClients
+	if maxClients <= 0 {
+		maxClients = acl.DefaultMaxClients
 	}
+	// Mirrors the ACL (see syncPeers), so it never holds more than the ACL does.
+	peers := contact.NewManager(cfg.PrivateKey, contact.ManagerConfig{
+		MaxContacts: maxClients,
+		Logger:      logger,
+	})
 
 	base, err := NewBase(BaseConfig{
-		PrivateKey:     cfg.PrivateKey,
-		Contacts:       contacts,
-		Transports:     cfg.Transports,
-		ForwardPackets: true, // always forward
-		AutoACK:        &autoACK,
-		EventHandlers:  cfg.EventHandlers,
-		Logger:         logger,
+		PrivateKey:         cfg.PrivateKey,
+		Contacts:           peers,
+		Transports:         cfg.Transports,
+		ForwardPackets:     true, // always forward
+		AutoACK:            &autoACK,
+		AutoUpdateContacts: &autoUpdateContacts,
+		EventHandlers:      cfg.EventHandlers,
+		Logger:             logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create base node: %w", err)
@@ -203,7 +206,7 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 	n := &RepeaterNode{
 		base:        base,
 		advertSched: scheduler,
-		acl:         acl.NewMemoryStore(cfg.MaxClients, acl.WithPersistence(cfg.ACLPersistence)),
+		acl:         acl.NewMemoryStore(maxClients, acl.WithPersistence(cfg.ACLPersistence)),
 		auth: acl.Authenticator{
 			// Repeater mapping: admin/guest passwords only, no open access.
 			// A correct guest password grants GUEST (read-only-style access).
@@ -222,6 +225,7 @@ func NewRepeater(cfg RepeaterConfig) (*RepeaterNode, error) {
 		log:         logger.WithGroup("repeater"),
 	}
 	n.cli = n.buildCLI()
+	n.syncPeers() // clients restored from ACLPersistence
 
 	// Wire admin/ACL event handling (login, requests, CLI).
 	base.OnEvent(n.dispatchEvents)

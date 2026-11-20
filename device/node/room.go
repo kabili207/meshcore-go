@@ -32,7 +32,9 @@ type RoomConfig struct {
 	// router counters or an observer wired via Router.SetPacketMonitor.
 	Router *router.Router
 
-	// Contacts is the contact store. Required.
+	// Contacts is the room's peer table. Required. The room server keeps it
+	// holding exactly its logged-in clients, removing anything else, so it must
+	// have room for Room.Clients' capacity. Adverts never enter it.
 	Contacts contact.ContactStore
 
 	// Room is the room server configuration.
@@ -119,16 +121,20 @@ func NewRoom(cfg RoomConfig) (*RoomNode, error) {
 		forwardPackets = *cfg.ForwardPackets
 	}
 
+	// Adverts stay out of the peer table; the room server fills it (syncPeers).
+	autoUpdateContacts := false
+
 	base, err := NewBase(BaseConfig{
-		PrivateKey:     cfg.PrivateKey,
-		Contacts:       cfg.Contacts,
-		Clock:          clk,
-		ACKTracker:     tracker,
-		Router:         cfg.Router,
-		Transports:     cfg.Transports,
-		ForwardPackets: forwardPackets,
-		EventHandlers:  cfg.EventHandlers,
-		Logger:         logger,
+		PrivateKey:         cfg.PrivateKey,
+		Contacts:           cfg.Contacts,
+		Clock:              clk,
+		ACKTracker:         tracker,
+		Router:             cfg.Router,
+		Transports:         cfg.Transports,
+		ForwardPackets:     forwardPackets,
+		AutoUpdateContacts: &autoUpdateContacts,
+		EventHandlers:      cfg.EventHandlers,
+		Logger:             logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create base node: %w", err)

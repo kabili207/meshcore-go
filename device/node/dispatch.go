@@ -75,6 +75,12 @@ func (b *BaseNode) handleAdvert(pkt *codec.Packet, src transport.PacketSource) {
 		b.log.Debug("advert signature invalid, dropping", "peer", advertID.String())
 		return
 	}
+	// Anyone can forge a valid signature for the all-zero key. ProcessAdvert
+	// rejects it too, but nodes without auto-update never call that.
+	if advertID.IsZero() {
+		b.log.Debug("advert has an all-zero key, dropping")
+		return
+	}
 
 	if b.autoUpdateContacts {
 		nowTS := b.clock.GetCurrentTime()

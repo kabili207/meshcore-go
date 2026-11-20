@@ -1,6 +1,7 @@
 package room
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 
@@ -363,5 +364,19 @@ func TestMemoryClientStore_Concurrent(t *testing.T) {
 
 	if s.Count() != 20 {
 		t.Errorf("Count() = %d, want 20", s.Count())
+	}
+}
+
+func TestClientStore_UpdateWithStoredPointerKeepsPath(t *testing.T) {
+	s := NewMemoryClientStore(4)
+	stored, err := s.AddClient(&ClientInfo{Client: acl.Client{ID: core.MeshCoreID{0x01}, OutPathLen: 2, OutPath: []byte{0x0A, 0x0B}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateClient(stored); err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte{0x0A, 0x0B}; !bytes.Equal(stored.OutPath, want) {
+		t.Errorf("OutPath = %x, want %x", stored.OutPath, want)
 	}
 }
