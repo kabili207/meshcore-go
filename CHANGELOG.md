@@ -184,6 +184,13 @@ contain breaking changes; those are called out explicitly below.
 
 ### Changed
 
+- **Repeaters keep peers only for their ACL clients**, as firmware does. Adverts
+  no longer enter the repeater's contact table, so on a busy mesh they can't
+  evict a logged-in admin and stop its commands decrypting. Admins restored
+  from `ACLPersistence` can send commands without logging in again. Every
+  verified advert is still emitted as `AdvertReceived`, now with a nil
+  `Contact`. `RepeaterConfig.Contacts` is deprecated and ignored.
+
 - **Contact routes are learned only from PATH packets**, as in firmware. Adverts
   and other flooded packets no longer set or replace a contact's direct path.
 
