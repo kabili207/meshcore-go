@@ -191,6 +191,13 @@ contain breaking changes; those are called out explicitly below.
   verified advert is still emitted as `AdvertReceived`, now with a nil
   `Contact`. `RepeaterConfig.Contacts` is deprecated and ignored.
 
+- **Room servers keep their contact store holding only logged-in clients.**
+  Adverts no longer enter `RoomConfig.Contacts`, which fixes the same eviction
+  for room clients, whose posts and pushed sync both depend on it. The store
+  is still the caller's, so it stays persisted, but the room server removes
+  anything that isn't a current client, including contacts an app loaded from
+  its own database. Size it for at least `Room.Clients`' capacity.
+
 - **Contact routes are learned only from PATH packets**, as in firmware. Adverts
   and other flooded packets no longer set or replace a contact's direct path.
 
