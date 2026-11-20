@@ -200,12 +200,9 @@ func copyClientFields(dst, src *Client) {
 	dst.Name = src.Name
 	dst.Permissions = src.Permissions
 	dst.OutPathLen = src.OutPathLen
-	if len(src.OutPath) > 0 {
-		dst.OutPath = make([]byte, len(src.OutPath))
-		copy(dst.OutPath, src.OutPath)
-	} else {
-		dst.OutPath = nil
-	}
+	// Deep-copy the path. src may be dst itself (GetClient returns stored
+	// pointers), so read src.OutPath before assigning.
+	dst.OutPath = append([]byte(nil), src.OutPath...)
 	dst.LastTimestamp = src.LastTimestamp
 	dst.LastActivity = src.LastActivity
 }

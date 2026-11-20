@@ -227,6 +227,14 @@ contain breaking changes; those are called out explicitly below.
 
 ### Fixed
 
+- **Room server admins are persisted when they log in.** Login set the
+  client's permissions after `AddClient` and never called `UpdateClient`, so
+  `MemoryClientStore` never saw an admin to save.
+
+- **`UpdateClient` no longer zeroes the path when passed a stored client**, in
+  both `acl.MemoryStore` and `room.MemoryClientStore`. The repeater's
+  `setperm` command hit this.
+
 - **Contacts with an all-zero public key are rejected.** That key is a
   small-order point, so its ECDH shared secret is all zeros, and an advert for
   it can be forged without a private key. `AddContact` returns the new

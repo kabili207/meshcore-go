@@ -61,6 +61,10 @@ func (s *Server) HandleLogin(evt *event.AnonRequestReceived) {
 	client.PushFailures = 0
 	client.LastActivity = nowTS
 	client.Permissions = uint8(perm)
+	// Stores persist on Add/Update, and the Add above saw none of these fields.
+	if err := s.cfg.Clients.UpdateClient(client); err != nil {
+		s.log.Warn("failed to update client", "error", err)
+	}
 
 	// Ensure the client exists in the contact store
 	if s.cfg.Contacts.GetByPubKey(senderID) == nil {
